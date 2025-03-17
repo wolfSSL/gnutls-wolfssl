@@ -1,0 +1,98 @@
+diff --git a/lib/crypto-backend.c b/lib/crypto-backend.c
+index 63db24b..7cce0f2 100644
+--- a/lib/crypto-backend.c
++++ b/lib/crypto-backend.c
+@@ -23,6 +23,7 @@
+ #include "errors.h"
+ #include "gnutls_int.h"
+ #include <gnutls/crypto.h>
++#include <dlfcn.h>
+ #include "crypto-backend.h"
+ #include "crypto.h"
+ #include "mpi.h"
+@@ -463,3 +464,24 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
+ 		"called the deprecated gnutls_crypto_register_digest()\n");
+ 	return 0;
+ }
++
++int gnutls_load_crypto_provider(const char *provider_path)
++{
++    void *handle;
++
++    if (provider_path == NULL) {
++        printf("Error: Provider path must be specified\n");
++        return -1;
++    }
++
++    printf("Loading crypto provider from: %s\n", provider_path);
++
++    handle = dlopen(provider_path, RTLD_NOW);
++    if (handle == NULL) {
++        printf("Failed to load provider: %s\n", dlerror());
++        return -1;
++    }
++
++    printf("Successfully loaded crypto provider\n");
++    return 0;
++}
+diff --git a/lib/crypto-backend.h b/lib/crypto-backend.h
+index f213a43..33a52c8 100644
+--- a/lib/crypto-backend.h
++++ b/lib/crypto-backend.h
+@@ -467,4 +467,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
+ 			     const gnutls_datum_t *data, unsigned char *buffer,
+ 			     size_t buffer_size);
+ 
++int gnutls_load_crypto_provider(const char *provider_path);
++
+ #endif /* GNUTLS_LIB_CRYPTO_BACKEND_H */
+diff --git a/lib/global.c b/lib/global.c
+index 42d90ee..d5517e7 100644
+--- a/lib/global.c
++++ b/lib/global.c
+@@ -21,7 +21,11 @@
+  *
+  */
+ 
++#include <gnutls/config.h>
+ #include "gnutls_int.h"
++#include <stdlib.h>
++#include <stdint.h>
++#include "crypto-backend.h"
+ #include "errors.h"
+ #include <libtasn1.h>
+ #include "dh.h"
+@@ -367,6 +371,19 @@ static int _gnutls_global_init(unsigned constructor)
+ 	_gnutls_cryptodev_init();
+ 	_gnutls_afalg_init();
+ 
++    /* we check if PROVIDER_PATH was set, if not, we set the default value */
++    const char *path_value = getenv("PROVIDER_PATH");
++    if (path_value == NULL) {
++        _gnutls_debug_log("PROVIDER_PATH was not set, setting to default value: /opt/wolfssl-gnutls-wrapper/lib/");
++        path_value = "/opt/wolfssl-gnutls-wrapper/lib/libgnutls-wolfssl-wrapper.so";
++    }
++
++    if (gnutls_load_crypto_provider(path_value) != 0) {
++        gnutls_assert();
++        goto out;
++    }
++
++
+ #ifdef ENABLE_FIPS140
+ 	/* These self tests are performed on the overridden algorithms
+ 	 * (e.g., AESNI overridden AES). They are after _gnutls_register_accel_crypto()
+diff --git a/lib/libgnutls.map b/lib/libgnutls.map
+index c236683..4082adf 100644
+--- a/lib/libgnutls.map
++++ b/lib/libgnutls.map
+@@ -1017,6 +1017,9 @@ GNUTLS_3_4
+ 	gnutls_crypto_register_aead_cipher;
+ 	gnutls_crypto_register_mac;
+ 	gnutls_crypto_register_digest;
++    gnutls_crypto_single_cipher_register;
++    gnutls_crypto_single_mac_register;
++    gnutls_crypto_single_digest_register;
+ 	gnutls_ext_register;
+ 	gnutls_buffer_append_data;
+ 	gnutls_supplemental_register;
