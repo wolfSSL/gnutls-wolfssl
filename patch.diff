@@ -47,14 +47,12 @@ index f213a43..33a52c8 100644
 +
  #endif /* GNUTLS_LIB_CRYPTO_BACKEND_H */
 diff --git a/lib/global.c b/lib/global.c
-index 42d90ee..d5517e7 100644
+index 42d90ee..9f666a7 100644
 --- a/lib/global.c
 +++ b/lib/global.c
-@@ -21,7 +21,11 @@
-  *
+@@ -22,6 +22,9 @@
   */
  
-+#include <gnutls/config.h>
  #include "gnutls_int.h"
 +#include <stdlib.h>
 +#include <stdint.h>
@@ -62,7 +60,7 @@ index 42d90ee..d5517e7 100644
  #include "errors.h"
  #include <libtasn1.h>
  #include "dh.h"
-@@ -367,6 +371,19 @@ static int _gnutls_global_init(unsigned constructor)
+@@ -367,6 +370,19 @@ static int _gnutls_global_init(unsigned constructor)
  	_gnutls_cryptodev_init();
  	_gnutls_afalg_init();
  
