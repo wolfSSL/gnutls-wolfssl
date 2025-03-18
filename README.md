@@ -1,3 +1,3 @@
-# gnutls-wolfssl-rip-and-replace
+# gnutls-wolfssl
 
 Experimental port of wolfSSL into gnutls
