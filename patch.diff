@@ -1,5 +1,5 @@
 diff --git a/lib/crypto-backend.c b/lib/crypto-backend.c
-index 63db24b..7cce0f2 100644
+index 63db24b..dd23fff 100644
 --- a/lib/crypto-backend.c
 +++ b/lib/crypto-backend.c
 @@ -23,6 +23,7 @@
@@ -10,7 +10,16 @@ index 63db24b..7cce0f2 100644
  #include "crypto-backend.h"
  #include "crypto.h"
  #include "mpi.h"
-@@ -463,3 +464,24 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
+@@ -187,6 +188,8 @@ _gnutls_get_crypto_cipher(gnutls_cipher_algorithm_t algo)
+ 	return _get_algo(&glob_cl, algo);
+ }
+ 
++
++
+ /**
+  * gnutls_crypto_register_cipher:
+  * @algorithm: is the gnutls algorithm identifier
+@@ -463,3 +466,24 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
  		"called the deprecated gnutls_crypto_register_digest()\n");
  	return 0;
  }
@@ -36,10 +45,35 @@ index 63db24b..7cce0f2 100644
 +    return 0;
 +}
 diff --git a/lib/crypto-backend.h b/lib/crypto-backend.h
-index f213a43..33a52c8 100644
+index f213a43..858c7e0 100644
 --- a/lib/crypto-backend.h
 +++ b/lib/crypto-backend.h
-@@ -467,4 +467,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
+@@ -75,6 +75,7 @@ typedef struct {
+ 	int (*exists)(gnutls_digest_algorithm_t);
+ } gnutls_crypto_digest_st;
+ 
++
+ typedef struct {
+ 	int (*hkdf_extract)(gnutls_mac_algorithm_t, const void *key,
+ 			    size_t keysize, const void *salt, size_t saltsize,
+@@ -95,6 +96,16 @@ typedef struct gnutls_crypto_rnd {
+ 	int (*self_test)(void); /* this should not require rng initialization */
+ } gnutls_crypto_rnd_st;
+ 
++typedef struct {
++    gnutls_pk_init_func init;
++    gnutls_pk_privkey_generate generate;
++    gnutls_pk_pubkey_import import_pubkey;
++    gnutls_pk_sign_func sign;
++    gnutls_pk_verify_func verify;
++    gnutls_pk_encrypt_func encrypt;
++    gnutls_pk_decrypt_func decrypt;
++} gnutls_crypto_pk_st_custom;
++
+ typedef void *bigint_t;
+ 
+ /**
+@@ -467,4 +478,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
  			     const gnutls_datum_t *data, unsigned char *buffer,
  			     size_t buffer_size);
  
@@ -80,6 +114,57 @@ index 42d90ee..9f666a7 100644
  #ifdef ENABLE_FIPS140
  	/* These self tests are performed on the overridden algorithms
  	 * (e.g., AESNI overridden AES). They are after _gnutls_register_accel_crypto()
+diff --git a/lib/includes/gnutls/crypto.h b/lib/includes/gnutls/crypto.h
+index 400072d..bcb9f1a 100644
+--- a/lib/includes/gnutls/crypto.h
++++ b/lib/includes/gnutls/crypto.h
+@@ -191,7 +191,7 @@ int gnutls_rnd(gnutls_rnd_level_t level, void *data, size_t len);
+ 
+ void gnutls_rnd_refresh(void);
+ 
+-/* API to override ciphers and MAC algorithms 
++/* API to override ciphers and MAC algorithms
+  */
+ 
+ typedef int (*gnutls_cipher_init_func)(gnutls_cipher_algorithm_t, void **ctx,
+@@ -261,6 +261,37 @@ int gnutls_crypto_register_mac(
+ 	gnutls_mac_deinit_func deinit,
+ 	gnutls_mac_fast_func hash_fast) _GNUTLS_GCC_ATTR_DEPRECATED;
+ 
++typedef int (*gnutls_pk_init_func)(void**ctx);
++typedef int (*gnutls_pk_privkey_generate)(void *ctx, const void *privkey,
++                                          gnutls_pk_algorithm_t algo,
++                                          unsigned int bits,
++                                          unsigned int flags,
++                                          const void* data,
++                                          size_t datasize);
++typedef int (*gnutls_pk_pubkey_import)(void *ctx, const void* pubkey,
++                                       unsigned int usage,
++                                       unsigned int flags);
++typedef int (*gnutls_pk_sign_func)(void *ctx,
++                                   const void *privkey,
++                                   gnutls_digest_algorithm_t hash,
++                                   unsigned int flags,
++                                   const void *data,
++                                   const void *signature);
++typedef int (*gnutls_pk_verify_func)(void *ctx,
++                                     const void *pubkey,
++                                     gnutls_digest_algorithm_t hash,
++                                     unsigned int flags,
++                                     const void *data,
++                                     const void *signature);
++typedef int (*gnutls_pk_encrypt_func)(void *ctx, const void* pub_key,
++                                      unsigned int flags,
++                                      const void* plain,
++                                      void *encr);
++typedef int (*gnutls_pk_decrypt_func)(void *ctx, const void* priv_key,
++                                      unsigned int flags,
++                                      const void* encr,
++                                      void *plain);
++
+ typedef int (*gnutls_digest_init_func)(gnutls_digest_algorithm_t, void **ctx);
+ typedef int (*gnutls_digest_hash_func)(void *ctx, const void *text,
+ 				       size_t textsize);
 diff --git a/lib/libgnutls.map b/lib/libgnutls.map
 index c236683..4082adf 100644
 --- a/lib/libgnutls.map
