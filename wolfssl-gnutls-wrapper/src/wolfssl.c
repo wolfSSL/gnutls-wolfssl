@@ -935,6 +935,53 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
     return 0;
 }
 
+/*
+ * one-shot hash function.
+ * */
+static int wolfssl_digest_fast(gnutls_digest_algorithm_t algorithm,
+                             const void *text, size_t textsize,
+                             void *digest)
+{
+    printf("wolfssl: wolfssl_digest_fast\n");
+    struct wolfssl_hash_ctx *ctx;
+    int ret;
+
+    /* return error if it's not sha256 */
+    if (algorithm != GNUTLS_DIG_SHA256 || !wolfssl_digest_supported[algorithm]) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* allocate gnutls context */
+    ctx = gnutls_calloc(1, sizeof(struct wolfssl_hash_ctx));
+    if (ctx == NULL) {
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* initialize the wolfssl sha256 context */
+    ret = wc_InitSha256(&ctx->sha256_ctx);
+    if (ret != 0) {
+        gnutls_free(ctx);
+        return GNUTLS_E_HASH_FAILED;
+    }
+
+    ctx->initialized = 1;
+
+    /* update the wolfssl sha256 context with data */
+    ret = wc_Sha256Update(&ctx->sha256_ctx, (const byte*)text, (word32)textsize);
+    if (ret != 0) {
+        return GNUTLS_E_HASH_FAILED;
+    }
+
+    /* finalize the digest and get the result */
+    ret = wc_Sha256Final(&ctx->sha256_ctx, (byte*)digest);
+    if (ret != 0) {
+        return GNUTLS_E_HASH_FAILED;
+    }
+
+    return 0;
+}
+
+
 /**
  * clean up digest resources
  */
@@ -958,6 +1005,7 @@ static const gnutls_crypto_digest_st wolfssl_digest_struct = {
     .hash = wolfssl_digest_hash,
     .output = wolfssl_digest_output,
     .deinit = wolfssl_digest_deinit,
+    .fast = wolfssl_digest_fast
 };
 
 /**
