@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -DHAVE_ECC -DHAVE_AESGCM -DENABLE_WOLFSSL -fPIC -Wall -Wextra
 INCLUDES = -I/opt/gnutls/include/ -I/opt/wolfssl/include/
 
-LDFLAGS = -shared -L/opt/gnutls/lib -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
+LDFLAGS = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
 
 LIBS = -lgnutls -lwolfssl -ldl
 
