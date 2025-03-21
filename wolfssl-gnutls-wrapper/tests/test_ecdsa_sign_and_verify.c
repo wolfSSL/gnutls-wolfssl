@@ -55,8 +55,8 @@ int main(void) {
 
     /* Generate an ECDSA key pair (SECP256R1 curve) */
     printf("Generating ECDSA key pair (SECP256R1)...\n");
-    ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_ECDSA, 
-                                  GNUTLS_CURVE_TO_BITS(GNUTLS_ECC_CURVE_SECP256R1),
+    ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_ECDSA,
+                                  256,
                                   0, NULL, 0);
     if (ret != 0) {
         printf("Error generating private key: %s\n", gnutls_strerror(ret));
@@ -93,7 +93,7 @@ int main(void) {
 
     /* Verify the signature */
     printf("Verifying signature...\n");
-    ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_ECDSA_SHA256, 
+    ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_ECDSA_SHA256,
                                     0, &data, &signature);
     if (ret == 0) {
         printf("SUCCESS\n");
