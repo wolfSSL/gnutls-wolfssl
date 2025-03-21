@@ -18,7 +18,7 @@ void print_hex(const unsigned char *data, size_t len) {
     printf("\n");
 }
 
-int main(void) {
+int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     int ret;
     gnutls_privkey_t privkey;
     gnutls_pubkey_t pubkey;
@@ -28,20 +28,12 @@ int main(void) {
 
     memset(&signature, 0, sizeof(signature));
 
-    printf("testing GnuTLS's ECDSA implementation...\n");
-
-    /* Initialize GnuTLS */
-    ret = gnutls_global_init();
-    if (ret != 0) {
-        printf("Error initializing GnuTLS: %s\n", gnutls_strerror(ret));
-        return 1;
-    }
+    printf("\n=== Testing ECDSA with %s (%d bits) ===\n", curve_name, bits);
 
     /* Initialize keys */
     ret = gnutls_privkey_init(&privkey);
     if (ret != 0) {
         printf("Error initializing private key: %s\n", gnutls_strerror(ret));
-        gnutls_global_deinit();
         return 1;
     }
 
@@ -49,20 +41,18 @@ int main(void) {
     if (ret != 0) {
         printf("Error initializing public key: %s\n", gnutls_strerror(ret));
         gnutls_privkey_deinit(privkey);
-        gnutls_global_deinit();
         return 1;
     }
 
-    /* Generate an ECDSA key pair (SECP256R1 curve) */
-    printf("Generating ECDSA key pair (SECP256R1)...\n");
+    /* Generate an ECDSA key pair with the specified curve */
+    printf("Generating ECDSA key pair (%s)...\n", curve_name);
     ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_ECDSA,
-                                  256,
+                                  bits,
                                   0, NULL, 0);
     if (ret != 0) {
         printf("Error generating private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
         gnutls_privkey_deinit(privkey);
-        gnutls_global_deinit();
         return 1;
     }
 
@@ -72,7 +62,6 @@ int main(void) {
         printf("Error extracting public key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
         gnutls_privkey_deinit(privkey);
-        gnutls_global_deinit();
         return 1;
     }
 
@@ -83,7 +72,6 @@ int main(void) {
         printf("Error signing data: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
         gnutls_privkey_deinit(privkey);
-        gnutls_global_deinit();
         return 1;
     }
 
@@ -96,13 +84,12 @@ int main(void) {
     ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_ECDSA_SHA256,
                                     0, &data, &signature);
     if (ret == 0) {
-        printf("SUCCESS\n");
+        printf("SUCCESS for %s\n", curve_name);
     } else {
-        printf("FAILURE: %s\n", gnutls_strerror(ret));
+        printf("FAILURE for %s: %s\n", curve_name, gnutls_strerror(ret));
         gnutls_free(signature.data);
         gnutls_pubkey_deinit(pubkey);
         gnutls_privkey_deinit(privkey);
-        gnutls_global_deinit();
         return 1;
     }
 
@@ -110,7 +97,46 @@ int main(void) {
     gnutls_free(signature.data);
     gnutls_pubkey_deinit(pubkey);
     gnutls_privkey_deinit(privkey);
+    
+    return 0;
+}
+
+int main(void) {
+    int ret;
+
+    printf("Testing GnuTLS's ECDSA implementation with multiple curves...\n");
+
+    /* Initialize GnuTLS */
+    ret = gnutls_global_init();
+    if (ret != 0) {
+        printf("Error initializing GnuTLS: %s\n", gnutls_strerror(ret));
+        return 1;
+    }
+
+    /* Test SECP256R1 (P-256) */
+    ret = test_ecdsa_curve(256, "SECP256R1");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Test SECP384R1 (P-384) */
+    ret = test_ecdsa_curve(384, "SECP384R1");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Test SECP521R1 (P-521) */
+    ret = test_ecdsa_curve(521, "SECP521R1");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Clean up global resources */
     gnutls_global_deinit();
 
+    printf("\nAll ECDSA curve tests completed successfully!\n");
     return 0;
 }
