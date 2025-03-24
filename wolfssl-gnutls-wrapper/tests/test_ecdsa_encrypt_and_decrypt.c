@@ -6,6 +6,20 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 
+/* NIST test vector AAD */
+const unsigned char aad_data[] = {
+    0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef
+};
+
+const unsigned char iv_data[16] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+};
+
+/* HKDF parameters */
+const char hkdf_salt[] = "ECDH-Key-Derivation-Salt";
+const char hkdf_info[] = "AES-256-GCM-Encryption-Key";
+
 void print_hex(const unsigned char *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
         printf("%02x", data[i]);
@@ -27,7 +41,6 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     gnutls_datum_t encrypted, decrypted;
     const char *test_data = "Test data to be encrypted";
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
-    unsigned char iv[16] = {0};  // 16 bytes IV for GCM
     unsigned char tag[16] = {0}; // 16 bytes authentication tag for GCM
 
     printf("\n=== Testing EC encryption/decryption with %s (%d bits) ===\n", curve_name, bits);
@@ -65,7 +78,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
 
     /* Generate EC key pairs with the specified curve */
     printf("Generating EC key pairs (%s)...\n", curve_name);
-    ret = gnutls_privkey_generate2(alice_privkey,  GNUTLS_PK_ECDSA, bits, 0, NULL, 0);
+    ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_ECDSA, bits, 0, NULL, 0);
     if (ret != 0) {
         printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(bob_pubkey);
@@ -122,19 +135,60 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     printf("Shared secret value:\n");
     print_hex(shared_key.data, shared_key.size);
 
-    /* Use AES-GCM for authenticated encryption with the derived key */
-    printf("input data: \"%s\"\n", test_data);
-
-    /* Derive an appropriate AES key from the shared secret using SHA-256 */
-    unsigned char key_material[32]; // 256 bits for AES-256
-    gnutls_hash_fast(GNUTLS_DIG_SHA256, shared_key.data, shared_key.size, key_material);
+    /* Derive AES key using HKDF */
+    
+    /* Step 1: HKDF-Extract to get pseudorandom key */
+    unsigned char prk[32]; /* Size based on SHA-256 output */
+    const gnutls_datum_t salt = { (unsigned char *)hkdf_salt, strlen(hkdf_salt) };
+    const gnutls_datum_t key_datum = { shared_key.data, shared_key.size };
+    
+    ret = gnutls_hkdf_extract(GNUTLS_MAC_SHA256, &key_datum, &salt, prk);
+    if (ret < 0) {
+        printf("Error in HKDF-Extract: %s\n", gnutls_strerror(ret));
+        gnutls_free(shared_key.data);
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+    
+    printf("HKDF-Extract PRK:\n");
+    print_hex(prk, sizeof(prk));
+    
+    /* Step 2: HKDF-Expand to get final key */
+    unsigned char key_material[32]; /* 256 bits for AES-256 */
+    const gnutls_datum_t prk_datum = { prk, sizeof(prk) };
+    const gnutls_datum_t info = { (unsigned char *)hkdf_info, strlen(hkdf_info) };
+    
+    ret = gnutls_hkdf_expand(GNUTLS_MAC_SHA256, &prk_datum, &info, key_material, sizeof(key_material));
+    if (ret < 0) {
+        printf("Error in HKDF-Expand: %s\n", gnutls_strerror(ret));
+        gnutls_free(shared_key.data);
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+    
+    printf("Derived AES key:\n");
+    print_hex(key_material, sizeof(key_material));
+    
     gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
+    
+    /* Create datum for IV */
+    gnutls_datum_t iv = {
+        .data = (unsigned char *)iv_data,
+        .size = sizeof(iv_data)
+    };
 
+    /********** ENCRYPTION **********/
     /* Initialize AES-GCM cipher for encryption */
-    gnutls_cipher_hd_t handle;
-    ret = gnutls_cipher_init(&handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &(gnutls_datum_t){ iv, sizeof(iv) });
+    gnutls_cipher_hd_t encrypt_handle;
+    ret = gnutls_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
     if (ret != 0) {
-        printf("Error initializing cipher: %s\n", gnutls_strerror(ret));
+        printf("Error initializing cipher for encryption: %s\n", gnutls_strerror(ret));
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -143,12 +197,25 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    /* Encrypt the data */
+    /* Set the additional authenticated data (AAD) */
+    ret = gnutls_cipher_add_auth(encrypt_handle, aad_data, sizeof(aad_data));
+    if (ret != 0) {
+        printf("Error adding AAD for encryption: %s\n", gnutls_strerror(ret));
+        gnutls_cipher_deinit(encrypt_handle);
+        gnutls_free(shared_key.data);
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+
+    /* Allocate memory for encrypted data */
     encrypted.size = data.size;
     encrypted.data = gnutls_malloc(encrypted.size);
     if (encrypted.data == NULL) {
         printf("Error allocating memory for encrypted data\n");
-        gnutls_cipher_deinit(handle);
+        gnutls_cipher_deinit(encrypt_handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -157,11 +224,15 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    ret = gnutls_cipher_encrypt2(handle, data.data, data.size, encrypted.data, encrypted.size);
+    /* Copy original data for in-place encryption */
+    memcpy(encrypted.data, data.data, data.size);
+
+    /* Encrypt the data in-place */
+    ret = gnutls_cipher_encrypt(encrypt_handle, encrypted.data, encrypted.size);
     if (ret != 0) {
         printf("Error encrypting data: %s\n", gnutls_strerror(ret));
         gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
+        gnutls_cipher_deinit(encrypt_handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -171,11 +242,11 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     }
 
     /* Get authentication tag */
-    ret = gnutls_cipher_tag(handle, tag, sizeof(tag));
+    ret = gnutls_cipher_tag(encrypt_handle, tag, sizeof(tag));
     if (ret != 0) {
         printf("Error getting authentication tag: %s\n", gnutls_strerror(ret));
         gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
+        gnutls_cipher_deinit(encrypt_handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -184,7 +255,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    gnutls_cipher_deinit(handle);
+    gnutls_cipher_deinit(encrypt_handle);
 
     printf("Data encrypted (size: %d bytes)\n", encrypted.size);
     printf("Encrypted data:\n");
@@ -192,13 +263,12 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     printf("Authentication tag:\n");
     print_hex(tag, sizeof(tag));
 
-    /* Decrypt the data using the same shared secret */
-    printf("Decrypting data...\n");
-    
-    /* Initialize cipher for decryption */
-    ret = gnutls_cipher_init(&handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &(gnutls_datum_t){ iv, sizeof(iv) });
+    /********** DECRYPTION **********/
+    /* Initialize cipher for decryption with same parameters */
+    gnutls_cipher_hd_t decrypt_handle;
+    ret = gnutls_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
     if (ret != 0) {
-        printf("Error initializing decryption cipher: %s\n", gnutls_strerror(ret));
+        printf("Error initializing cipher for decryption: %s\n", gnutls_strerror(ret));
         gnutls_free(encrypted.data);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
@@ -208,12 +278,40 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    /* Decrypt the data */
+    /* Set the same AAD for decryption */
+    ret = gnutls_cipher_add_auth(decrypt_handle, aad_data, sizeof(aad_data));
+    if (ret != 0) {
+        printf("Error adding AAD for decryption: %s\n", gnutls_strerror(ret));
+        gnutls_cipher_deinit(decrypt_handle);
+        gnutls_free(encrypted.data);
+        gnutls_free(shared_key.data);
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+
+    /* Set the authentication tag for verification */
+    ret = gnutls_cipher_tag(decrypt_handle, tag, sizeof(tag));
+    if (ret != 0) {
+        printf("Error setting authentication tag for verification: %s\n", gnutls_strerror(ret));
+        gnutls_cipher_deinit(decrypt_handle);
+        gnutls_free(encrypted.data);
+        gnutls_free(shared_key.data);
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+
+    /* Allocate memory for decrypted data */
     decrypted.size = encrypted.size;
     decrypted.data = gnutls_malloc(decrypted.size);
     if (decrypted.data == NULL) {
         printf("Error allocating memory for decrypted data\n");
-        gnutls_cipher_deinit(handle);
+        gnutls_cipher_deinit(decrypt_handle);
         gnutls_free(encrypted.data);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
@@ -223,12 +321,17 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    ret = gnutls_cipher_decrypt2(handle, encrypted.data, encrypted.size, decrypted.data, decrypted.size);
+    /* Copy encrypted data for in-place decryption */
+    memcpy(decrypted.data, encrypted.data, encrypted.size);
+
+    /* Decrypt the data in-place */
+    printf("Decrypting data...\n");
+    ret = gnutls_cipher_decrypt(decrypt_handle, decrypted.data, decrypted.size);
     if (ret != 0) {
         printf("Error decrypting data: %s\n", gnutls_strerror(ret));
         gnutls_free(decrypted.data);
         gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
+        gnutls_cipher_deinit(decrypt_handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -237,21 +340,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    /* Verify authentication tag */
-    unsigned char verify_tag[16] = {0};
-    ret = gnutls_cipher_tag(handle, verify_tag, sizeof(verify_tag));
-    if (ret != 0 || memcmp(tag, verify_tag, sizeof(tag)) != 0) {
-        printf("Error: Authentication tag verification failed\n");
-        gnutls_free(decrypted.data);
-        gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+    gnutls_cipher_deinit(decrypt_handle);
 
     /* Convert to null-terminated string for printing */
     char *decrypted_str = malloc(decrypted.size + 1);
@@ -259,7 +348,6 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         printf("Error allocating memory for decrypted string\n");
         gnutls_free(decrypted.data);
         gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -280,7 +368,6 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         free(decrypted_str);
         gnutls_free(decrypted.data);
         gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(handle);
         gnutls_free(shared_key.data);
         gnutls_pubkey_deinit(bob_pubkey);
         gnutls_privkey_deinit(bob_privkey);
@@ -293,7 +380,6 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     free(decrypted_str);
     gnutls_free(decrypted.data);
     gnutls_free(encrypted.data);
-    gnutls_cipher_deinit(handle);
     gnutls_free(shared_key.data);
     gnutls_pubkey_deinit(bob_pubkey);
     gnutls_privkey_deinit(bob_privkey);

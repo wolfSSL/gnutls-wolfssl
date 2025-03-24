@@ -378,7 +378,7 @@ wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
                 src,
                 src_size,
                 ctx->iv,
-                sizeof(ctx->iv),
+                ctx->iv_size,
                 ctx->tag,
                 ctx->tag_size,
                 ctx->auth_data,
@@ -447,11 +447,11 @@ wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
                 src,
                 src_size,
                 ctx->iv,
-                sizeof(ctx->iv),
+                ctx->iv_size,
                 ctx->tag,
-                sizeof(ctx->tag),
+                ctx->tag_size,
                 ctx->auth_data,
-                sizeof(ctx->auth_data)
+                ctx->auth_data_size
                 );
 
         if (ret != 0) {
