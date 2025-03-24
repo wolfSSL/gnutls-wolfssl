@@ -336,8 +336,7 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_export_pubkey_func export_pubkey_backend;
     gnutls_pk_sign_func sign_backend;
     gnutls_pk_verify_func verify_backend;
-    gnutls_pk_encrypt_func encrypt_backend;
-    gnutls_pk_decrypt_func decrypt_backend;
+    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
     gnutls_pk_deinit_func deinit_backend;
 	/* The params structure should contain the private or public key
 	 * parameters, depending on the operation */

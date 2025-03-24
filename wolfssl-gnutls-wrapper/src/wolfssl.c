@@ -1,9 +1,8 @@
 /* Integration of wolfssl crypto with GnuTLS */
-#include <gnutls/crypto.h>
+#include <wolfssl/options.h>
 #include "gnutls_compat.h"
 
 #include "wolfssl.h"
-#include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
@@ -102,6 +101,7 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
     printf("wolfssl: wolfssl_cipher_init with enc=%d\n", enc);
 
     struct wolfssl_cipher_ctx *ctx;
+    int mode;
 
     /* check if cipher is supported */
     if (is_cipher_supported((int)algorithm) < 0) {
@@ -135,6 +135,11 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
 
         ctx->enc = enc;
         ctx->enc_initialized = 1;
+
+        mode = get_mode(algorithm);
+        if (mode == GCM) {
+            ctx->dec_initialized = 1;
+        }
     } else {
         if (wc_AesInit(&ctx->dec_aes_ctx, NULL, INVALID_DEVID) != 0) {
             wc_AesFree(&ctx->enc_aes_ctx);
@@ -375,9 +380,9 @@ wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
                 ctx->iv,
                 sizeof(ctx->iv),
                 ctx->tag,
-                sizeof(ctx->tag),
+                ctx->tag_size,
                 ctx->auth_data,
-                sizeof(ctx->auth_data)
+                ctx->auth_data_size
                 );
 
         if (ret != 0) {
@@ -1036,7 +1041,7 @@ static int wolfssl_digest_register(void)
     return ret;
 }
 
-/* context structure for wolfssl SHA256 */
+/* context structure for wolfssl pk */
 struct wolfssl_pk_ctx {
 	ecc_key key_pair;
 	int initialized;
@@ -1313,6 +1318,97 @@ static void wolfssl_pk_deinit(void *_ctx)
     return;
 }
 
+/* derive shared secret between our private key and another's public key */
+static int
+wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey, const void *pubkey,
+                              const gnutls_datum_t *nonce, gnutls_datum_t *secret)
+{
+    printf("wolfssl: wolfssl_pk_derive_shared_secret\n");
+
+    (void)nonce;
+    (void)privkey;
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+    ecc_key peer_key;
+
+    /* Parameters sanity checks */
+    if (!ctx || !ctx->initialized) {
+        printf("wolfssl: context not initialized\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!pubkey || !secret) {
+        printf("wolfssl: missing required parameters\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* We only support ECDSA for now */
+    if (ctx->algo != GNUTLS_PK_ECDSA) {
+        printf("wolfssl: algorithm not supported: %d\n", ctx->algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Cast pubkey to the expected type */
+    const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
+    if (!pub->data || pub->size == 0) {
+        printf("wolfssl: invalid public key data\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Initialize the peer's public key */
+    ret = wc_ecc_init(&peer_key);
+    if (ret != 0) {
+        printf("wolfssl: wc_ecc_init failed with code %d\n", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Import the peer's public key from X963 format (0x04 | X | Y) */
+    ret = wc_ecc_import_x963(pub->data, pub->size, &peer_key);
+    if (ret != 0) {
+        printf("wolfssl: public key import failed with code %d\n", ret);
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Determine how much space we need for the shared secret */
+    word32 secret_size = wc_ecc_size(&ctx->key_pair);
+    if (secret_size == 0) {
+        printf("wolfssl: error getting key size\n");
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INTERNAL_ERROR;
+    }
+
+    /* Allocate buffer for the shared secret */
+    byte *shared_secret = gnutls_malloc(secret_size);
+    if (!shared_secret) {
+        printf("wolfssl: memory allocation failed\n");
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ctx->key_pair.rng = &ctx->rng;
+
+    /* Generate the shared secret */
+    ret = wc_ecc_shared_secret(&ctx->key_pair, &peer_key, shared_secret, &secret_size);
+    if (ret != 0) {
+        printf("wolfssl: shared secret generation failed with code %d\n", ret);
+        gnutls_free(shared_secret);
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Free the peer's public key as we don't need it anymore */
+    wc_ecc_free(&peer_key);
+
+    /* Allocate gnutls_datum for the result */
+    secret->data = shared_secret;
+    secret->size = secret_size;
+
+    printf("wolfssl: shared secret derived successfully (size: %d bytes)\n", secret_size);
+    return 0;
+}
+
 /* structure containing function pointers for the pk implementation */
 static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     /* the init function is not needed, since the init functions of gnutls
@@ -1323,6 +1419,7 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     .export_pubkey_backend = wolfssl_pk_export_pub,
     .sign_backend = wolfssl_pk_sign,
     .verify_backend = wolfssl_pk_verify,
+    .derive_shared_secret_backend = wolfssl_pk_derive_shared_secret,
     .deinit_backend = wolfssl_pk_deinit,
 };
 

@@ -1,4 +1,5 @@
-TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify
+TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_ecdsa_encrypt_and_decrypt
+
 
 INCLUDES = -I/opt/gnutls/include/gnutls/
 LDFLAGS = -L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib -Wl,--no-as-needed -Wl,-z,now
@@ -19,6 +20,9 @@ test_hmac: test_hmac.c
 	gcc -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 test_ecdsa_sign_and_verify: test_ecdsa_sign_and_verify.c
+	gcc -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
+
+test_ecdsa_encrypt_and_decrypt: test_ecdsa_encrypt_and_decrypt.c
 	gcc -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 run-%:

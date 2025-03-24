@@ -1,5 +1,5 @@
 diff --git a/lib/abstract_int.h b/lib/abstract_int.h
-index 88d4cb4..16f2667 100644
+index 88d4cb4..2c564ad 100644
 --- a/lib/abstract_int.h
 +++ b/lib/abstract_int.h
 @@ -30,6 +30,13 @@ typedef int (*gnutls_privkey_pk_params_func)(gnutls_privkey_t key,
@@ -10,8 +10,8 @@ index 88d4cb4..16f2667 100644
 +    gnutls_pk_export_pubkey_func export_pubkey_backend;
 +    gnutls_pk_sign_func sign_backend;
 +    gnutls_pk_verify_func verify_backend;
-+    gnutls_pk_encrypt_func encrypt_backend;
-+    gnutls_pk_decrypt_func decrypt_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
  	gnutls_privkey_type_t type;
  	gnutls_pk_algorithm_t pk_algorithm;
@@ -24,8 +24,8 @@ index 88d4cb4..16f2667 100644
 +    gnutls_pk_export_pubkey_func export_pubkey_backend;
 +    gnutls_pk_sign_func sign_backend;
 +    gnutls_pk_verify_func verify_backend;
-+    gnutls_pk_encrypt_func encrypt_backend;
-+    gnutls_pk_decrypt_func decrypt_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
 +	gnutls_privkey_type_t type;
 +	gnutls_pk_algorithm_t pk_algorithm;
@@ -109,7 +109,7 @@ index 63db24b..01d6b40 100644
 +    return _get_algo(&glob_pk, algo);
 +}
 diff --git a/lib/crypto-backend.h b/lib/crypto-backend.h
-index f213a43..b08dd81 100644
+index f213a43..a9f46ac 100644
 --- a/lib/crypto-backend.h
 +++ b/lib/crypto-backend.h
 @@ -23,8 +23,11 @@
@@ -132,7 +132,7 @@ index f213a43..b08dd81 100644
  typedef struct {
  	int (*hkdf_extract)(gnutls_mac_algorithm_t, const void *key,
  			    size_t keysize, const void *salt, size_t saltsize,
-@@ -374,6 +378,14 @@ typedef enum {
+@@ -374,6 +378,13 @@ typedef enum {
  
  /* Public key algorithms */
  typedef struct gnutls_crypto_pk {
@@ -140,14 +140,13 @@ index f213a43..b08dd81 100644
 +    gnutls_pk_export_pubkey_func export_pubkey_backend;
 +    gnutls_pk_sign_func sign_backend;
 +    gnutls_pk_verify_func verify_backend;
-+    gnutls_pk_encrypt_func encrypt_backend;
-+    gnutls_pk_decrypt_func decrypt_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
 +    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
  	/* The params structure should contain the private or public key
  	 * parameters, depending on the operation */
  	int (*encrypt)(gnutls_pk_algorithm_t, gnutls_datum_t *ciphertext,
-@@ -438,6 +450,11 @@ int gnutls_crypto_single_digest_register(
+@@ -438,6 +449,11 @@ int gnutls_crypto_single_digest_register(
  	gnutls_digest_algorithm_t algorithm, int priority,
  	const gnutls_crypto_single_digest_st *s, int free_s);
  
@@ -159,7 +158,7 @@ index f213a43..b08dd81 100644
  int gnutls_crypto_rnd_register(int priority, const gnutls_crypto_rnd_st *s);
  int gnutls_crypto_pk_register(int priority, const gnutls_crypto_pk_st *s);
  int gnutls_crypto_bigint_register(int priority,
-@@ -467,4 +484,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
+@@ -467,4 +483,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
  			     const gnutls_datum_t *data, unsigned char *buffer,
  			     size_t buffer_size);
  
@@ -220,7 +219,7 @@ index 42d90ee..9f666a7 100644
  	/* These self tests are performed on the overridden algorithms
  	 * (e.g., AESNI overridden AES). They are after _gnutls_register_accel_crypto()
 diff --git a/lib/includes/gnutls/crypto.h b/lib/includes/gnutls/crypto.h
-index 400072d..219d6bb 100644
+index 400072d..84231fe 100644
 --- a/lib/includes/gnutls/crypto.h
 +++ b/lib/includes/gnutls/crypto.h
 @@ -191,7 +191,7 @@ int gnutls_rnd(gnutls_rnd_level_t level, void *data, size_t len);
@@ -232,7 +231,7 @@ index 400072d..219d6bb 100644
   */
  
  typedef int (*gnutls_cipher_init_func)(gnutls_cipher_algorithm_t, void **ctx,
-@@ -261,6 +261,31 @@ int gnutls_crypto_register_mac(
+@@ -261,6 +261,24 @@ int gnutls_crypto_register_mac(
  	gnutls_mac_deinit_func deinit,
  	gnutls_mac_fast_func hash_fast) _GNUTLS_GCC_ATTR_DEPRECATED;
  
@@ -241,7 +240,6 @@ index 400072d..219d6bb 100644
 +                                          unsigned int bits);
 +
 +typedef int (*gnutls_pk_export_pubkey_func)(void *ctx, const void* pubkey);
-+
 +typedef int (*gnutls_pk_sign_func)(void *ctx,
 +                                   const void *privkey,
 +                                   gnutls_digest_algorithm_t hash,
@@ -252,13 +250,7 @@ index 400072d..219d6bb 100644
 +                                     gnutls_sign_algorithm_t hash,
 +                                     const void *data,
 +                                     const void *signature);
-+typedef int (*gnutls_pk_encrypt_func)(void *ctx, const void* pub_key,
-+                                      const void* plain,
-+                                      void *encr);
-+typedef int (*gnutls_pk_decrypt_func)(void *ctx, const void* priv_key,
-+                                      const void* encr,
-+                                      void *plain);
-+
++typedef int (*gnutls_pk_derive_shared_secret_func)(void *ctx, const void *privkey, const void *pubkey, const gnutls_datum_t *nonce, gnutls_datum_t *secret);
 +typedef void (*gnutls_pk_deinit_func)(void *ctx);
 +
  typedef int (*gnutls_digest_init_func)(gnutls_digest_algorithm_t, void **ctx);
@@ -293,7 +285,7 @@ index 91eaffd..eb702f3 100644
  	.encrypt = _wrap_nettle_pk_encrypt,
  	.decrypt = _wrap_nettle_pk_decrypt,
 diff --git a/lib/privkey.c b/lib/privkey.c
-index 84e984f..f6ca775 100644
+index 84e984f..70a9e10 100644
 --- a/lib/privkey.c
 +++ b/lib/privkey.c
 @@ -20,6 +20,10 @@
@@ -358,6 +350,24 @@ index 84e984f..f6ca775 100644
  	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA)
  		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
  
+@@ -2059,6 +2093,17 @@ int gnutls_privkey_derive_secret(gnutls_privkey_t privkey,
+ 				 const gnutls_datum_t *nonce,
+ 				 gnutls_datum_t *secret, unsigned int flags)
+ {
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(privkey->pk_algorithm);
++
++    if (cc != NULL && cc->derive_shared_secret_backend != NULL) {
++        if (cc->derive_shared_secret_backend(privkey->pk_ctx, privkey, pubkey, nonce, secret) < 0) {
++            return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	if (unlikely(privkey == NULL || privkey->type != GNUTLS_PRIVKEY_X509)) {
+ 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+ 	}
 diff --git a/lib/pubkey.c b/lib/pubkey.c
 index 1e5ecf3..3e2e3ae 100644
 --- a/lib/pubkey.c
