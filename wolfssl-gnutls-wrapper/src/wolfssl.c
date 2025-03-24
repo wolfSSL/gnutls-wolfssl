@@ -96,6 +96,7 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
     printf("wolfssl: wolfssl_cipher_init with enc=%d\n", enc);
 
     struct wolfssl_cipher_ctx *ctx;
+    int mode;
 
     /* check if cipher is supported */
     if (is_cipher_supported((int)algorithm) < 0) {
@@ -129,6 +130,11 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
 
         ctx->enc = enc;
         ctx->enc_initialized = 1;
+
+        mode = get_mode(algorithm);
+        if (mode == GCM) {
+            ctx->dec_initialized = 1;
+        }
     } else {
         if (wc_AesInit(&ctx->dec_aes_ctx, NULL, INVALID_DEVID) != 0) {
             wc_AesFree(&ctx->enc_aes_ctx);
