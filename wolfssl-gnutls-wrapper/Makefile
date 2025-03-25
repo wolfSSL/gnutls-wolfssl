@@ -2,7 +2,16 @@ CC = gcc
 CFLAGS = -DENABLE_WOLFSSL -fPIC -Wall -Wextra
 INCLUDES = -I/opt/gnutls/include/ -I/opt/wolfssl/include/
 
-LDFLAGS = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
+endif
+
+ifeq ($(UNAME_S),Darwin)
+    CC = clang
+    LDFLAGS = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib
+endif
 
 LIBS = -lgnutls -lwolfssl -ldl
 
