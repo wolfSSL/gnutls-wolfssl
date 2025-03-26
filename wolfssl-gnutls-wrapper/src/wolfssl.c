@@ -794,51 +794,11 @@ static int wolfssl_mac_register(void)
 
     printf("wolfssl: wolfssl_mac_register\n");
 
-    /* Register HMAC-MD5 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_MD5]) {
-        printf("wolfssl: registering HMAC-MD5\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_MD5, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA1 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA1]) {
-        printf("wolfssl: registering HMAC-SHA1\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA1, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
     /* Register HMAC-SHA256 */
     if (wolfssl_mac_supported[GNUTLS_MAC_SHA256]) {
         printf("wolfssl: registering HMAC-SHA256\n");
         ret = gnutls_crypto_single_mac_register(
                 GNUTLS_MAC_SHA256, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA384 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA384]) {
-        printf("wolfssl: registering HMAC-SHA384\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA384, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA512 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA512]) {
-        printf("wolfssl: registering HMAC-SHA512\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA512, 80, &wolfssl_mac_struct, 0);
         if (ret < 0) {
             return ret;
         }
