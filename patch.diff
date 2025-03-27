@@ -1,8 +1,42 @@
+diff --git a/lib/abstract_int.h b/lib/abstract_int.h
+index 88d4cb4..2c564ad 100644
+--- a/lib/abstract_int.h
++++ b/lib/abstract_int.h
+@@ -30,6 +30,13 @@ typedef int (*gnutls_privkey_pk_params_func)(gnutls_privkey_t key,
+ 					     gnutls_pk_params_st *params);
+ 
+ struct gnutls_privkey_st {
++    gnutls_pk_generate_func generate_backend;
++    gnutls_pk_export_pubkey_func export_pubkey_backend;
++    gnutls_pk_sign_func sign_backend;
++    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_deinit_func deinit_backend;
++    void *pk_ctx;
+ 	gnutls_privkey_type_t type;
+ 	gnutls_pk_algorithm_t pk_algorithm;
+ 
+@@ -57,6 +64,15 @@ struct gnutls_privkey_st {
+ };
+ 
+ struct gnutls_pubkey_st {
++    gnutls_pk_generate_func generate_backend;
++    gnutls_pk_export_pubkey_func export_pubkey_backend;
++    gnutls_pk_sign_func sign_backend;
++    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_deinit_func deinit_backend;
++    void *pk_ctx;
++	gnutls_privkey_type_t type;
++	gnutls_pk_algorithm_t pk_algorithm;
+ 	unsigned int bits; /* an indication of the security parameter */
+ 
+ 	/* the size of params depends on the public
 diff --git a/lib/crypto-backend.c b/lib/crypto-backend.c
-index 63db24b..dd23fff 100644
+index 63db24b..01d6b40 100644
 --- a/lib/crypto-backend.c
 +++ b/lib/crypto-backend.c
-@@ -23,6 +23,7 @@
+@@ -23,10 +23,10 @@
  #include "errors.h"
  #include "gnutls_int.h"
  #include <gnutls/crypto.h>
@@ -10,6 +44,18 @@ index 63db24b..dd23fff 100644
  #include "crypto-backend.h"
  #include "crypto.h"
  #include "mpi.h"
+-#include "pk.h"
+ #include "random.h"
+ #include "cipher_int.h"
+ 
+@@ -34,6 +34,7 @@
+ int crypto_mac_prio = INT_MAX;
+ int crypto_digest_prio = INT_MAX;
+ int crypto_cipher_prio = INT_MAX;
++int crypto_pk_prio = INT_MAX;
+ 
+ typedef struct algo_list {
+ 	int algorithm;
 @@ -187,6 +188,8 @@ _gnutls_get_crypto_cipher(gnutls_cipher_algorithm_t algo)
  	return _get_algo(&glob_cl, algo);
  }
@@ -19,7 +65,7 @@ index 63db24b..dd23fff 100644
  /**
   * gnutls_crypto_register_cipher:
   * @algorithm: is the gnutls algorithm identifier
-@@ -463,3 +466,24 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
+@@ -463,3 +466,42 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
  		"called the deprecated gnutls_crypto_register_digest()\n");
  	return 0;
  }
@@ -44,11 +90,41 @@ index 63db24b..dd23fff 100644
 +    printf("Successfully loaded crypto provider\n");
 +    return 0;
 +}
++
++static algo_list glob_pk = { GNUTLS_PK_UNKNOWN, 0, NULL, 0, NULL };
++
++/* Registration function for public key algorithms */
++int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
++                                    int priority,
++                                    const gnutls_crypto_pk_st *s,
++                                    int free_s)
++{
++    return _algo_register(&glob_pk, algorithm, priority, (void *)s, free_s);
++}
++
++/* Retrieval function for public key algorithms */
++const gnutls_crypto_pk_st *
++_gnutls_get_crypto_pk(gnutls_pk_algorithm_t algo)
++{
++    return _get_algo(&glob_pk, algo);
++}
 diff --git a/lib/crypto-backend.h b/lib/crypto-backend.h
-index f213a43..858c7e0 100644
+index f213a43..a9f46ac 100644
 --- a/lib/crypto-backend.h
 +++ b/lib/crypto-backend.h
-@@ -75,6 +75,7 @@ typedef struct {
+@@ -23,8 +23,11 @@
+ #ifndef GNUTLS_LIB_CRYPTO_BACKEND_H
+ #define GNUTLS_LIB_CRYPTO_BACKEND_H
+ 
++
+ #include <gnutls/crypto.h>
+ 
++#define MAX_PVP_SEED_SIZE 256
++
+ #define gnutls_crypto_single_cipher_st gnutls_crypto_cipher_st
+ #define gnutls_crypto_single_mac_st gnutls_crypto_mac_st
+ #define gnutls_crypto_single_digest_st gnutls_crypto_digest_st
+@@ -75,6 +78,7 @@ typedef struct {
  	int (*exists)(gnutls_digest_algorithm_t);
  } gnutls_crypto_digest_st;
  
@@ -56,30 +132,58 @@ index f213a43..858c7e0 100644
  typedef struct {
  	int (*hkdf_extract)(gnutls_mac_algorithm_t, const void *key,
  			    size_t keysize, const void *salt, size_t saltsize,
-@@ -95,6 +96,16 @@ typedef struct gnutls_crypto_rnd {
- 	int (*self_test)(void); /* this should not require rng initialization */
- } gnutls_crypto_rnd_st;
+@@ -374,6 +378,13 @@ typedef enum {
  
-+typedef struct {
-+    gnutls_pk_init_func init;
-+    gnutls_pk_privkey_generate generate;
-+    gnutls_pk_pubkey_import import_pubkey;
-+    gnutls_pk_sign_func sign;
-+    gnutls_pk_verify_func verify;
-+    gnutls_pk_encrypt_func encrypt;
-+    gnutls_pk_decrypt_func decrypt;
-+} gnutls_crypto_pk_st_custom;
+ /* Public key algorithms */
+ typedef struct gnutls_crypto_pk {
++    gnutls_pk_generate_func generate_backend;
++    gnutls_pk_export_pubkey_func export_pubkey_backend;
++    gnutls_pk_sign_func sign_backend;
++    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_deinit_func deinit_backend;
++    void *pk_ctx;
+ 	/* The params structure should contain the private or public key
+ 	 * parameters, depending on the operation */
+ 	int (*encrypt)(gnutls_pk_algorithm_t, gnutls_datum_t *ciphertext,
+@@ -438,6 +449,11 @@ int gnutls_crypto_single_digest_register(
+ 	gnutls_digest_algorithm_t algorithm, int priority,
+ 	const gnutls_crypto_single_digest_st *s, int free_s);
+ 
++int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
++                                    int priority,
++                                    const gnutls_crypto_pk_st *s,
++                                    int free_s);
 +
- typedef void *bigint_t;
- 
- /**
-@@ -467,4 +478,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
+ int gnutls_crypto_rnd_register(int priority, const gnutls_crypto_rnd_st *s);
+ int gnutls_crypto_pk_register(int priority, const gnutls_crypto_pk_st *s);
+ int gnutls_crypto_bigint_register(int priority,
+@@ -467,4 +483,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
  			     const gnutls_datum_t *data, unsigned char *buffer,
  			     size_t buffer_size);
  
 +int gnutls_load_crypto_provider(const char *provider_path);
 +
  #endif /* GNUTLS_LIB_CRYPTO_BACKEND_H */
+diff --git a/lib/crypto.h b/lib/crypto.h
+index 9403560..f52f50a 100644
+--- a/lib/crypto.h
++++ b/lib/crypto.h
+@@ -23,6 +23,7 @@
+ #ifndef GNUTLS_LIB_CRYPTO_H
+ #define GNUTLS_LIB_CRYPTO_H
+ 
++#include <gnutls/gnutls.h>
+ const gnutls_crypto_cipher_st *
+ _gnutls_get_crypto_cipher(gnutls_cipher_algorithm_t algo);
+ const gnutls_crypto_digest_st *
+@@ -36,5 +37,6 @@ int _gnutls_crypto_register_cipher(gnutls_cipher_algorithm_t algorithm,
+ 				   gnutls_cipher_encrypt_func encrypt,
+ 				   gnutls_cipher_decrypt_func decrypt,
+ 				   gnutls_cipher_deinit_func deinit);
++const gnutls_crypto_pk_st *_gnutls_get_crypto_pk(gnutls_pk_algorithm_t algo);
+ 
+ #endif /* GNUTLS_LIB_CRYPTO_H */
 diff --git a/lib/global.c b/lib/global.c
 index 42d90ee..9f666a7 100644
 --- a/lib/global.c
@@ -115,7 +219,7 @@ index 42d90ee..9f666a7 100644
  	/* These self tests are performed on the overridden algorithms
  	 * (e.g., AESNI overridden AES). They are after _gnutls_register_accel_crypto()
 diff --git a/lib/includes/gnutls/crypto.h b/lib/includes/gnutls/crypto.h
-index 400072d..bcb9f1a 100644
+index 400072d..84231fe 100644
 --- a/lib/includes/gnutls/crypto.h
 +++ b/lib/includes/gnutls/crypto.h
 @@ -191,7 +191,7 @@ int gnutls_rnd(gnutls_rnd_level_t level, void *data, size_t len);
@@ -127,55 +231,206 @@ index 400072d..bcb9f1a 100644
   */
  
  typedef int (*gnutls_cipher_init_func)(gnutls_cipher_algorithm_t, void **ctx,
-@@ -261,6 +261,37 @@ int gnutls_crypto_register_mac(
+@@ -261,6 +261,24 @@ int gnutls_crypto_register_mac(
  	gnutls_mac_deinit_func deinit,
  	gnutls_mac_fast_func hash_fast) _GNUTLS_GCC_ATTR_DEPRECATED;
  
-+typedef int (*gnutls_pk_init_func)(void**ctx);
-+typedef int (*gnutls_pk_privkey_generate)(void *ctx, const void *privkey,
++typedef int (*gnutls_pk_generate_func)(void **ctx, const void *privkey,
 +                                          gnutls_pk_algorithm_t algo,
-+                                          unsigned int bits,
-+                                          unsigned int flags,
-+                                          const void* data,
-+                                          size_t datasize);
-+typedef int (*gnutls_pk_pubkey_import)(void *ctx, const void* pubkey,
-+                                       unsigned int usage,
-+                                       unsigned int flags);
++                                          unsigned int bits);
++
++typedef int (*gnutls_pk_export_pubkey_func)(void *ctx, const void* pubkey);
 +typedef int (*gnutls_pk_sign_func)(void *ctx,
 +                                   const void *privkey,
 +                                   gnutls_digest_algorithm_t hash,
-+                                   unsigned int flags,
 +                                   const void *data,
 +                                   const void *signature);
 +typedef int (*gnutls_pk_verify_func)(void *ctx,
 +                                     const void *pubkey,
-+                                     gnutls_digest_algorithm_t hash,
-+                                     unsigned int flags,
++                                     gnutls_sign_algorithm_t hash,
 +                                     const void *data,
 +                                     const void *signature);
-+typedef int (*gnutls_pk_encrypt_func)(void *ctx, const void* pub_key,
-+                                      unsigned int flags,
-+                                      const void* plain,
-+                                      void *encr);
-+typedef int (*gnutls_pk_decrypt_func)(void *ctx, const void* priv_key,
-+                                      unsigned int flags,
-+                                      const void* encr,
-+                                      void *plain);
++typedef int (*gnutls_pk_derive_shared_secret_func)(void *ctx, const void *privkey, const void *pubkey, const gnutls_datum_t *nonce, gnutls_datum_t *secret);
++typedef void (*gnutls_pk_deinit_func)(void *ctx);
 +
  typedef int (*gnutls_digest_init_func)(gnutls_digest_algorithm_t, void **ctx);
  typedef int (*gnutls_digest_hash_func)(void *ctx, const void *text,
  				       size_t textsize);
 diff --git a/lib/libgnutls.map b/lib/libgnutls.map
-index c236683..4082adf 100644
+index c236683..642dcdb 100644
 --- a/lib/libgnutls.map
 +++ b/lib/libgnutls.map
-@@ -1017,6 +1017,9 @@ GNUTLS_3_4
+@@ -1017,6 +1017,10 @@ GNUTLS_3_4
  	gnutls_crypto_register_aead_cipher;
  	gnutls_crypto_register_mac;
  	gnutls_crypto_register_digest;
 +    gnutls_crypto_single_cipher_register;
 +    gnutls_crypto_single_mac_register;
 +    gnutls_crypto_single_digest_register;
++    gnutls_crypto_single_pk_register;
  	gnutls_ext_register;
  	gnutls_buffer_append_data;
  	gnutls_supplemental_register;
+diff --git a/lib/nettle/pk.c b/lib/nettle/pk.c
+index 91eaffd..eb702f3 100644
+--- a/lib/nettle/pk.c
++++ b/lib/nettle/pk.c
+@@ -5230,8 +5230,6 @@ static int wrap_nettle_pk_fixup(gnutls_pk_algorithm_t algo,
+ 	return 0;
+ }
+ 
+-int crypto_pk_prio = INT_MAX;
+-
+ gnutls_crypto_pk_st _gnutls_pk_ops = {
+ 	.encrypt = _wrap_nettle_pk_encrypt,
+ 	.decrypt = _wrap_nettle_pk_decrypt,
+diff --git a/lib/privkey.c b/lib/privkey.c
+index 84e984f..70a9e10 100644
+--- a/lib/privkey.c
++++ b/lib/privkey.c
+@@ -20,6 +20,10 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>
+  */
+ 
++#include <config.h>
++#include <stdint.h>
++#include "crypto-backend.h"
++#include "crypto.h"
+ #include "gnutls_int.h"
+ #include <gnutls/pkcs11.h>
+ #include <stdio.h>
+@@ -480,6 +484,14 @@ int gnutls_privkey_init(gnutls_privkey_t *key)
+  **/
+ void gnutls_privkey_deinit(gnutls_privkey_t key)
+ {
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->deinit_backend != NULL) {
++        cc->deinit_backend(key->pk_ctx);
++        return;
++    }
++
+ 	if (key == NULL)
+ 		return;
+ 
+@@ -1115,6 +1127,18 @@ int gnutls_privkey_generate2(gnutls_privkey_t pkey, gnutls_pk_algorithm_t algo,
+ {
+ 	int ret;
+ 
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(algo);
++
++    if (cc != NULL && cc->generate_backend != NULL) {
++        pkey->pk_algorithm = algo;
++
++        if (cc->generate_backend(&pkey->pk_ctx, pkey, algo, bits) < 0) {
++                return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	ret = gnutls_x509_privkey_init(&pkey->key.x509);
+ 	if (ret < 0)
+ 		return gnutls_assert_val(ret);
+@@ -1163,6 +1187,16 @@ int gnutls_privkey_sign_data(gnutls_privkey_t signer,
+ 	int ret;
+ 	gnutls_x509_spki_st params;
+ 
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(signer->pk_algorithm);
++
++    if (cc != NULL && cc->generate_backend != NULL) {
++        if (cc->sign_backend(signer->pk_ctx, signer, hash, data, signature) < 0) {
++                return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA)
+ 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+ 
+@@ -2059,6 +2093,17 @@ int gnutls_privkey_derive_secret(gnutls_privkey_t privkey,
+ 				 const gnutls_datum_t *nonce,
+ 				 gnutls_datum_t *secret, unsigned int flags)
+ {
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(privkey->pk_algorithm);
++
++    if (cc != NULL && cc->derive_shared_secret_backend != NULL) {
++        if (cc->derive_shared_secret_backend(privkey->pk_ctx, privkey, pubkey, nonce, secret) < 0) {
++            return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	if (unlikely(privkey == NULL || privkey->type != GNUTLS_PRIVKEY_X509)) {
+ 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+ 	}
+diff --git a/lib/pubkey.c b/lib/pubkey.c
+index 1e5ecf3..3e2e3ae 100644
+--- a/lib/pubkey.c
++++ b/lib/pubkey.c
+@@ -19,6 +19,11 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>
+  */
+ 
++
++#include <config.h>
++#include <stdint.h>
++#include "crypto-backend.h"
++#include "crypto.h"
+ #include "gnutls_int.h"
+ #include <gnutls/pkcs11.h>
+ #include <stdio.h>
+@@ -155,6 +160,12 @@ int gnutls_pubkey_init(gnutls_pubkey_t *key)
+  **/
+ void gnutls_pubkey_deinit(gnutls_pubkey_t key)
+ {
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->deinit_backend != NULL) {
++        cc->deinit_backend(key->pk_ctx);
++        return;
++    }
+ 	if (!key)
+ 		return;
+ 	gnutls_pk_params_release(&key->params);
+@@ -260,6 +271,19 @@ int gnutls_pubkey_import_x509_crq(gnutls_pubkey_t key, gnutls_x509_crq_t crq,
+ int gnutls_pubkey_import_privkey(gnutls_pubkey_t key, gnutls_privkey_t pkey,
+ 				 unsigned int usage, unsigned int flags)
+ {
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(pkey->pk_algorithm);
++
++    if (cc != NULL && cc->export_pubkey_backend != NULL) {
++        key->pk_algorithm = pkey->pk_algorithm;
++        key->pk_ctx = pkey->pk_ctx;
++
++        if (cc->export_pubkey_backend(pkey->pk_ctx, key) < 0) {
++                return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	gnutls_pk_params_release(&key->params);
+ 	gnutls_pk_params_init(&key->params);
+ 
+@@ -2177,6 +2201,16 @@ int gnutls_pubkey_verify_data2(gnutls_pubkey_t pubkey,
+ 	gnutls_x509_spki_st params;
+ 	const gnutls_sign_entry_st *se;
+ 
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(pubkey->pk_algorithm);
++
++    if (cc != NULL && cc->verify_backend != NULL) {
++        if (cc->verify_backend(pubkey->pk_ctx, pubkey, algo, data, signature) < 0) {
++                return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
++
+ 	if (pubkey == NULL) {
+ 		gnutls_assert();
+ 		return GNUTLS_E_INVALID_REQUEST;

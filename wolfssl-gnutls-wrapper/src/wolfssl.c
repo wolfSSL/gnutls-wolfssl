@@ -1,11 +1,16 @@
 /* Integration of wolfssl crypto with GnuTLS */
-#include <gnutls/crypto.h>
+#include <wolfssl/options.h>
 #include "gnutls_compat.h"
 
 #include "wolfssl.h"
+#include <wolfssl/wolfcrypt/settings.h>
+#include <wolfssl/wolfcrypt/types.h>
+#include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/hmac.h>
+#include <wolfssl/wolfcrypt/ecc.h>
+#include <wolfssl/wolfcrypt/random.h>
 
 void __attribute__((constructor)) wolfssl_init(void) {
     _gnutls_wolfssl_init();
@@ -373,11 +378,11 @@ wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
                 src,
                 src_size,
                 ctx->iv,
-                sizeof(ctx->iv),
+                ctx->iv_size,
                 ctx->tag,
-                sizeof(ctx->tag),
+                ctx->tag_size,
                 ctx->auth_data,
-                sizeof(ctx->auth_data)
+                ctx->auth_data_size
                 );
 
         if (ret != 0) {
@@ -442,11 +447,11 @@ wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
                 src,
                 src_size,
                 ctx->iv,
-                sizeof(ctx->iv),
+                ctx->iv_size,
                 ctx->tag,
-                sizeof(ctx->tag),
+                ctx->tag_size,
                 ctx->auth_data,
-                sizeof(ctx->auth_data)
+                ctx->auth_data_size
                 );
 
         if (ret != 0) {
@@ -789,51 +794,11 @@ static int wolfssl_mac_register(void)
 
     printf("wolfssl: wolfssl_mac_register\n");
 
-    /* Register HMAC-MD5 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_MD5]) {
-        printf("wolfssl: registering HMAC-MD5\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_MD5, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA1 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA1]) {
-        printf("wolfssl: registering HMAC-SHA1\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA1, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
     /* Register HMAC-SHA256 */
     if (wolfssl_mac_supported[GNUTLS_MAC_SHA256]) {
         printf("wolfssl: registering HMAC-SHA256\n");
         ret = gnutls_crypto_single_mac_register(
                 GNUTLS_MAC_SHA256, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA384 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA384]) {
-        printf("wolfssl: registering HMAC-SHA384\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA384, 80, &wolfssl_mac_struct, 0);
-        if (ret < 0) {
-            return ret;
-        }
-    }
-
-    /* Register HMAC-SHA512 */
-    if (wolfssl_mac_supported[GNUTLS_MAC_SHA512]) {
-        printf("wolfssl: registering HMAC-SHA512\n");
-        ret = gnutls_crypto_single_mac_register(
-                GNUTLS_MAC_SHA512, 80, &wolfssl_mac_struct, 0);
         if (ret < 0) {
             return ret;
         }
@@ -1036,6 +1001,413 @@ static int wolfssl_digest_register(void)
     return ret;
 }
 
+/* context structure for wolfssl pk */
+struct wolfssl_pk_ctx {
+	ecc_key key_pair;
+	int initialized;
+	gnutls_pk_algorithm_t algo;
+	WC_RNG rng;
+	int rng_initialized;
+
+    byte pub_x[128];
+    word32 pub_x_len;
+    byte pub_y[128];
+    word32 pub_y_len;
+};
+
+/* generate a pk key pair */
+static int
+wolfssl_pk_generate(void **_ctx, const void *privkey, gnutls_pk_algorithm_t algo,
+                    unsigned int bits)
+{
+    printf("wolfssl: wolfssl_pk_generate for algo %d with %d bits\n", algo, bits);
+
+    (void)privkey;
+
+    struct wolfssl_pk_ctx *ctx;
+    int ret;
+    int curve_id;
+    int curve_size;
+
+    printf("wolfssl: ctx not initialized, initializing now\n");
+    ctx = gnutls_calloc(2, sizeof(struct wolfssl_pk_ctx));
+    if (ctx == NULL) {
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    memset(ctx, 0, sizeof(struct wolfssl_pk_ctx));
+
+    /* Initialize wolfSSL ECC key */
+    ret = wc_ecc_init(&ctx->key_pair);
+    if (ret != 0) {
+        printf("wolfssl: wc_ecc_init failed with code %d\n", ret);
+        return GNUTLS_E_CRYPTO_INIT_FAILED;
+    }
+
+    ctx->initialized = 1;
+    ctx->algo = algo;
+
+    printf("wolfssl: mapping gnutls curve to wolfssl\n");
+    /* Map GnuTLS ECC curve to wolfSSL curve ID */
+    if (algo == GNUTLS_PK_ECDSA) {
+        switch (bits) {
+            case 256: /* SECP256R1 */
+                curve_id = ECC_SECP256R1;
+                break;
+            case 384: /* SECP384R1 */
+                curve_id = ECC_SECP384R1;
+                break;
+            case 521: /* SECP521R1 */
+                curve_id = ECC_SECP521R1;
+                break;
+            default:
+                printf("wolfssl: unsupported curve bits: %d\n", bits);
+                return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+        }
+
+        printf("wolfssl: getting size of the key from the curve_id\n");
+
+        curve_size = wc_ecc_get_curve_size_from_id(curve_id);
+
+        printf("wolfssl: curve size: %d\n", curve_size);
+
+        /* Initialize RNG */
+        ret = wc_InitRng(&ctx->rng);
+        if (ret != 0) {
+            printf("wolfssl: wc_InitRng failed with code %d\n", ret);
+            wc_ecc_free(&ctx->key_pair);
+            return GNUTLS_E_RANDOM_FAILED;
+        }
+
+        /* Generate ECC key with specific curve */
+        ret = wc_ecc_make_key_ex(&ctx->rng, curve_size, &ctx->key_pair, curve_id);
+        if (ret != 0) {
+            printf("wolfssl: key generation failed with code %d\n", ret);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
+    } else {
+        printf("wolfssl: unsupported algorithm: %d\n", algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    printf("wolfssl: pk generated successfully\n");
+
+    *_ctx = ctx;
+
+    return 0;
+}
+
+/* export pub from the key pair */
+static int
+wolfssl_pk_export_pub(void *_ctx, const void *pubkey)
+{
+    printf("wolfssl: wolfssl_pk_export_pub\n");
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+
+    if (!ctx || !ctx->initialized) {
+        printf("wolfssl: ctx not initialized! exiting\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Check if pubkey parameter is provided */
+    if (!pubkey) {
+        printf("wolfssl: pubkey parameter is NULL\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    gnutls_datum_t *pub = (gnutls_datum_t *)pubkey;
+
+    /* Initialize buffer lengths */
+    ctx->pub_x_len = sizeof(ctx->pub_x);
+    ctx->pub_y_len = sizeof(ctx->pub_y);
+
+    ret = wc_ecc_export_public_raw(&ctx->key_pair, ctx->pub_x, &ctx->pub_x_len,
+                                   ctx->pub_y, &ctx->pub_y_len);
+    if (ret != 0) {
+        printf("wolfssl: public key export failed with code %d\n", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Combining the coordinates to X963 format public key */
+    word32 x963_len = 1 + ctx->pub_x_len + ctx->pub_y_len;
+
+    /* Allocate buffer for X963 format: 1 byte header + X + Y coordinates */
+    pub->data = gnutls_malloc(x963_len);
+    if (!pub->data) {
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* Construct X963 format: 0x04 | X | Y */
+    pub->data[0] = 0x04; /* Uncompressed point format */
+    memcpy(pub->data + 1, ctx->pub_x, ctx->pub_x_len);
+    memcpy(pub->data + 1 + ctx->pub_x_len, ctx->pub_y, ctx->pub_y_len);
+    pub->size = x963_len;
+
+    printf("wolfssl: public key exported successfully\n");
+    return 0;
+}
+
+/* sign message */
+static int
+wolfssl_pk_sign(void *_ctx, const void *privkey, gnutls_digest_algorithm_t hash,
+            const void *data, const void *signature)
+{
+    printf("wolfssl: wolfssl_sign with hash %d\n", hash);
+
+    (void)privkey;
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+
+    if (!ctx || !ctx->initialized) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    const gnutls_datum_t *hash_data = (const gnutls_datum_t *)data;
+    gnutls_datum_t *sig = (gnutls_datum_t *)signature;
+
+    if (!hash_data || !hash_data->data || hash_data->size == 0 || !sig) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Allocate buffer for the signature */
+    word32 sig_size = wc_ecc_sig_size(&ctx->key_pair);
+    byte *sig_buf = gnutls_malloc(sig_size);
+
+    if (!sig_buf) {
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* Sign the hash */
+    ret = wc_ecc_sign_hash(hash_data->data, hash_data->size,
+                          sig_buf, &sig_size, &ctx->rng, &ctx->key_pair);
+
+    if (ret != 0) {
+        printf("wolfssl: signing failed with code %d\n", ret);
+        gnutls_free(sig_buf);
+        return GNUTLS_E_PK_SIGN_FAILED;
+    }
+
+    /* Allocate space for the signature and copy it */
+    sig->data = gnutls_malloc(sig_size);
+    if (!sig->data) {
+        gnutls_free(sig_buf);
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    memcpy(sig->data, sig_buf, sig_size);
+    sig->size = sig_size;
+    gnutls_free(sig_buf);
+
+    printf("wolfssl: signed message successfully\n");
+
+    return 0;
+}
+
+/* verify message */
+static int
+wolfssl_pk_verify(void *_ctx, const void *pubkey, gnutls_sign_algorithm_t algo,
+            const void *data, const void *signature)
+{
+    printf("wolfssl: wolfssl_verify\n");
+
+    (void)pubkey;
+    (void)algo;
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+    int verify_result = 0;
+
+    if (!ctx || !ctx->initialized) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    const gnutls_datum_t *hash_data = (const gnutls_datum_t *)data;
+    const gnutls_datum_t *sig = (const gnutls_datum_t *)signature;
+
+    if (!hash_data || !hash_data->data || hash_data->size == 0 ||
+        !sig || !sig->data || sig->size == 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Verify the signature */
+    ret = wc_ecc_verify_hash(sig->data, sig->size,
+                           hash_data->data, hash_data->size,
+                           &verify_result, &ctx->key_pair);
+
+    if (ret != 0) {
+        printf("wolfssl: verification failed with code %d\n", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (verify_result != 1) {
+        printf("wolfssl: signature verification failed\n");
+        return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+    }
+
+    printf("wolfssl: verified message successfully\n");
+    return 0;
+}
+
+/**
+ * clean up pk resources
+ */
+static void wolfssl_pk_deinit(void *_ctx)
+{
+    printf("wolfssl: wolfssl_pk_deinit\n");
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+
+    if (ctx && ctx->initialized) {
+        /* Free the wolfSSL ECC key */
+        wc_ecc_free(&ctx->key_pair);
+
+        /* Free the RNG if initialized */
+        if (ctx->rng_initialized) {
+            wc_FreeRng(&ctx->rng);
+            ctx->rng_initialized = 0;
+        }
+
+        ctx->initialized = 0;
+
+        gnutls_free(ctx);
+    }
+    printf("wolfssl: freeing resources\n");
+    return;
+}
+
+/* derive shared secret between our private key and another's public key */
+static int
+wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey, const void *pubkey,
+                              const gnutls_datum_t *nonce, gnutls_datum_t *secret)
+{
+    printf("wolfssl: wolfssl_pk_derive_shared_secret\n");
+
+    (void)nonce;
+    (void)privkey;
+
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+    ecc_key peer_key;
+
+    /* Parameters sanity checks */
+    if (!ctx || !ctx->initialized) {
+        printf("wolfssl: context not initialized\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!pubkey || !secret) {
+        printf("wolfssl: missing required parameters\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* We only support ECDSA for now */
+    if (ctx->algo != GNUTLS_PK_ECDSA) {
+        printf("wolfssl: algorithm not supported: %d\n", ctx->algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Cast pubkey to the expected type */
+    const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
+    if (!pub->data || pub->size == 0) {
+        printf("wolfssl: invalid public key data\n");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Initialize the peer's public key */
+    ret = wc_ecc_init(&peer_key);
+    if (ret != 0) {
+        printf("wolfssl: wc_ecc_init failed with code %d\n", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Import the peer's public key from X963 format (0x04 | X | Y) */
+    ret = wc_ecc_import_x963(pub->data, pub->size, &peer_key);
+    if (ret != 0) {
+        printf("wolfssl: public key import failed with code %d\n", ret);
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Determine how much space we need for the shared secret */
+    word32 secret_size = wc_ecc_size(&ctx->key_pair);
+    if (secret_size == 0) {
+        printf("wolfssl: error getting key size\n");
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INTERNAL_ERROR;
+    }
+
+    /* Allocate buffer for the shared secret */
+    byte *shared_secret = gnutls_malloc(secret_size);
+    if (!shared_secret) {
+        printf("wolfssl: memory allocation failed\n");
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ctx->key_pair.rng = &ctx->rng;
+
+    /* Generate the shared secret */
+    ret = wc_ecc_shared_secret(&ctx->key_pair, &peer_key, shared_secret, &secret_size);
+    if (ret != 0) {
+        printf("wolfssl: shared secret generation failed with code %d\n", ret);
+        gnutls_free(shared_secret);
+        wc_ecc_free(&peer_key);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Free the peer's public key as we don't need it anymore */
+    wc_ecc_free(&peer_key);
+
+    /* Allocate gnutls_datum for the result */
+    secret->data = shared_secret;
+    secret->size = secret_size;
+
+    printf("wolfssl: shared secret derived successfully (size: %d bytes)\n", secret_size);
+    return 0;
+}
+
+/* structure containing function pointers for the pk implementation */
+static const gnutls_crypto_pk_st wolfssl_pk_struct = {
+    /* the init function is not needed, since the init functions of gnutls
+     * default to just allocate the key's structs using gnutls_calloc.
+     * so we do the init and the generate of the key pair directly in the
+     * wolfssl_pk_generate function. */
+    .generate_backend = wolfssl_pk_generate,
+    .export_pubkey_backend = wolfssl_pk_export_pub,
+    .sign_backend = wolfssl_pk_sign,
+    .verify_backend = wolfssl_pk_verify,
+    .derive_shared_secret_backend = wolfssl_pk_derive_shared_secret,
+    .deinit_backend = wolfssl_pk_deinit,
+};
+
+/* mapping of gnutls pk algorithms to wolfssl pk */
+static const int wolfssl_pk_supported[] = {
+        [GNUTLS_PK_ECDSA] = 1,
+};
+
+/* register the pk algorithm with GnuTLS */
+static int wolfssl_pk_register(void)
+{
+    int ret = 0;
+
+    printf("wolfssl: wolfssl_pk_register\n");
+
+    /* Register ECDSA */
+    if (wolfssl_pk_supported[GNUTLS_PK_ECDSA]) {
+        printf("wolfssl: registering ECDSA-ALL-CURVES\n");
+        ret = gnutls_crypto_single_pk_register(
+                GNUTLS_PK_ECDSA, 80, &wolfssl_pk_struct, 0);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    return ret;
+}
+
 /**
  * module initialization
  */
@@ -1063,7 +1435,13 @@ int _gnutls_wolfssl_init(void)
         return ret;
     }
 
-    return 0;
+   /* register pk algorithms */
+   ret = wolfssl_pk_register();
+   if (ret < 0) {
+       return ret;
+   }
+
+   return 0;
 }
 
 /**
