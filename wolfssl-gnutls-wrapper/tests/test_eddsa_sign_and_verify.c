@@ -23,6 +23,7 @@ int test_eddsa_curve(const char *curve_name) {
     gnutls_pubkey_t pubkey;
     gnutls_datum_t signature;
     const char *test_data = "Test data to be signed";
+    int algo;
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
 
     memset(&signature, 0, sizeof(signature));
@@ -45,7 +46,12 @@ int test_eddsa_curve(const char *curve_name) {
 
     /* Generate an EdDSA key pair */
     printf("Generating EdDSA key pair (%s)...\n", curve_name);
-    ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_EDDSA_ED25519, 0, 0, NULL, 0);
+    if (strcmp(curve_name, "Ed25519") == 0) {
+        algo = GNUTLS_PK_EDDSA_ED25519;
+    } else {
+        algo = GNUTLS_PK_EDDSA_ED448;
+    }
+    ret = gnutls_privkey_generate2(privkey, algo, 0, 0, NULL, 0);
     if (ret != 0) {
         printf("Error generating private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
@@ -78,7 +84,12 @@ int test_eddsa_curve(const char *curve_name) {
 
     /* Verify the signature */
     printf("Verifying signature...\n");
-    ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_EDDSA_ED25519,
+    if (strcmp(curve_name, "Ed25519") == 0) {
+        algo = GNUTLS_SIGN_EDDSA_ED25519;
+    } else {
+        algo = GNUTLS_SIGN_EDDSA_ED448;
+    }
+    ret = gnutls_pubkey_verify_data2(pubkey, algo,
                                     0, &data, &signature);
     if (ret == 0) {
         printf("SUCCESS for %s\n", curve_name);
@@ -112,6 +123,13 @@ int main(void) {
 
     /* Test Ed25519 */
     ret = test_eddsa_curve("Ed25519");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Test Ed448 */
+    ret = test_eddsa_curve("Ed448");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
