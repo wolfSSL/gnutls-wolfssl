@@ -272,10 +272,10 @@ index c236683..642dcdb 100644
  	gnutls_buffer_append_data;
  	gnutls_supplemental_register;
 diff --git a/lib/nettle/pk.c b/lib/nettle/pk.c
-index 91eaffd..eb702f3 100644
+index 769cd27..8269fbb 100644
 --- a/lib/nettle/pk.c
 +++ b/lib/nettle/pk.c
-@@ -5230,8 +5230,6 @@ static int wrap_nettle_pk_fixup(gnutls_pk_algorithm_t algo,
+@@ -5229,8 +5229,6 @@ static int wrap_nettle_pk_fixup(gnutls_pk_algorithm_t algo,
  	return 0;
  }
  

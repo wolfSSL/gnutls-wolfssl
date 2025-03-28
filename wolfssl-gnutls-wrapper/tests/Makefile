@@ -1,4 +1,4 @@
-TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_ecdsa_encrypt_and_decrypt
+TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_ecdsa_encrypt_and_decrypt test_eddsa_sign_and_verify
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -42,17 +42,44 @@ test_hmac: test_hmac.c
 test_ecdsa: test_ecdsa.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
+test_ecdsa_sign_and_verify: test_ecdsa_sign_and_verify.c
+	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
+
 test_ecdsa_encrypt_and_decrypt: test_ecdsa_encrypt_and_decrypt.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
-test_ecdsa_sign_and_verify: test_ecdsa_sign_and_verify.c
+test_eddsa_sign_and_verify: test_eddsa_sign_and_verify.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 run-%:
 	GNUTLS_DEBUG_LEVEL=9 ./$*
 
+run: $(TESTS)
+	@passed=0; failed=0; failed_tests=""; \
+	for test in $(TESTS); do \
+		echo "\n>> Running $$test..."; \
+		if GNUTLS_DEBUG_LEVEL=9 ./$$test; then \
+			echo "\n✅ $$test PASSED"; \
+			passed=$$((passed+1)); \
+		else \
+			echo "\n❌ $$test FAILED"; \
+			failed=$$((failed+1)); \
+			failed_tests="$$failed_tests $$test"; \
+		fi; \
+	done; \
+	echo "\n=== Test Summary ==="; \
+	echo "Total tests:  $$((passed+failed))"; \
+	echo "Passed:       $$passed"; \
+	echo "Failed:       $$failed"; \
+	if [ $$failed -gt 0 ]; then \
+		echo "\nFailed tests:$$failed_tests"; \
+		exit 1; \
+	else \
+		echo "\nAll tests passed! 🎉"; \
+	fi
+
 clean:
 	rm -f $(TESTS)
 	rm -rf *.dSYM
 
-.PHONY = all clean $(addprefix run-,$(TESTS))
+.PHONY += run run-verbose

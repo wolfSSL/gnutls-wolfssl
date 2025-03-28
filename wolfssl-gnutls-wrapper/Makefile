@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -DENABLE_WOLFSSL -fPIC -Wall -Wextra
+CFLAGS = -DHAVE_ED25519 -DENABLE_WOLFSSL -fPIC -Wall -Wextra
 INCLUDES = -I/opt/gnutls/include/ -I/opt/wolfssl/include/
 
 UNAME_S := $(shell uname -s)
