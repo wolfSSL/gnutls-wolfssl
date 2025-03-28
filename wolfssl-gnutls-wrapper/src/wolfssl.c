@@ -11,6 +11,8 @@
 #include <wolfssl/wolfcrypt/hmac.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/random.h>
+#include <wolfssl/wolfcrypt/ed25519.h>
+#include <wolfssl/wolfcrypt/ed448.h>
 
 void __attribute__((constructor)) wolfssl_init(void) {
     _gnutls_wolfssl_init();
@@ -109,7 +111,7 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
     }
 
     /* allocate context */
-    ctx = gnutls_calloc(1, 2048);
+    ctx = gnutls_calloc(1, sizeof(struct wolfssl_cipher_ctx));
     if (ctx == NULL) {
         return GNUTLS_E_MEMORY_ERROR;
     }
@@ -136,8 +138,11 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
         ctx->enc = enc;
         ctx->enc_initialized = 1;
 
+        printf("wolfssl: encryption context initialized successfully\n");
+
         mode = get_mode(algorithm);
         if (mode == GCM) {
+            printf("wolfssl: running in GCM mode, single context, initializing also decryption\n");
             ctx->dec_initialized = 1;
         }
     } else {
@@ -149,6 +154,8 @@ wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx, int enc)
 
         ctx->enc = enc;
         ctx->dec_initialized = 1;
+
+        printf("wolfssl: decryption context initialized successfully\n");
     }
 
     ctx->tag_size = GCM_TAG_SIZE;
@@ -340,7 +347,6 @@ wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size, void *dst, 
     int ret = -1;
 
     if (!ctx->initialized) {
-        printf("wolfssl: encryption failed - context not initialized\n");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -1003,16 +1009,18 @@ static int wolfssl_digest_register(void)
 
 /* context structure for wolfssl pk */
 struct wolfssl_pk_ctx {
-	ecc_key key_pair;
+    union {
+        ecc_key ecc;
+        ed25519_key ed25519;
+        ed448_key ed448;
+    } key;
 	int initialized;
 	gnutls_pk_algorithm_t algo;
 	WC_RNG rng;
 	int rng_initialized;
 
-    byte pub_x[128];
-    word32 pub_x_len;
-    byte pub_y[128];
-    word32 pub_y_len;
+    byte pub_data[128];
+    word32 pub_data_len;
 };
 
 /* generate a pk key pair */
@@ -1026,30 +1034,38 @@ wolfssl_pk_generate(void **_ctx, const void *privkey, gnutls_pk_algorithm_t algo
 
     struct wolfssl_pk_ctx *ctx;
     int ret;
-    int curve_id;
-    int curve_size;
 
-    printf("wolfssl: ctx not initialized, initializing now\n");
-    ctx = gnutls_calloc(2, sizeof(struct wolfssl_pk_ctx));
+    /* Allocate context */
+    ctx = gnutls_calloc(1, sizeof(struct wolfssl_pk_ctx));
     if (ctx == NULL) {
         return GNUTLS_E_MEMORY_ERROR;
     }
 
-    memset(ctx, 0, sizeof(struct wolfssl_pk_ctx));
-
-    /* Initialize wolfSSL ECC key */
-    ret = wc_ecc_init(&ctx->key_pair);
+    /* Initialize RNG */
+    ret = wc_InitRng(&ctx->rng);
     if (ret != 0) {
-        printf("wolfssl: wc_ecc_init failed with code %d\n", ret);
-        return GNUTLS_E_CRYPTO_INIT_FAILED;
+        printf("wolfssl: wc_InitRng failed with code %d\n", ret);
+        gnutls_free(ctx);
+        return GNUTLS_E_RANDOM_FAILED;
     }
-
-    ctx->initialized = 1;
+    ctx->rng_initialized = 1;
     ctx->algo = algo;
 
-    printf("wolfssl: mapping gnutls curve to wolfssl\n");
-    /* Map GnuTLS ECC curve to wolfSSL curve ID */
+    /* Handle different key types */
     if (algo == GNUTLS_PK_ECDSA) {
+        int curve_id;
+        int curve_size;
+
+        /* Initialize ECC key */
+        ret = wc_ecc_init(&ctx->key.ecc);
+        if (ret != 0) {
+            printf("wolfssl: wc_ecc_init failed with code %d\n", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Map GnuTLS curve to wolfSSL */
         switch (bits) {
             case 256: /* SECP256R1 */
                 curve_id = ECC_SECP256R1;
@@ -1062,38 +1078,76 @@ wolfssl_pk_generate(void **_ctx, const void *privkey, gnutls_pk_algorithm_t algo
                 break;
             default:
                 printf("wolfssl: unsupported curve bits: %d\n", bits);
+                wc_ecc_free(&ctx->key.ecc);
+                wc_FreeRng(&ctx->rng);
+                gnutls_free(ctx);
                 return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
         }
 
-        printf("wolfssl: getting size of the key from the curve_id\n");
-
         curve_size = wc_ecc_get_curve_size_from_id(curve_id);
-
         printf("wolfssl: curve size: %d\n", curve_size);
 
-        /* Initialize RNG */
-        ret = wc_InitRng(&ctx->rng);
-        if (ret != 0) {
-            printf("wolfssl: wc_InitRng failed with code %d\n", ret);
-            wc_ecc_free(&ctx->key_pair);
-            return GNUTLS_E_RANDOM_FAILED;
-        }
-
-        /* Generate ECC key with specific curve */
-        ret = wc_ecc_make_key_ex(&ctx->rng, curve_size, &ctx->key_pair, curve_id);
+        /* Generate ECC key */
+        ret = wc_ecc_make_key_ex(&ctx->rng, curve_size, &ctx->key.ecc, curve_id);
         if (ret != 0) {
             printf("wolfssl: key generation failed with code %d\n", ret);
+            wc_ecc_free(&ctx->key.ecc);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
             return GNUTLS_E_PK_GENERATION_ERROR;
         }
+
+    } else if (algo == GNUTLS_PK_EDDSA_ED25519) {
+        /* Initialize Ed25519 key */
+        ret = wc_ed25519_init(&ctx->key.ed25519);
+        if (ret != 0) {
+            printf("wolfssl: wc_ed25519_init failed with code %d\n", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Generate Ed25519 key */
+        ret = wc_ed25519_make_key(&ctx->rng, ED25519_KEY_SIZE, &ctx->key.ed25519);
+        if (ret != 0) {
+            printf("wolfssl: Ed25519 key generation failed with code %d\n", ret);
+            wc_ed25519_free(&ctx->key.ed25519);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
+
+    } else if (algo == GNUTLS_PK_EDDSA_ED448) {
+        /* Initialize Ed448 key */
+        ret = wc_ed448_init(&ctx->key.ed448);
+        if (ret != 0) {
+            printf("wolfssl: wc_ed448_init failed with code %d\n", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Generate Ed448 key */
+        ret = wc_ed448_make_key(&ctx->rng, ED448_KEY_SIZE, &ctx->key.ed448);
+        if (ret != 0) {
+            printf("wolfssl: Ed448 key generation failed with code %d\n", ret);
+            wc_ed448_free(&ctx->key.ed448);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
+
     } else {
         printf("wolfssl: unsupported algorithm: %d\n", algo);
+        wc_FreeRng(&ctx->rng);
+        gnutls_free(ctx);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    ctx->initialized = 1;
     printf("wolfssl: pk generated successfully\n");
 
     *_ctx = ctx;
-
     return 0;
 }
 
@@ -1119,31 +1173,72 @@ wolfssl_pk_export_pub(void *_ctx, const void *pubkey)
 
     gnutls_datum_t *pub = (gnutls_datum_t *)pubkey;
 
-    /* Initialize buffer lengths */
-    ctx->pub_x_len = sizeof(ctx->pub_x);
-    ctx->pub_y_len = sizeof(ctx->pub_y);
+    if (ctx->algo == GNUTLS_PK_ECDSA) {
+        word32 x_len = sizeof(ctx->pub_data);
+        word32 y_len = sizeof(ctx->pub_data);
+        byte *x = ctx->pub_data;
+        byte *y = ctx->pub_data + x_len;
 
-    ret = wc_ecc_export_public_raw(&ctx->key_pair, ctx->pub_x, &ctx->pub_x_len,
-                                   ctx->pub_y, &ctx->pub_y_len);
-    if (ret != 0) {
-        printf("wolfssl: public key export failed with code %d\n", ret);
+        /* Export ECDSA public key coordinates */
+        ret = wc_ecc_export_public_raw(&ctx->key.ecc, x, &x_len, y, &y_len);
+        if (ret != 0) {
+            printf("wolfssl: public key export failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Construct X963 format: 0x04 | X | Y */
+        pub->data = gnutls_malloc(1 + x_len + y_len);
+        if (!pub->data) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        pub->data[0] = 0x04; /* Uncompressed point format */
+        memcpy(pub->data + 1, x, x_len);
+        memcpy(pub->data + 1 + x_len, y, y_len);
+        pub->size = 1 + x_len + y_len;
+
+    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+        word32 pub_size = ED25519_PUB_KEY_SIZE;
+
+        /* Export Ed25519 public key */
+        ret = wc_ed25519_export_public(&ctx->key.ed25519, ctx->pub_data, &pub_size);
+        if (ret != 0) {
+            printf("wolfssl: Ed25519 public key export failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Allocate and copy public key */
+        pub->data = gnutls_malloc(pub_size);
+        if (!pub->data) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        memcpy(pub->data, ctx->pub_data, pub_size);
+        pub->size = pub_size;
+
+    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+        word32 pub_size = ED448_PUB_KEY_SIZE;
+
+        /* Export Ed448 public key */
+        ret = wc_ed448_export_public(&ctx->key.ed448, ctx->pub_data, &pub_size);
+        if (ret != 0) {
+            printf("wolfssl: Ed448 public key export failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Allocate and copy public key */
+        pub->data = gnutls_malloc(pub_size);
+        if (!pub->data) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        memcpy(pub->data, ctx->pub_data, pub_size);
+        pub->size = pub_size;
+
+    } else {
+        printf("wolfssl: unsupported algorithm for exporting public key: %d\n", ctx->algo);
         return GNUTLS_E_INVALID_REQUEST;
     }
-
-    /* Combining the coordinates to X963 format public key */
-    word32 x963_len = 1 + ctx->pub_x_len + ctx->pub_y_len;
-
-    /* Allocate buffer for X963 format: 1 byte header + X + Y coordinates */
-    pub->data = gnutls_malloc(x963_len);
-    if (!pub->data) {
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-
-    /* Construct X963 format: 0x04 | X | Y */
-    pub->data[0] = 0x04; /* Uncompressed point format */
-    memcpy(pub->data + 1, ctx->pub_x, ctx->pub_x_len);
-    memcpy(pub->data + 1 + ctx->pub_x_len, ctx->pub_y, ctx->pub_y_len);
-    pub->size = x963_len;
 
     printf("wolfssl: public key exported successfully\n");
     return 0;
@@ -1165,44 +1260,96 @@ wolfssl_pk_sign(void *_ctx, const void *privkey, gnutls_digest_algorithm_t hash,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    const gnutls_datum_t *hash_data = (const gnutls_datum_t *)data;
+    const gnutls_datum_t *msg_data = (const gnutls_datum_t *)data;
     gnutls_datum_t *sig = (gnutls_datum_t *)signature;
 
-    if (!hash_data || !hash_data->data || hash_data->size == 0 || !sig) {
+    if (!msg_data || !msg_data->data || msg_data->size == 0 || !sig) {
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Allocate buffer for the signature */
-    word32 sig_size = wc_ecc_sig_size(&ctx->key_pair);
-    byte *sig_buf = gnutls_malloc(sig_size);
+    if (ctx->algo == GNUTLS_PK_ECDSA) {
+        printf("wolfssl: signing with ECDSA\n");
+        /* Allocate buffer for ECDSA signature */
+        word32 sig_size = wc_ecc_sig_size(&ctx->key.ecc);
+        byte *sig_buf = gnutls_malloc(sig_size);
 
-    if (!sig_buf) {
-        return GNUTLS_E_MEMORY_ERROR;
-    }
+        if (!sig_buf) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
 
-    /* Sign the hash */
-    ret = wc_ecc_sign_hash(hash_data->data, hash_data->size,
-                          sig_buf, &sig_size, &ctx->rng, &ctx->key_pair);
+        /* Sign the hash with ECDSA */
+        ret = wc_ecc_sign_hash(msg_data->data, msg_data->size,
+                sig_buf, &sig_size, &ctx->rng, &ctx->key.ecc);
 
-    if (ret != 0) {
-        printf("wolfssl: signing failed with code %d\n", ret);
+        if (ret != 0) {
+            printf("wolfssl: ECDSA signing failed with code %d\n", ret);
+            gnutls_free(sig_buf);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+
+        /* Allocate space for the signature and copy it */
+        sig->data = gnutls_malloc(sig_size);
+        if (!sig->data) {
+            gnutls_free(sig_buf);
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        memcpy(sig->data, sig_buf, sig_size);
+        sig->size = sig_size;
         gnutls_free(sig_buf);
-        return GNUTLS_E_PK_SIGN_FAILED;
-    }
 
-    /* Allocate space for the signature and copy it */
-    sig->data = gnutls_malloc(sig_size);
-    if (!sig->data) {
-        gnutls_free(sig_buf);
-        return GNUTLS_E_MEMORY_ERROR;
-    }
+    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+        printf("wolfssl: signing with EDDSA ed25519\n");
+        /* Allocate buffer for Ed25519 signature */
+        word32 sig_size = ED25519_SIG_SIZE;
+        byte sig_buf[ED25519_SIG_SIZE];
 
-    memcpy(sig->data, sig_buf, sig_size);
-    sig->size = sig_size;
-    gnutls_free(sig_buf);
+        /* Sign the message with Ed25519 */
+        ret = wc_ed25519_sign_msg(msg_data->data, msg_data->size,
+                sig_buf, &sig_size, &ctx->key.ed25519);
+
+        if (ret != 0) {
+            printf("wolfssl: Ed25519 signing failed with code %d\n", ret);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+
+        /* Allocate space for the signature and copy it */
+        sig->data = gnutls_malloc(sig_size);
+        if (!sig->data) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        memcpy(sig->data, sig_buf, sig_size);
+        sig->size = sig_size;
+    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+        printf("wolfssl: signing with EDDSA ed448\n");
+        /* Allocate buffer for Ed448 signature */
+        word32 sig_size = ED448_SIG_SIZE;
+        byte sig_buf[ED448_SIG_SIZE];
+
+        /* Sign the message with Ed448 */
+        ret = wc_ed448_sign_msg(msg_data->data, msg_data->size,
+                sig_buf, &sig_size, &ctx->key.ed448, NULL, 0);
+
+        if (ret != 0) {
+            printf("wolfssl: Ed448 signing failed with code %d\n", ret);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+
+        /* Allocate space for the signature and copy it */
+        sig->data = gnutls_malloc(sig_size);
+        if (!sig->data) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        memcpy(sig->data, sig_buf, sig_size);
+        sig->size = sig_size;
+    } else {
+        printf("wolfssl: unsupported algorithm for signing: %d\n", ctx->algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
 
     printf("wolfssl: signed message successfully\n");
-
     return 0;
 }
 
@@ -1213,9 +1360,6 @@ wolfssl_pk_verify(void *_ctx, const void *pubkey, gnutls_sign_algorithm_t algo,
 {
     printf("wolfssl: wolfssl_verify\n");
 
-    (void)pubkey;
-    (void)algo;
-
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
     int verify_result = 0;
@@ -1224,27 +1368,120 @@ wolfssl_pk_verify(void *_ctx, const void *pubkey, gnutls_sign_algorithm_t algo,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    const gnutls_datum_t *hash_data = (const gnutls_datum_t *)data;
+    const gnutls_datum_t *msg_data = (const gnutls_datum_t *)data;
     const gnutls_datum_t *sig = (const gnutls_datum_t *)signature;
 
-    if (!hash_data || !hash_data->data || hash_data->size == 0 ||
-        !sig || !sig->data || sig->size == 0) {
+    if (!msg_data || !msg_data->data || msg_data->size == 0 ||
+            !sig || !sig->data || sig->size == 0) {
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Verify the signature */
-    ret = wc_ecc_verify_hash(sig->data, sig->size,
-                           hash_data->data, hash_data->size,
-                           &verify_result, &ctx->key_pair);
+    if (algo == GNUTLS_SIGN_ECDSA_SHA256) {
+        /* Verify ECDSA signature */
+        ret = wc_ecc_verify_hash(sig->data, sig->size,
+                msg_data->data, msg_data->size,
+                &verify_result, &ctx->key.ecc);
 
-    if (ret != 0) {
-        printf("wolfssl: verification failed with code %d\n", ret);
+        if (ret != 0) {
+            printf("wolfssl: ECDSA verification failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        if (verify_result != 1) {
+            printf("wolfssl: ECDSA signature verification failed\n");
+            return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+        }
+
+    } else if (algo == GNUTLS_SIGN_EDDSA_ED25519) {
+        int verify_status = 0;
+
+        if (pubkey) {
+            /* Use the provided public key */
+            const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
+            ed25519_key verify_key;
+
+            ret = wc_ed25519_init(&verify_key);
+            if (ret != 0) {
+                printf("wolfssl: Ed25519 key init failed with code %d\n", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+
+            ret = wc_ed25519_import_public(pub->data, pub->size, &verify_key);
+            if (ret != 0) {
+                printf("wolfssl: Ed25519 public key import failed with code %d\n", ret);
+                wc_ed25519_free(&verify_key);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+
+            /* Verify using imported key */
+            ret = wc_ed25519_verify_msg(sig->data, sig->size,
+                    msg_data->data, msg_data->size,
+                    &verify_status, &verify_key);
+
+            wc_ed25519_free(&verify_key);
+        } else {
+            /* Use the context's key */
+            ret = wc_ed25519_verify_msg(sig->data, sig->size,
+                    msg_data->data, msg_data->size,
+                    &verify_status, &ctx->key.ed25519);
+        }
+
+        if (ret != 0) {
+            printf("wolfssl: Ed25519 verification failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        if (verify_status != 1) {
+            printf("wolfssl: Ed25519 signature verification failed\n");
+            return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+        }
+
+    } else if (algo == GNUTLS_SIGN_EDDSA_ED448) {
+        int verify_status = 0;
+
+        if (pubkey) {
+            /* Use the provided public key */
+            const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
+            ed448_key verify_key;
+
+            ret = wc_ed448_init(&verify_key);
+            if (ret != 0) {
+                printf("wolfssl: Ed448 key init failed with code %d\n", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+
+            ret = wc_ed448_import_public(pub->data, pub->size, &verify_key);
+            if (ret != 0) {
+                printf("wolfssl: Ed448 public key import failed with code %d\n", ret);
+                wc_ed448_free(&verify_key);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+
+            /* Verify using imported key */
+            ret = wc_ed448_verify_msg(sig->data, sig->size,
+                    msg_data->data, msg_data->size,
+                    &verify_status, &verify_key, NULL, 0);
+
+            wc_ed448_free(&verify_key);
+        } else {
+            /* Use the context's key */
+            ret = wc_ed448_verify_msg(sig->data, sig->size,
+                    msg_data->data, msg_data->size,
+                    &verify_status, &ctx->key.ed448, NULL, 0);
+        }
+
+        if (ret != 0) {
+            printf("wolfssl: Ed448 verification failed with code %d\n", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        if (verify_status != 1) {
+            printf("wolfssl: Ed448 signature verification failed\n");
+            return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+        }
+    } else {
+        printf("wolfssl: unsupported algorithm for verification: %d\n", algo);
         return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    if (verify_result != 1) {
-        printf("wolfssl: signature verification failed\n");
-        return GNUTLS_E_PK_SIG_VERIFY_FAILED;
     }
 
     printf("wolfssl: verified message successfully\n");
@@ -1261,21 +1498,25 @@ static void wolfssl_pk_deinit(void *_ctx)
     struct wolfssl_pk_ctx *ctx = _ctx;
 
     if (ctx && ctx->initialized) {
-        /* Free the wolfSSL ECC key */
-        wc_ecc_free(&ctx->key_pair);
+        /* Free key based on algorithm */
+        if (ctx->algo == GNUTLS_PK_ECDSA) {
+            wc_ecc_free(&ctx->key.ecc);
+        } else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+            wc_ed25519_free(&ctx->key.ed25519);
+        } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+            wc_ed448_free(&ctx->key.ed448);
+        }
 
         /* Free the RNG if initialized */
         if (ctx->rng_initialized) {
             wc_FreeRng(&ctx->rng);
-            ctx->rng_initialized = 0;
         }
 
         ctx->initialized = 0;
-
         gnutls_free(ctx);
     }
+
     printf("wolfssl: freeing resources\n");
-    return;
 }
 
 /* derive shared secret between our private key and another's public key */
@@ -1332,7 +1573,7 @@ wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey, const void *pub
     }
 
     /* Determine how much space we need for the shared secret */
-    word32 secret_size = wc_ecc_size(&ctx->key_pair);
+    word32 secret_size = wc_ecc_size(&ctx->key.ecc);
     if (secret_size == 0) {
         printf("wolfssl: error getting key size\n");
         wc_ecc_free(&peer_key);
@@ -1347,10 +1588,10 @@ wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey, const void *pub
         return GNUTLS_E_MEMORY_ERROR;
     }
 
-    ctx->key_pair.rng = &ctx->rng;
+    ctx->key.ecc.rng = &ctx->rng;
 
     /* Generate the shared secret */
-    ret = wc_ecc_shared_secret(&ctx->key_pair, &peer_key, shared_secret, &secret_size);
+    ret = wc_ecc_shared_secret(&ctx->key.ecc, &peer_key, shared_secret, &secret_size);
     if (ret != 0) {
         printf("wolfssl: shared secret generation failed with code %d\n", ret);
         gnutls_free(shared_secret);
@@ -1386,6 +1627,8 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
 /* mapping of gnutls pk algorithms to wolfssl pk */
 static const int wolfssl_pk_supported[] = {
         [GNUTLS_PK_ECDSA] = 1,
+        [GNUTLS_PK_EDDSA_ED25519] = 1,
+        [GNUTLS_PK_EDDSA_ED448] = 1,
 };
 
 /* register the pk algorithm with GnuTLS */
@@ -1400,6 +1643,26 @@ static int wolfssl_pk_register(void)
         printf("wolfssl: registering ECDSA-ALL-CURVES\n");
         ret = gnutls_crypto_single_pk_register(
                 GNUTLS_PK_ECDSA, 80, &wolfssl_pk_struct, 0);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    /* Register Ed25519 */
+    if (wolfssl_pk_supported[GNUTLS_PK_EDDSA_ED25519]) {
+        printf("wolfssl: registering EdDSA-ED25519\n");
+        ret = gnutls_crypto_single_pk_register(
+                GNUTLS_PK_EDDSA_ED25519, 80, &wolfssl_pk_struct, 0);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    /* Register Ed448 */
+    if (wolfssl_pk_supported[GNUTLS_PK_EDDSA_ED448]) {
+        printf("wolfssl: registering EdDSA-ED448\n");
+        ret = gnutls_crypto_single_pk_register(
+                GNUTLS_PK_EDDSA_ED448, 80, &wolfssl_pk_struct, 0);
         if (ret < 0) {
             return ret;
         }

@@ -3,7 +3,6 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/abstract.h>
 #include <gnutls/crypto.h>
-#include <dlfcn.h>
 
 void print_hex(const unsigned char *data, size_t len) {
     for (size_t i = 0; i < len; i++) {
@@ -18,17 +17,18 @@ void print_hex(const unsigned char *data, size_t len) {
     printf("\n");
 }
 
-int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
+int test_eddsa_curve(const char *curve_name) {
     int ret;
     gnutls_privkey_t privkey;
     gnutls_pubkey_t pubkey;
     gnutls_datum_t signature;
     const char *test_data = "Test data to be signed";
+    int algo;
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
 
     memset(&signature, 0, sizeof(signature));
 
-    printf("\n=== Testing ECDSA with %s (%d bits) ===\n", curve_name, bits);
+    printf("\n=== Testing EdDSA with %s ===\n", curve_name);
 
     /* Initialize keys */
     ret = gnutls_privkey_init(&privkey);
@@ -44,11 +44,14 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    /* Generate an ECDSA key pair with the specified curve */
-    printf("Generating ECDSA key pair (%s)...\n", curve_name);
-    ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_ECDSA,
-                                  bits,
-                                  0, NULL, 0);
+    /* Generate an EdDSA key pair */
+    printf("Generating EdDSA key pair (%s)...\n", curve_name);
+    if (strcmp(curve_name, "Ed25519") == 0) {
+        algo = GNUTLS_PK_EDDSA_ED25519;
+    } else {
+        algo = GNUTLS_PK_EDDSA_ED448;
+    }
+    ret = gnutls_privkey_generate2(privkey, algo, 0, 0, NULL, 0);
     if (ret != 0) {
         printf("Error generating private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
@@ -66,7 +69,7 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     }
 
     /* Sign the test data */
-    printf("input data: \"%s\"\n", test_data);
+    printf("Input data: \"%s\"\n", test_data);
     ret = gnutls_privkey_sign_data(privkey, GNUTLS_DIG_SHA256, 0, &data, &signature);
     if (ret != 0) {
         printf("Error signing data: %s\n", gnutls_strerror(ret));
@@ -81,7 +84,12 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
 
     /* Verify the signature */
     printf("Verifying signature...\n");
-    ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_ECDSA_SHA256,
+    if (strcmp(curve_name, "Ed25519") == 0) {
+        algo = GNUTLS_SIGN_EDDSA_ED25519;
+    } else {
+        algo = GNUTLS_SIGN_EDDSA_ED448;
+    }
+    ret = gnutls_pubkey_verify_data2(pubkey, algo,
                                     0, &data, &signature);
     if (ret == 0) {
         printf("SUCCESS for %s\n", curve_name);
@@ -97,14 +105,14 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     gnutls_free(signature.data);
     gnutls_pubkey_deinit(pubkey);
     gnutls_privkey_deinit(privkey);
-    
+
     return 0;
 }
 
 int main(void) {
     int ret;
 
-    printf("Testing GnuTLS's ECDSA implementation with multiple curves...\n");
+    printf("Testing GnuTLS's EdDSA implementation...\n");
 
     /* Initialize GnuTLS */
     ret = gnutls_global_init();
@@ -113,22 +121,15 @@ int main(void) {
         return 1;
     }
 
-    /* Test SECP256R1 (P-256) */
-    ret = test_ecdsa_curve(256, "SECP256R1");
+    /* Test Ed25519 */
+    ret = test_eddsa_curve("Ed25519");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
     }
 
-    /* Test SECP384R1 (P-384) */
-    ret = test_ecdsa_curve(384, "SECP384R1");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
-
-    /* Test SECP521R1 (P-521) */
-    ret = test_ecdsa_curve(521, "SECP521R1");
+    /* Test Ed448 */
+    ret = test_eddsa_curve("Ed448");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
@@ -137,6 +138,6 @@ int main(void) {
     /* Clean up global resources */
     gnutls_global_deinit();
 
-    printf("\nAll ECDSA curve tests completed successfully!\n");
+    printf("\nAll EdDSA tests completed successfully!\n");
     return 0;
 }

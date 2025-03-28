@@ -73,7 +73,7 @@ int main(void) {
     /********** ENCRYPTION TEST **********/
     /* Encrypt using AES-128-CBC */
     gnutls_cipher_hd_t encrypt_handle;
-    if ((ret = gnutls_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_256_CBC,
+    if ((ret = gnutls_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_128_CBC,
                                  &key, &iv)) < 0) {
         fprintf(stderr, "Error initializing cipher for encryption: %s\n", gnutls_strerror(ret));
         gnutls_global_deinit();
