@@ -18,6 +18,8 @@
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/ed25519.h>
 #include <wolfssl/wolfcrypt/ed448.h>
+#include <wolfssl/wolfcrypt/curve25519.h>
+#include <wolfssl/wolfcrypt/curve448.h>
 #include <wolfssl/wolfcrypt/kdf.h>
 #include <wolfssl/wolfcrypt/pwdbased.h>
 #include <wolfssl/wolfcrypt/asn_public.h>
@@ -3686,6 +3688,8 @@ struct wolfssl_pk_ctx {
         ecc_key ecc;
         ed25519_key ed25519;
         ed448_key ed448;
+        curve25519_key x25519;
+        curve448_key x448;
     } key;
     int initialized;
     /** The GnuTLS public key algorithm ID.  */
@@ -3846,6 +3850,73 @@ wolfssl_pk_import_privkey_x509_raw(void *_ctx, const void *privkey,
                 return GNUTLS_E_ASN1_DER_ERROR;
             }
             break;
+        case GNUTLS_PK_ECDH_X25519:
+            WGW_LOG("wolfssl: importing X25519 private key\n");
+
+            /* Initialize X25519 key */
+            ret = wc_curve25519_init(&ctx->key.x25519);
+            if (ret != 0) {
+                WGW_LOG("wolfssl: wc_curve25519_init failed with code %d\n", ret);
+                if (!_ctx) {
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_CRYPTO_INIT_FAILED;
+            }
+
+            /* Import key based on format */
+            if (format == GNUTLS_X509_FMT_PEM) {
+                ret = wc_Curve25519PrivateKeyDecode(data->data, &(word32){0},
+                        &ctx->key.x25519, data->size);
+            } else { /* DER */
+                ret = wc_curve25519_import_private_ex(data->data, data->size,
+                        &ctx->key.x25519, EC25519_LITTLE_ENDIAN);
+            }
+
+            if (ret != 0) {
+                WGW_LOG("wolfssl: X25519 private key import failed with code %d\n", ret);
+                wc_curve25519_free(&ctx->key.x25519);
+                if (!_ctx) {
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_ASN1_DER_ERROR;
+            }
+            break;
+
+        case GNUTLS_PK_ECDH_X448:
+            WGW_LOG("wolfssl: importing X448 private key\n");
+
+            /* Initialize X448 key */
+            ret = wc_curve448_init(&ctx->key.x448);
+            if (ret != 0) {
+                WGW_LOG("wolfssl: wc_curve448_init failed with code %d\n", ret);
+                if (!_ctx) {
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_CRYPTO_INIT_FAILED;
+            }
+
+            /* Import key based on format */
+            if (format == GNUTLS_X509_FMT_PEM) {
+                ret = wc_Curve448PrivateKeyDecode(data->data, &(word32){0},
+                        &ctx->key.x448, data->size);
+            } else { /* DER */
+                ret = wc_curve448_import_private_ex(data->data, data->size,
+                        &ctx->key.x448, EC448_LITTLE_ENDIAN);
+            }
+
+            if (ret != 0) {
+                WGW_LOG("wolfssl: X448 private key import failed with code %d\n", ret);
+                wc_curve448_free(&ctx->key.x448);
+                if (!_ctx) {
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_ASN1_DER_ERROR;
+            }
+            break;
 
         default:
             WGW_LOG("wolfssl: unsupported algorithm for private key import: %d\n", ctx->algo);
@@ -3997,6 +4068,69 @@ wolfssl_pk_import_pubkey_x509_raw(void *_ctx, const void *pubkey,
                 return GNUTLS_E_ASN1_DER_ERROR;
             }
             break;
+        case GNUTLS_PK_ECDH_X25519:
+            WGW_LOG("wolfssl: importing X25519 public key\n");
+
+            /* Initialize X25519 key */
+            ret = wc_curve25519_init(&ctx->key.x25519);
+            if (ret != 0) {
+                WGW_LOG("wolfssl: wc_curve25519_init failed with code %d\n", ret);
+                if (!_ctx) {
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_CRYPTO_INIT_FAILED;
+            }
+
+            /* Import key based on format */
+            if (format == GNUTLS_X509_FMT_PEM) {
+                ret = wc_Curve25519PublicKeyDecode(data->data, &(word32){0},
+                        &ctx->key.x25519, data->size);
+            } else { /* DER */
+                ret = wc_curve25519_import_public_ex(data->data, data->size,
+                        &ctx->key.x25519, EC25519_LITTLE_ENDIAN);
+            }
+
+            if (ret != 0) {
+                WGW_LOG("wolfssl: X25519 public key import failed with code %d\n", ret);
+                wc_curve25519_free(&ctx->key.x25519);
+                if (!_ctx) {
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_ASN1_DER_ERROR;
+            }
+            break;
+
+        case GNUTLS_PK_ECDH_X448:
+            WGW_LOG("wolfssl: importing X448 public key\n");
+
+            /* Initialize X448 key */
+            ret = wc_curve448_init(&ctx->key.x448);
+            if (ret != 0) {
+                WGW_LOG("wolfssl: wc_curve448_init failed with code %d\n", ret);
+                if (!_ctx) {
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_CRYPTO_INIT_FAILED;
+            }
+
+            /* Import key based on format */
+            if (format == GNUTLS_X509_FMT_PEM) {
+                ret = wc_Curve448PublicKeyDecode(data->data, &(word32){0},
+                        &ctx->key.x448, data->size);
+            } else { /* DER */
+                ret = wc_curve448_import_public_ex(data->data, data->size,
+                        &ctx->key.x448, EC448_LITTLE_ENDIAN);
+            }
+
+            if (ret != 0) {
+                WGW_LOG("wolfssl: X448 public key import failed with code %d\n", ret);
+                wc_curve448_free(&ctx->key.x448);
+                if (!_ctx) {
+                    gnutls_free(ctx);
+                }
+                return GNUTLS_E_ASN1_DER_ERROR;
+            }
+            break;
 
         default:
             WGW_LOG("wolfssl: unsupported algorithm for public key import: %d\n", ctx->algo);
@@ -4030,7 +4164,6 @@ wolfssl_pk_pubkey_encrypt(void *_ctx, gnutls_pubkey_t key,
     (void)plaintext;
     (void)ciphertext;
 
-    /* This operation is not supported for ECC/EdDSA keys in wolfSSL */
     WGW_LOG("wolfssl: pubkey encryption not supported for these key types\n");
     return GNUTLS_E_INVALID_REQUEST;
 }
@@ -4048,7 +4181,6 @@ wolfssl_pk_privkey_decrypt(void *_ctx, gnutls_privkey_t key,
     (void)ciphertext;
     (void)plaintext;
 
-    /* This operation is not supported for ECC/EdDSA keys in wolfSSL */
     WGW_LOG("wolfssl: privkey decryption not supported for these key types\n");
     return GNUTLS_E_INVALID_REQUEST;
 }
@@ -4362,6 +4494,44 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             return GNUTLS_E_PK_GENERATION_ERROR;
         }
 
+    } else if (algo == GNUTLS_PK_ECDH_X25519) {
+        /* Initialize X25519 key */
+        ret = wc_curve25519_init(&ctx->key.x25519);
+        if (ret != 0) {
+            WGW_LOG("wc_curve25519_init failed with code %d", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Generate X25519 key */
+        ret = wc_curve25519_make_key(&ctx->rng, CURVE25519_KEYSIZE, &ctx->key.x25519);
+        if (ret != 0) {
+            WGW_LOG("X25519 key generation failed with code %d", ret);
+            wc_curve25519_free(&ctx->key.x25519);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
+    } else if (algo == GNUTLS_PK_ECDH_X448) {
+        /* Initialize X448 key */
+        ret = wc_curve448_init(&ctx->key.x448);
+        if (ret != 0) {
+            WGW_LOG("wc_curve448_init failed with code %d", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Generate X448 key */
+        ret = wc_curve448_make_key(&ctx->rng, CURVE448_KEY_SIZE, &ctx->key.x448);
+        if (ret != 0) {
+            WGW_LOG("X448 key generation failed with code %d", ret);
+            wc_curve448_free(&ctx->key.x448);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
     } else {
         WGW_LOG("unsupported algorithm: %d", algo);
         wc_FreeRng(&ctx->rng);
@@ -4462,6 +4632,46 @@ static int wolfssl_pk_export_pub(void *_ctx, const void *pubkey)
         XMEMCPY(pub->data, ctx->pub_data, pub_size);
         pub->size = pub_size;
 
+    } else if (ctx->algo == GNUTLS_PK_ECDH_X25519) {
+        word32 pub_size = CURVE25519_KEYSIZE;
+
+        /* Export X25519 public key */
+        ret = wc_curve25519_export_public_ex(&ctx->key.x25519, ctx->pub_data,
+                                            &pub_size, EC25519_LITTLE_ENDIAN);
+        if (ret != 0) {
+            WGW_LOG("X25519 public key export failed with code %d", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Allocate and copy public key */
+        pub->data = gnutls_malloc(pub_size);
+        if (!pub->data) {
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        XMEMCPY(pub->data, ctx->pub_data, pub_size);
+        pub->size = pub_size;
+    } else if (ctx->algo == GNUTLS_PK_ECDH_X448) {
+        word32 pub_size = CURVE448_KEY_SIZE;
+
+        /* Export X448 public key */
+        ret = wc_curve448_export_public_ex(&ctx->key.x448, ctx->pub_data,
+                                          &pub_size, EC448_LITTLE_ENDIAN);
+        if (ret != 0) {
+            WGW_LOG("X448 public key export failed with code %d", ret);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Allocate and copy public key */
+        pub->data = gnutls_malloc(pub_size);
+        if (!pub->data) {
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        XMEMCPY(pub->data, ctx->pub_data, pub_size);
+        pub->size = pub_size;
     } else {
         WGW_LOG("unsupported algorithm for exporting public key: %d", ctx->algo);
         return GNUTLS_E_INVALID_REQUEST;
@@ -4738,6 +4948,10 @@ static void wolfssl_pk_deinit(void *_ctx)
             wc_ed25519_free(&ctx->key.ed25519);
         } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
             wc_ed448_free(&ctx->key.ed448);
+        } else if (ctx->algo == GNUTLS_PK_ECDH_X25519) {
+            wc_curve25519_free(&ctx->key.x25519);
+        } else if (ctx->algo == GNUTLS_PK_ECDH_X448) {
+            wc_curve448_free(&ctx->key.x448);
         }
 
         /* Free the RNG if initialized */
@@ -4751,14 +4965,12 @@ static void wolfssl_pk_deinit(void *_ctx)
 
     WGW_LOG("freeing resources");
 }
-
 /* derive shared secret between our private key and another's public key */
 static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
     const void *pubkey, const gnutls_datum_t *nonce, gnutls_datum_t *secret)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
-    ecc_key peer_key;
 
     WGW_FUNC_ENTER();
 
@@ -4776,12 +4988,6 @@ static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* We only support ECDSA for now */
-    if (ctx->algo != GNUTLS_PK_ECDSA) {
-        WGW_LOG("PK algorithm not supported: %d", ctx->algo);
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-
     /* Cast pubkey to the expected type */
     const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
     if (!pub->data || pub->size == 0) {
@@ -4789,57 +4995,161 @@ static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Initialize the peer's public key */
-    ret = wc_ecc_init(&peer_key);
-    if (ret != 0) {
-        WGW_LOG("wc_ecc_init failed with code %d", ret);
-        return GNUTLS_E_INVALID_REQUEST;
+    /* Handle based on algorithm type */
+    switch (ctx->algo) {
+        case GNUTLS_PK_ECDSA:
+            {
+                ecc_key peer_key;
+
+                /* Initialize the peer's public key */
+                ret = wc_ecc_init(&peer_key);
+                if (ret != 0) {
+                    WGW_LOG("wc_ecc_init failed with code %d", ret);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Import the peer's public key from X963 format (0x04 | X | Y) */
+                ret = wc_ecc_import_x963(pub->data, pub->size, &peer_key);
+                if (ret != 0) {
+                    WGW_LOG("ECDSA public key import failed with code %d", ret);
+                    wc_ecc_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Determine how much space we need for the shared secret */
+                word32 secret_size = wc_ecc_size(&ctx->key.ecc);
+                if (secret_size == 0) {
+                    WGW_LOG("error getting key size");
+                    wc_ecc_free(&peer_key);
+                    return GNUTLS_E_INTERNAL_ERROR;
+                }
+
+                /* Allocate buffer for the shared secret */
+                byte *shared_secret = gnutls_malloc(secret_size);
+                if (!shared_secret) {
+                    WGW_LOG("Memory allocation failed");
+                    wc_ecc_free(&peer_key);
+                    return GNUTLS_E_MEMORY_ERROR;
+                }
+
+                ctx->key.ecc.rng = &ctx->rng;
+
+                /* Generate the shared secret */
+                ret = wc_ecc_shared_secret(&ctx->key.ecc, &peer_key, shared_secret, &secret_size);
+                if (ret != 0) {
+                    WGW_LOG("ECDSA shared secret generation failed with code %d", ret);
+                    gnutls_free(shared_secret);
+                    wc_ecc_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Free the peer's public key */
+                wc_ecc_free(&peer_key);
+
+                /* Set result data */
+                secret->data = shared_secret;
+                secret->size = secret_size;
+
+                WGW_LOG("ECDSA shared secret derived successfully (size: %d bytes)", secret_size);
+                return 0;
+            }
+
+        case GNUTLS_PK_ECDH_X25519:
+            {
+                curve25519_key peer_key;
+                byte shared_secret_buf[CURVE25519_KEYSIZE];
+                word32 secret_size = sizeof(shared_secret_buf);
+
+                /* Initialize the peer's public key */
+                ret = wc_curve25519_init(&peer_key);
+                if (ret != 0) {
+                    WGW_LOG("wc_curve25519_init failed with code %d", ret);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Import the peer's public key */
+                ret = wc_curve25519_import_public_ex(pub->data, pub->size, &peer_key, EC25519_LITTLE_ENDIAN);
+                if (ret != 0) {
+                    WGW_LOG("X25519 public key import failed with code %d", ret);
+                    wc_curve25519_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Generate the shared secret */
+                ret = wc_curve25519_shared_secret_ex(&ctx->key.x25519, &peer_key,
+                        shared_secret_buf, &secret_size, EC25519_LITTLE_ENDIAN);
+                if (ret != 0) {
+                    WGW_LOG("X25519 shared secret generation failed with code %d", ret);
+                    wc_curve25519_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Free the peer's public key */
+                wc_curve25519_free(&peer_key);
+
+                /* Allocate and set result data */
+                secret->data = gnutls_malloc(secret_size);
+                if (!secret->data) {
+                    return GNUTLS_E_MEMORY_ERROR;
+                }
+
+                memcpy(secret->data, shared_secret_buf, secret_size);
+                secret->size = secret_size;
+
+                WGW_LOG("X25519 shared secret derived successfully (size: %d bytes)", secret_size);
+                return 0;
+            }
+
+        case GNUTLS_PK_ECDH_X448:
+            {
+                curve448_key peer_key;
+                byte shared_secret_buf[CURVE448_KEY_SIZE];
+                word32 secret_size = sizeof(shared_secret_buf);
+
+                /* Initialize the peer's public key */
+                ret = wc_curve448_init(&peer_key);
+                if (ret != 0) {
+                    WGW_LOG("wc_curve448_init failed with code %d", ret);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Import the peer's public key */
+                ret = wc_curve448_import_public_ex(pub->data, pub->size, &peer_key, EC448_LITTLE_ENDIAN);
+                if (ret != 0) {
+                    WGW_LOG("X448 public key import failed with code %d", ret);
+                    wc_curve448_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Generate the shared secret */
+                ret = wc_curve448_shared_secret_ex(&ctx->key.x448, &peer_key,
+                        shared_secret_buf, &secret_size, EC448_LITTLE_ENDIAN);
+                if (ret != 0) {
+                    WGW_LOG("X448 shared secret generation failed with code %d", ret);
+                    wc_curve448_free(&peer_key);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Free the peer's public key */
+                wc_curve448_free(&peer_key);
+
+                /* Allocate and set result data */
+                secret->data = gnutls_malloc(secret_size);
+                if (!secret->data) {
+                    return GNUTLS_E_MEMORY_ERROR;
+                }
+
+                memcpy(secret->data, shared_secret_buf, secret_size);
+                secret->size = secret_size;
+
+                WGW_LOG("X448 shared secret derived successfully (size: %d bytes)", secret_size);
+                return 0;
+            }
+
+        default:
+            WGW_LOG("PK algorithm not supported for key exchange: %d", ctx->algo);
+            return GNUTLS_E_INVALID_REQUEST;
     }
-
-    /* Import the peer's public key from X963 format (0x04 | X | Y) */
-    ret = wc_ecc_import_x963(pub->data, pub->size, &peer_key);
-    if (ret != 0) {
-        WGW_LOG("public key import failed with code %d", ret);
-        wc_ecc_free(&peer_key);
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    /* Determine how much space we need for the shared secret */
-    word32 secret_size = wc_ecc_size(&ctx->key.ecc);
-    if (secret_size == 0) {
-        WGW_LOG("error getting key size");
-        wc_ecc_free(&peer_key);
-        return GNUTLS_E_INTERNAL_ERROR;
-    }
-
-    /* Allocate buffer for the shared secret */
-    byte *shared_secret = gnutls_malloc(secret_size);
-    if (!shared_secret) {
-        WGW_LOG("Memory allocation failed");
-        wc_ecc_free(&peer_key);
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-
-    ctx->key.ecc.rng = &ctx->rng;
-
-    /* Generate the shared secret */
-    ret = wc_ecc_shared_secret(&ctx->key.ecc, &peer_key, shared_secret, &secret_size);
-    if (ret != 0) {
-        WGW_LOG("shared secret generation failed with code %d", ret);
-        gnutls_free(shared_secret);
-        wc_ecc_free(&peer_key);
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    /* Free the peer's public key as we don't need it anymore */
-    wc_ecc_free(&peer_key);
-
-    /* Allocate gnutls_datum for the result */
-    secret->data = shared_secret;
-    secret->size = secret_size;
-
-    WGW_LOG("shared secret derived successfully (size: %d bytes)", secret_size);
-    return 0;
 }
 
 /* structure containing function pointers for the pk implementation */
@@ -4867,6 +5177,8 @@ static const int wolfssl_pk_supported[] = {
         [GNUTLS_PK_ECDSA] = 1,
         [GNUTLS_PK_EDDSA_ED25519] = 1,
         [GNUTLS_PK_EDDSA_ED448] = 1,
+        [GNUTLS_PK_ECDH_X25519] = 1,
+        [GNUTLS_PK_ECDH_X448] = 1,
 };
 
 /* register the pk algorithm with GnuTLS */
@@ -4901,6 +5213,26 @@ static int wolfssl_pk_register(void)
         WGW_LOG("registering EdDSA-ED448");
         ret = gnutls_crypto_single_pk_register(
                 GNUTLS_PK_EDDSA_ED448, 80, &wolfssl_pk_struct, 0);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    /* Register X25519 */
+    if (wolfssl_pk_supported[GNUTLS_PK_ECDH_X25519]) {
+        WGW_LOG("registering X25519");
+        ret = gnutls_crypto_single_pk_register(
+                GNUTLS_PK_ECDH_X25519, 80, &wolfssl_pk_struct, 0);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    /* Register X448 */
+    if (wolfssl_pk_supported[GNUTLS_PK_ECDH_X448]) {
+        WGW_LOG("registering X448");
+        ret = gnutls_crypto_single_pk_register(
+                GNUTLS_PK_ECDH_X448, 80, &wolfssl_pk_struct, 0);
         if (ret < 0) {
             return ret;
         }
