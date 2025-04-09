@@ -388,6 +388,20 @@ typedef struct gnutls_crypto_pk {
 	int (*sign_exists)(gnutls_sign_algorithm_t); /* true/false */
 } gnutls_crypto_pk_st;
 
+typedef struct gnutls_crypto_rnd {
+        int (*init)(void **ctx); /* called prior to first usage of randomness */
+        int (*rnd)(void *ctx, int level, void *data, size_t datasize);
+        void (*rnd_refresh)(void *ctx);
+        void (*deinit)(void *ctx);
+        int (*self_test)(void); /* this should not require rng initialization */
+} gnutls_crypto_rnd_st;
+
+typedef struct gnutls_crypto_prf {
+        int (*raw)(gnutls_mac_algorithm_t mac, size_t master_size,
+		   const void *master, size_t label_size, const char *label,
+		   size_t seed_size, const uint8_t *seed, size_t outsize,
+		   char *out);
+} gnutls_crypto_prf_st;
 
 int gnutls_crypto_single_cipher_register(gnutls_cipher_algorithm_t algorithm,
                                          int priority,
@@ -408,3 +422,4 @@ int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
                                     int priority,
                                     const gnutls_crypto_pk_st *s,
                                     int free_s);
+

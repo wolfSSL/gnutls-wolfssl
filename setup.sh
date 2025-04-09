@@ -36,10 +36,10 @@ cd ./wolfssl
 
 if [ "$OS" = "macos" ]; then
     echo "Configuring wolfSSL for macOS..."
-    ./configure --prefix=/opt/wolfssl/ CC=clang
+    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac
 else
     echo "Configuring wolfSSL for Linux..."
-    ./configure --prefix=/opt/wolfssl/
+    ./configure --prefix=/opt/wolfssl/ --enable-cmac
 fi
 
 make
@@ -69,12 +69,12 @@ if [ "$OS" = "macos" ]; then
     GMP_LIBS="-L$(brew --prefix gmp)/lib -lgmp" \
     PKG_CONFIG_PATH="$(brew --prefix libev)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH" \
     CC=clang \
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost
     
     make -j$(sysctl -n hw.ncpu)
 else
     echo "Configuring GnuTLS for Linux..."
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost
     
     make -j9
 fi
