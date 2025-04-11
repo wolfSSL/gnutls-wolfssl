@@ -334,10 +334,10 @@ typedef enum {
 typedef struct gnutls_crypto_pk {
     gnutls_pk_generate_func generate_backend;
     gnutls_pk_export_pubkey_func export_pubkey_backend;
-    gnutls_pk_import_privkey_x509_raw_func import_privkey_x509_raw_backend;
+    gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
     gnutls_pk_pubkey_encrypt_func pubkey_encrypt_backend;
     gnutls_pk_privkey_decrypt_func privkey_decrypt_backend;
-    gnutls_pk_import_pubkey_x509_raw_func import_pubkey_x509_raw_backend;
+    gnutls_pk_import_pubkey_x509_func import_pubkey_x509_backend;
     gnutls_pk_import_privkey_url_func import_privkey_url_backend;
     gnutls_pk_import_pubkey_url_func import_pubkey_url_backend;
     gnutls_pk_sign_func sign_backend;
@@ -345,6 +345,7 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_sign_hash_func sign_hash_backend;
     gnutls_pk_verify_hash_func verify_hash_backend;
     gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
+	gnutls_pk_copy_func copy_backend;
     gnutls_pk_deinit_func deinit_backend;
 	/* The params structure should contain the private or public key
 	 * parameters, depending on the operation */
