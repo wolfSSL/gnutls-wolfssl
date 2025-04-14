@@ -25,7 +25,11 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-
+/**
+ * Constructor for shared library.
+ *
+ * Initializes the library.
+ */
 void __attribute__((constructor)) wolfssl_init(void) {
     _gnutls_wolfssl_init();
 }
@@ -37,7 +41,7 @@ void __attribute__((constructor)) wolfssl_init(void) {
 /**
  * Log function entry.
  */
-#define WGW_FUNC_ENTER()    wgw_log(__LINE__, __func__)
+#define WGW_FUNC_ENTER()    wgw_log(__LINE__, "ENTER: %s", __func__)
 
 #ifndef NO_ERROR_STRINGS
 /**
@@ -96,6 +100,7 @@ static void wgw_log(int line, const char* fmt, ...)
 
 /** List of supported AES cipher modes. */
 enum {
+    NONE,
     CBC,
     GCM,
     CCM,
@@ -113,10 +118,8 @@ enum {
 #define MAX_AES_KEY_SIZE    AES_256_KEY_SIZE
 /** Maximum authentication data. */
 #define MAX_AUTH_DATA       1024
-/** Maximum plaintext data stored. */
-#define MAX_PLAINTEXT       16*1024
-/** Macimum number of encrypted data locations to keep. */
-#define MAX_CACHE_ENC_DATA  10
+/** Maxium plaintext to encrypt for GCM  */
+#define MAX_AES_GCM_PLAINTEXT ((1ULL << 36) - 32)
 
 /** Encrypted data locations. */
 struct cache_dec_loc {
@@ -128,37 +131,41 @@ struct cache_dec_loc {
 
 /** Context structure for wolfssl AES. */
 struct wolfssl_cipher_ctx {
-    /** AES encryption context. */
-    Aes enc_aes_ctx;
-    /** AES decryption context. */
-    Aes dec_aes_ctx;
-#ifdef WOLFSSL_AES_XTS
-    /** wolfSSL context for AES-XTS */
-    XtsAes xts;
-#endif
+    union {
+        struct {
+            /** AES encryption context. */
+            Aes aes_enc;
+            /** AES decryption context. */
+            Aes aes_dec;
+        } pair;
+        /** AES context. */
+        Aes aes_ctx;
+    #ifdef WOLFSSL_AES_XTS
+        /** wolfSSL context for AES-XTS */
+        XtsAes aes_xts;
+    #endif
+    } cipher;
+
     /** Indicates that this context as been initialized. */
-    int initialized;
-    /** Indicates whether we are doing encryption or decryption.  */
-    int enc;
+    int initialized:1;
     /** Indicates that we have been initialized for encryption. */
-    int enc_initialized;
+    int enc_initialized:1;
     /** Indicates that we have been initialized for decryption. */
-    int dec_initialized;
+    int dec_initialized:1;
+    /** Indicates whether we are doing encryption or decryption.  */
+    int enc:1;
+
     /** The GnuTLS cipher algorithm ID. */
     gnutls_cipher_algorithm_t algorithm;
     /** Mode of AES to use. */
     int mode;
 
-    /** Key to use. XTS has double keys. */
-    unsigned char key[2*MAX_AES_KEY_SIZE];
-    /** Size of key to use. */
-    size_t key_size;
     /** IV/nonce to use.  */
     unsigned char iv[AES_IV_SIZE];
     /** Size of IV/nonce to use.  */
     size_t iv_size;
 
-    /* For GCM mode */
+    /* For GCM mode. */
     /** Authentication data to use. */
     unsigned char auth_data[MAX_AUTH_DATA];
     /** Size of authentication data to use. */
@@ -167,16 +174,14 @@ struct wolfssl_cipher_ctx {
     unsigned char tag[GCM_TAG_SIZE];
     /** Size of calculated authentication tag. */
     size_t tag_size;
+    /** Data to encrypt/decrypt. */
+    unsigned char* data;
+    /** Data size. */
+    size_t data_size;
     /** Tag has been set. */
-    int tag_set;
-    /** Plaintext to encrypt. */
-    unsigned char* plaintext;
-    /** Plaintext size. */
-    size_t plaintext_size;
-    /** Ciphertext locations. */
-    struct cache_dec_loc dec_loc[MAX_CACHE_ENC_DATA];
-    /** Number of ciphertext locations. */
-    int dec_cnt;
+    int tag_set:1;
+    /** Tag has been set from external source. */
+    int tag_set_ext:1;
 };
 
 /** Array of supported ciphers. */
@@ -268,7 +273,7 @@ static int get_cipher_mode(gnutls_cipher_algorithm_t algorithm)
 
     WGW_LOG("Cipher not supported: %d", algorithm);
 
-    return GNUTLS_E_INVALID_REQUEST;
+    return NONE;
 }
 
 /**
@@ -287,7 +292,6 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
     int enc)
 {
     struct wolfssl_cipher_ctx *ctx;
-    int mode;
     int ret;
 
     WGW_FUNC_ENTER();
@@ -309,21 +313,24 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
     /* initialize context with default values */
     /* TODO: context was set to all zeros on allocation - no needd for this? */
     ctx->initialized = 0;
-    ctx->enc = 0;
     ctx->enc_initialized = 0;
     ctx->dec_initialized = 0;
-    ctx->key_size = 0;
+    ctx->enc = 0;
+    ctx->mode = NONE;
     ctx->iv_size = 0;
     ctx->auth_data_size = 0;
     ctx->tag_size = 0;
     ctx->tag_set = 0;
+    ctx->tag_set_ext = 0;
     ctx->algorithm = 0;
+    ctx->data_size = 0;
 
-    mode = get_cipher_mode(algorithm);
+    ctx->algorithm = algorithm;
+    ctx->mode = get_cipher_mode(algorithm);
 
 #ifdef WOLFSSL_AES_XTS
-    if (mode == XTS) {
-        ret = wc_AesXtsInit(&ctx->xts, NULL, INVALID_DEVID);
+    if (ctx->mode == XTS) {
+        ret = wc_AesXtsInit(&ctx->cipher.aes_xts, NULL, INVALID_DEVID);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesXtsInit", ret);
             gnutls_free(ctx);
@@ -335,9 +342,21 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
         ctx->dec_initialized = 1;
     } else
 #endif
-    if (enc) {
+    if (ctx->mode == GCM || ctx->mode == CCM) {
         /* initialize wolfSSL AES contexts */
-        ret = wc_AesInit(&ctx->enc_aes_ctx, NULL, INVALID_DEVID);
+        ret = wc_AesInit(&ctx->cipher.aes_ctx, NULL, INVALID_DEVID);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesInit", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_ENCRYPTION_FAILED;
+        }
+        ctx->enc = enc;
+        ctx->enc_initialized = 1;
+        ctx->dec_initialized = 1;
+        WGW_LOG("AES context initialized successfully");
+    } else if (enc) {
+        /* initialize wolfSSL AES contexts */
+        ret = wc_AesInit(&ctx->cipher.pair.aes_enc, NULL, INVALID_DEVID);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesInit", ret);
             gnutls_free(ctx);
@@ -348,17 +367,11 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
         ctx->enc_initialized = 1;
 
         WGW_LOG("encryption context initialized successfully");
-
-        if (mode == GCM || mode == CCM) {
-            WGW_LOG("running in GCM/CCM mode, single context, initializing "
-                    "also decryption");
-            ctx->dec_initialized = 1;
-        }
     } else {
-        ret = wc_AesInit(&ctx->dec_aes_ctx, NULL, INVALID_DEVID);
+        ret = wc_AesInit(&ctx->cipher.pair.aes_dec, NULL, INVALID_DEVID);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesInit", ret);
-            wc_AesFree(&ctx->enc_aes_ctx);
+            wc_AesFree(&ctx->cipher.pair.aes_enc);
             gnutls_free(ctx);
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
@@ -369,23 +382,66 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
         WGW_LOG("decryption context initialized successfully");
     }
 
-    if (mode == GCM) {
+    /* Set tag size for AEAD ciphers. */
+    if (ctx->mode == GCM) {
         ctx->tag_size = GCM_TAG_SIZE;
     } else if (algorithm == GNUTLS_CIPHER_AES_128_CCM_8 ||
                algorithm == GNUTLS_CIPHER_AES_256_CCM_8) {
         ctx->tag_size = CCM_8_TAG_SIZE;
-    } else if (mode == CCM) {
+    } else if (ctx->mode == CCM) {
         ctx->tag_size = CCM_TAG_SIZE;
     } else {
         ctx->tag_size = 0;
     }
-    ctx->algorithm = algorithm;
-    ctx->mode = mode;
+
     ctx->initialized = 1;
     *_ctx = ctx;
 
     WGW_LOG("cipher context initialized successfully");
     return 0;
+}
+
+/**
+ * Get the key size for the cipher algorith,
+ *
+ * @param [in] algorithm   GnuTLS cipher algorithm ID.
+ * @return  Key size in bytes on success.
+ * @return  0 when algorithm not supported.
+ */
+static int get_cipher_key_size(gnutls_cipher_algorithm_t algorithm)
+{
+    switch (algorithm) {
+        case GNUTLS_CIPHER_AES_128_CBC:
+        case GNUTLS_CIPHER_AES_128_GCM:
+        case GNUTLS_CIPHER_AES_128_CCM:
+        case GNUTLS_CIPHER_AES_128_CCM_8:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case GNUTLS_CIPHER_AES_128_CFB8:
+    #endif
+            return AES_128_KEY_SIZE;
+        case GNUTLS_CIPHER_AES_192_CBC:
+        case GNUTLS_CIPHER_AES_192_GCM:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case GNUTLS_CIPHER_AES_192_CFB8:
+    #endif
+            return AES_192_KEY_SIZE;
+        case GNUTLS_CIPHER_AES_256_CBC:
+        case GNUTLS_CIPHER_AES_256_GCM:
+        case GNUTLS_CIPHER_AES_256_CCM:
+        case GNUTLS_CIPHER_AES_256_CCM_8:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case GNUTLS_CIPHER_AES_256_CFB8:
+    #endif
+            return AES_256_KEY_SIZE;
+    #ifdef WOLFSSL_AES_XTS
+        case GNUTLS_CIPHER_AES_128_XTS:
+            return 2 * AES_128_KEY_SIZE;
+        case GNUTLS_CIPHER_AES_256_XTS:
+            return 2 * AES_256_KEY_SIZE;
+    #endif
+        default:
+            return 0;
+    }
 }
 
 /**
@@ -403,7 +459,8 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
 {
     struct wolfssl_cipher_ctx *ctx = _ctx;
-    size_t req_key_size;
+    size_t exp_key_size;
+    int ret;
 
     WGW_FUNC_ENTER();
     WGW_LOG("keysize %zu", keysize);
@@ -413,67 +470,130 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    switch (ctx->algorithm) {
-        case GNUTLS_CIPHER_AES_128_CBC:
-        case GNUTLS_CIPHER_AES_128_GCM:
-        case GNUTLS_CIPHER_AES_128_CCM:
-        case GNUTLS_CIPHER_AES_128_CCM_8:
-    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
-        case GNUTLS_CIPHER_AES_128_CFB8:
-    #endif
-            req_key_size = AES_128_KEY_SIZE;
-            break;
-        case GNUTLS_CIPHER_AES_192_CBC:
-        case GNUTLS_CIPHER_AES_192_GCM:
-    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
-        case GNUTLS_CIPHER_AES_192_CFB8:
-    #endif
-            req_key_size = AES_192_KEY_SIZE;
-            break;
-        case GNUTLS_CIPHER_AES_256_CBC:
-        case GNUTLS_CIPHER_AES_256_GCM:
-        case GNUTLS_CIPHER_AES_256_CCM:
-        case GNUTLS_CIPHER_AES_256_CCM_8:
-    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
-        case GNUTLS_CIPHER_AES_256_CFB8:
-    #endif
-            req_key_size = AES_256_KEY_SIZE;
-            break;
-    #ifdef WOLFSSL_AES_XTS
-        case GNUTLS_CIPHER_AES_128_XTS:
-            req_key_size = 2 * AES_128_KEY_SIZE;
-            break;
-        case GNUTLS_CIPHER_AES_256_XTS:
-            req_key_size = 2 * AES_256_KEY_SIZE;
-            break;
-    #endif
-        default:
-            return GNUTLS_E_INVALID_REQUEST;
-    }
-    if (keysize != req_key_size) {
+    /* Get expected key size for cipoher algorithm. */
+    exp_key_size = get_cipher_key_size(ctx->algorithm);
+    /* Check if key size was found. */
+    if (exp_key_size == 0) {
+        WGW_LOG("Key size not supported for algorithm: %d", ctx->algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
-
-    if (keysize > sizeof(ctx->key)) {
+    /* Check key size is the expected length. */
+    if (keysize != exp_key_size) {
+        WGW_LOG("Key size is not the expected length: %d != %d (%d)", keysize,
+            exp_key_size, ctx->algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
 #ifdef WOLFSSL_AES_XTS
     if (ctx->mode == XTS) {
-        if (XMEMCMP(key, key + req_key_size / 2, req_key_size / 2) == 0) {
+        /* XTS has two AES keys that are no allowed to be the same. */
+        if (XMEMCMP(key, key + exp_key_size / 2, exp_key_size / 2) == 0) {
             WGW_LOG("XTS keys are the same");
             return GNUTLS_E_INVALID_REQUEST;
         }
     }
 #endif
 
-    /* store key for later use when setting up IV */
-    XMEMCPY(ctx->key, key, keysize);
-    ctx->key_size = keysize;
-    ctx->tag_set = 0;
+    switch (ctx->mode) {
+        case CBC:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case CFB8:
+    #endif
+            if (ctx->enc && ctx->enc_initialized) {
+                /* Set the key for AES encrypt. */
+                ret = wc_AesSetKey(&ctx->cipher.pair.aes_enc, key, keysize,
+                    NULL, AES_ENCRYPTION);
+                if (ret != 0) {
+                    WGW_WOLFSSL_ERROR("wc_AesSetKey(ENC)", ret);
+                    return GNUTLS_E_ENCRYPTION_FAILED;
+                }
+                ctx->enc_initialized = 1;
+            } else if (!ctx->enc && ctx->dec_initialized) {
+                int enc_mode = AES_DECRYPTION;
+            #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+                if (ctx->mode == CFB8) {
+                    enc_mode = AES_ENCRYPTION;
+                }
+            #endif
+                /* Set the key for AES decrypt. */
+                ret = wc_AesSetKey(&ctx->cipher.pair.aes_dec, key, keysize,
+                    NULL, enc_mode);
+                if (ret != 0) {
+                    WGW_WOLFSSL_ERROR("wc_AesSetKey(DEC)", ret);
+                    return GNUTLS_E_ENCRYPTION_FAILED;
+                }
+                ctx->dec_initialized = 1;
+            }
+            break;
+        case GCM:
+            WGW_LOG("wc_AesGcmSetKey");
+            /* Set the key now for AEAD calls. */
+            ret = wc_AesGcmSetKey(&ctx->cipher.aes_ctx, key, keysize);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesGcmSetKey", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            break;
+        case CCM:
+            WGW_LOG("wc_AesCcmSetKey");
+            /* Set the key now for AEAD calls. */
+            ret = wc_AesCcmSetKey(&ctx->cipher.aes_ctx, key, keysize);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesCcmSetKey", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            break;
+        case XTS:
+            WGW_LOG("setting key for XTS mode");
+            ret = wc_AesXtsSetKeyNoInit(&ctx->cipher.aes_xts, key, keysize,
+                ctx->enc ? AES_ENCRYPTION : AES_DECRYPTION);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesXtsSetKeyNoInit", ret);
+                return GNUTLS_E_ENCRYPTION_FAILED;
+            }
+            break;
+        default:
+            WGW_LOG("AES mode not supported: %d", ctx->mode);
+            return GNUTLS_E_INVALID_REQUEST;
+    }
 
-    WGW_LOG("key stored, waiting for IV");
+    WGW_LOG("key stored");
     return 0;
+}
+
+/**
+ * Get the IV range for the cipher mode.
+ *
+ * @param [in]  mode  Cipher mode.
+ * @param [out] min   Minimum IV size.
+ * @param [out] max   Maximum IV size.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when mode not supported.
+ */
+static int get_iv_range(int mode, size_t* min, size_t* max)
+{
+    switch (mode) {
+        case CBC:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case CFB8:
+    #endif
+    #ifdef WOLFSSL_AES_XTS
+        case XTS:
+    #endif
+            *min = AES_IV_SIZE;
+            *max = AES_IV_SIZE;
+            return 0;
+        case GCM:
+            *min = GCM_NONCE_MIN_SZ;
+            *max = GCM_NONCE_MAX_SZ;
+            return 0;
+        case CCM:
+            *min = CCM_NONCE_MIN_SZ;
+            *max = CCM_NONCE_MAX_SZ;
+            return 0;
+        default:
+            return GNUTLS_E_INVALID_REQUEST;
+    }
 }
 
 /**
@@ -481,7 +601,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
  *
  * @param [in, out] ctx      Cipher context.
  * @param [in]      iv       IV data. Assumed not NULL.
- * @param [in]      iv_size  Size of key in bytes.
+ * @param [in]      iv_size  Size of IV in bytes.
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when context hasn't been initialized,
  *          IV size is invalid or mode not supported.
@@ -492,7 +612,8 @@ static int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
 {
     struct wolfssl_cipher_ctx *ctx = _ctx;
     int ret = -1;
-    int mode = -1;
+    size_t min_size;
+    size_t max_size;
 
     WGW_FUNC_ENTER();
     WGW_LOG("iv_size %zu", iv_size);
@@ -502,98 +623,59 @@ static int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    mode = get_cipher_mode(ctx->algorithm);
-
-    /* for CBC, validate IV size */
-    if (mode == CBC && iv_size != AES_IV_SIZE) {
+    /* Get valid size range for IV for mode. */
+    if (get_iv_range(ctx->mode, &min_size, &max_size) != 0) {
         return GNUTLS_E_INVALID_REQUEST;
     }
-    /* for GCM, we expect a 8-16 byte nonce */
-    if (mode == GCM && (iv_size < GCM_NONCE_MIN_SZ ||
-            iv_size > GCM_NONCE_MAX_SZ)) {
-        WGW_LOG("IV size invalid for GCM");
+    /* Check IV size range. */
+    if (iv_size < min_size || iv_size > max_size) {
+        WGW_LOG("IV out of range: %d <= %d <= %d (%d)", min_size, iv_size,
+            max_size, ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
-    /* for CCM, we expect a 8-16 byte nonce */
-    if (mode == CCM && (iv_size < CCM_NONCE_MIN_SZ ||
-            iv_size > CCM_NONCE_MAX_SZ)) {
-        WGW_LOG("IV size invalid for CCM");
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-#if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
-    /* for CFB8, validate IV size */
-    if (mode == CFB8 && iv_size != AES_IV_SIZE) {
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-#endif
-#ifdef WOLFSSL_AES_XTS
-    /* for XTS, validate IV size */
-    if (mode == XTS && iv_size != AES_IV_SIZE) {
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-#endif
-
-    /* save IV */
+    
+    /* Save IV for use later. */
     XMEMCPY(ctx->iv, iv, iv_size);
     ctx->iv_size = iv_size;
 
-    /* now we have both key and IV, so we can set the keys in wolfSSL */
-    if (ctx->key_size > 0) {
-        if (mode == CBC || mode == CFB8) {
+    switch (ctx->mode) {
+        case CBC:
+    #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+        case CFB8:
+    #endif
             WGW_LOG("setting key for CBC/CFB8 mode");
             WGW_LOG("setting key and IV for %s",
                     ctx->enc ? "encryption" : "decryption");
             if (ctx->enc && ctx->enc_initialized) {
-                ret = wc_AesSetKey(&ctx->enc_aes_ctx, ctx->key, ctx->key_size,
-                    ctx->iv, AES_ENCRYPTION);
+                    ret = wc_AesSetIV(&ctx->cipher.pair.aes_enc, ctx->iv);
                 if (ret != 0) {
-                    WGW_WOLFSSL_ERROR("wc_AesSetKey(ENC)", ret);
+                    WGW_WOLFSSL_ERROR("wc_AesSetIV(ENC)", ret);
                     return GNUTLS_E_ENCRYPTION_FAILED;
                 }
-                ctx->enc_initialized = 1;
             } else if (!ctx->enc && ctx->dec_initialized) {
-                ret = wc_AesSetKey(&ctx->dec_aes_ctx, ctx->key, ctx->key_size,
-                    ctx->iv, mode == CFB8 ? AES_ENCRYPTION : AES_DECRYPTION);
+                ret = wc_AesSetIV(&ctx->cipher.pair.aes_dec, ctx->iv);
                 if (ret != 0) {
-                    WGW_WOLFSSL_ERROR("wc_AesSetKey(DEC)", ret);
+                    WGW_WOLFSSL_ERROR("wc_AesSetIV(DEC)", ret);
                     return GNUTLS_E_ENCRYPTION_FAILED;
                 }
-                ctx->dec_initialized = 1;
             }
-        } else if (mode == GCM) {
-            WGW_LOG("setting key for GCM mode");
-            ret = wc_AesGcmSetKey(&ctx->enc_aes_ctx, ctx->key, ctx->key_size);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesGcmSetKey", ret);
-                return GNUTLS_E_ENCRYPTION_FAILED;
-            }
+            break;
+        case GCM:
+            /* IV stored and used in encrypt/decrypt/tag. */
+            /* No tag set, auth data or plaintext now we have a new IV. */
             ctx->tag_set = 0;
-        } else if (mode == CCM) {
-            WGW_LOG("setting key for CCM mode");
-            ret = wc_AesCcmSetKey(&ctx->enc_aes_ctx, ctx->key, ctx->key_size);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesCcmSetKey", ret);
-                return GNUTLS_E_ENCRYPTION_FAILED;
-            }
-            ctx->tag_set = 0;
-#ifdef WOLFSSL_AES_XTS
-        } else if (mode == XTS) {
-            WGW_LOG("setting key for XTS mode");
-            ret = wc_AesXtsSetKeyNoInit(&ctx->xts, ctx->key, ctx->key_size,
-                ctx->enc ? AES_ENCRYPTION : AES_DECRYPTION);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesXtsSetKeyNoInit", ret);
-                return GNUTLS_E_ENCRYPTION_FAILED;
-            }
-            ctx->tag_set = 0;
-#endif
-        } else {
+            ctx->tag_set_ext = 0;
+            ctx->auth_data_size = 0;
+            ctx->data_size = 0;
+            break;
+    #ifdef WOLFSSL_AES_XTS
+        case XTS:
+            /* IV stored and used in encrypt/decrypt. */
+            break;
+    #endif
+        default:
             WGW_LOG("encryption/decryption struct not correctly initialized");
             return GNUTLS_E_INVALID_REQUEST;
-        }
-    } else {
-        WGW_LOG("no key set yet, deferring key setup");
-        return GNUTLS_E_INVALID_REQUEST;
     }
 
     WGW_LOG("setiv completed successfully");
@@ -601,16 +683,40 @@ static int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
 }
 
 #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+/**
+ * Get the IV after encryption or decryptiom.
+ *
+ * @param [in, out] ctx      Cipher context.
+ * @param [out]     iv       IV data. Assumed not NULL.
+ * @param [in]      iv_size  Size of IV buffer in bytes.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when when context hasn't been initialized,
+ *          mode is not CFB8.
+ * @return  GNUTLS_E_SHORT_MEMORY_BUFFER when IV buffer too small.
+ */
 static int wolfssl_cipher_getiv(void *_ctx, void *iv, size_t iv_size)
 {
     struct wolfssl_cipher_ctx *ctx = _ctx;
 
-    if (iv_size < ctx->iv_size) {
-        WGW_LOG("IV buffer too small");
+    if (!ctx->initialized) {
+        WGW_LOG("cipher context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    XMEMCPY(iv, ctx->enc_aes_ctx.reg, ctx->iv_size);
+    /* Only CFB8 supported. */
+    if (ctx->mode != CFB8) {
+        WGW_LOG("Mode not supported: ", ctx->mode);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Check buffer is big enough. */
+    if (iv_size < ctx->iv_size) {
+        WGW_LOG("IV buffer too small");
+        return GNUTLS_E_SHORT_MEMORY_BUFFER;
+    }
+
+    /* Get current IV. */
+    XMEMCPY(iv, ctx->cipher.pair.aes_enc.reg, ctx->iv_size);
 
     return (int)ctx->iv_size;
 }
@@ -639,15 +745,22 @@ static int wolfssl_cipher_auth(void *_ctx, const void *auth_data,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    if (auth_size > sizeof(ctx->auth_data)) {
-        WGW_LOG("Auth data too big");
+    /* Check authentication data will fit in cache. */
+    if (ctx->auth_data_size + auth_size > sizeof(ctx->auth_data)) {
+        WGW_LOG("Auth data too big: %ld + %ld > %ld", ctx->auth_data_size,
+            auth_size, sizeof(ctx->auth_data));
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
-    /* store AAD for later use in encrypt/decrypt operations */
+    /* Streaming must be a multiple of block size except for last. */
+    if ((ctx->auth_data_size % AES_BLOCK_SIZE) != 0) {
+        WGW_LOG("Can only do multiple updates if multiple of block size");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Store AAD for later use in encrypt/decrypt operations. */
     XMEMCPY(ctx->auth_data + ctx->auth_data_size, auth_data, auth_size);
     ctx->auth_data_size += auth_size;
-    ctx->tag_set = 0;
 
     WGW_LOG("AAD added successfully");
     return 0;
@@ -681,64 +794,91 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* check if encryption context is initialized */
+    /* Check if encryption context is initialized. */
     if (!ctx->enc_initialized) {
         WGW_LOG("encryption context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Check destination is big enough for encrypted data. */
     if (dst_size < src_size) {
         WGW_LOG("Destination size is too small for source size");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
-    /* always use the encryption context for encryption operations */
     if (ctx->mode == CBC) {
         WGW_LOG("wc_AesCbcEncrypt");
 
-        /* check block alignment for CBC mode */
+        /* Check block alignment for CBC mode. */
         if (src_size % AES_BLOCK_SIZE != 0) {
             WGW_LOG("Source size not a multiple of the block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
-        ret = wc_AesCbcEncrypt(&ctx->enc_aes_ctx, dst, src, src_size);
+        /* Always use the encryption context for encryption operations. */
+        ret = wc_AesCbcEncrypt(&ctx->cipher.pair.aes_enc, dst, src, src_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesCbcEncrypt", ret);
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
-    } else if (ctx->mode == GCM || ctx->mode == CCM) {
+    } else if (ctx->mode == GCM) {
         unsigned char* ptr;
+        unsigned char* encr;
 
-        WGW_LOG("Caching platintext and output location");
+        WGW_LOG("Caching platintext");
 
         ctx->enc = 1;
 
-        /* Check we have enough entries for another encrypted data location. */
-        if (ctx->dec_cnt == MAX_CACHE_ENC_DATA) {
-            WGW_LOG("Too many encrypted data locations");
-            return GNUTLS_E_ENCRYPTION_FAILED;
+        /* Streaming must be a multiple of block size except for last. */
+        if ((ctx->data_size % AES_BLOCK_SIZE) != 0) {
+            WGW_LOG("Can only do multiple updates if multiple of block size");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        if (ctx->data_size + src_size > MAX_AES_GCM_PLAINTEXT) {
+            WGW_LOG("too much data for one request");
+            return GNUTLS_E_INVALID_REQUEST;
         }
 
         /* Add the new plaintext on to the existing buffer. */
-        ptr = gnutls_realloc(ctx->plaintext, ctx->plaintext_size + src_size);
+        ptr = gnutls_realloc(ctx->data, ctx->data_size + src_size);
         if (ptr == NULL) {
             WGW_LOG("realloc of gmac data failed");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+        ctx->data = ptr;
+        XMEMCPY(ctx->data + ctx->data_size, src, src_size);
+        ctx->data_size += src_size;
+
+        /* Allocate an encrypted data buffer to encrypt all plaintext into. */
+        encr = gnutls_malloc(ctx->data_size + src_size);
+        if (ptr == NULL) {
+            WGW_LOG("realloc of gmac data failed");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Do encryption with the data we have. */
+        ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, encr,
+            ctx->data, ctx->data_size, ctx->iv, ctx->iv_size,
+            ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+            gnutls_free(encr);
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
-        ctx->plaintext = ptr;
-        XMEMCPY(ctx->plaintext + ctx->plaintext_size, src, src_size);
-        ctx->plaintext_size += src_size;
-
-        /* Store the encryption data location. */
-        ctx->dec_loc[ctx->dec_cnt].data = dst;
-        ctx->dec_loc[ctx->dec_cnt].size = src_size;
-        ctx->dec_cnt++;
+        else {
+            /* Copy out the last encrypted bytes. */
+            XMEMCPY(dst, encr + ctx->data_size - src_size, src_size);
+            gnutls_free(encr);
+            /* A tag was created. */
+            ctx->tag_set =1;
+        }
 #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
     } else if (ctx->mode == CFB8) {
         WGW_LOG("wc_AesCfb8Encrypt");
 
-        ret = wc_AesCfb8Encrypt(&ctx->enc_aes_ctx, dst, src, src_size);
+        /* Always use the encryption context for encryption operations. */
+        ret = wc_AesCfb8Encrypt(&ctx->cipher.pair.aes_enc, dst, src, src_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesCfb8Encrypt", ret);
             return GNUTLS_E_ENCRYPTION_FAILED;
@@ -748,18 +888,21 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
     } else if (ctx->mode == XTS) {
         WGW_LOG("wc_AesXtsEncrypt");
 
-        ret = wc_AesXtsEncrypt(&ctx->xts, dst, src, src_size, ctx->iv,
-            ctx->iv_size);
+        /* Encrypt the data with the IV. */
+        ret = wc_AesXtsEncrypt(&ctx->cipher.aes_xts, dst, src, src_size,
+            ctx->iv, ctx->iv_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesXtsEncrypt", ret);
             if (ret == BAD_FUNC_ARG) {
+                /* If the plaintext size is invalid then return invalid
+                 * request. */
                 return GNUTLS_E_INVALID_REQUEST;
             }
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
 #endif
     } else {
-        WGW_LOG("AES mode not set");
+        WGW_LOG("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -795,70 +938,110 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* check if decryption context is initialized */
+    /* Check if decryption context is initialized. */
     if (!ctx->dec_initialized) {
         WGW_LOG("decryption context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Check destination is big enough for encrypted data. */
     if (dst_size < src_size) {
         WGW_LOG("Destination size is too small for source size");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
-    /* always use the decryption context for decryption operations */
     if (ctx->mode == CBC) {
         WGW_LOG("wc_AesCbcDecrypt");
-        /* check block alignment for CBC mode */
+
+        /* Check block alignment for CBC mode. */
         if (src_size % AES_BLOCK_SIZE != 0) {
             WGW_LOG("Source size not a multiple of the block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
-        ret = wc_AesCbcDecrypt(&ctx->dec_aes_ctx, dst, src, src_size);
+        /* Always use the decryption context for decryption operations */
+        ret = wc_AesCbcDecrypt(&ctx->cipher.pair.aes_dec, dst, src, src_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesCbcDecrypt", ret);
             return GNUTLS_E_DECRYPTION_FAILED;
         }
     } else if (ctx->mode == GCM) {
+        unsigned char* ptr;
+        unsigned char* decr;
+
+        WGW_LOG("Caching platintext");
+
+        ctx->enc = 1;
+
+        /* Streaming must be a multiple of block size except for last. */
+        if ((ctx->data_size % AES_BLOCK_SIZE) != 0) {
+            WGW_LOG("Can only do multiple updates if multiple of block size");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Add the new ciphertext on to the existing buffer. */
+        ptr = gnutls_realloc(ctx->data, ctx->data_size + src_size);
+        if (ptr == NULL) {
+            WGW_LOG("realloc of encrypted data failed");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+        ctx->data = ptr;
+        XMEMCPY(ctx->data + ctx->data_size, src, src_size);
+        ctx->data_size += src_size;
+
+        /* Allocate a decrypted data buffer to decrypt all ciphertext into. */
+        decr = gnutls_malloc(ctx->data_size + src_size);
+        if (ptr == NULL) {
+            WGW_LOG("realloc of decrypted data failed");
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
         WGW_LOG("wc_AesGcmDecrypt");
-
-        ctx->enc = 0;
-
-        /* for GCM mode, we need to use the GCM decrypt function with AAD */
-        ret = wc_AesGcmDecrypt(&ctx->enc_aes_ctx, dst, src, src_size,
-            ctx->iv, ctx->iv_size, ctx->tag, ctx->tag_size, ctx->auth_data,
-                ctx->auth_data_size);
+        /* If caller hasn't set tag then we are creating it. */
+        if (!ctx->tag_set_ext) {
+            /* Encrypt the ciphertext to get the plaintext.
+             * Tag will ahve been created on plaintext which is of no use.
+             */
+            ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
+                ctx->data_size, ctx->iv, ctx->iv_size,
+                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+                gnutls_free(decr);
+                return GNUTLS_E_ENCRYPTION_FAILED;
+            }
+            /* Encrypt the plaintext to create the tag. */
+            ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, decr,
+                ctx->data_size, ctx->iv, ctx->iv_size,
+                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+                gnutls_free(decr);
+                return GNUTLS_E_ENCRYPTION_FAILED;
+            }
+            /* A tag is now available. */
+            ctx->tag_set = 1;
+        }
+        /* Do decryption with cipehtext, IV, authentication data and tag. */
+        ret = wc_AesGcmDecrypt(&ctx->cipher.aes_ctx, decr,
+            ctx->data, ctx->data_size, ctx->iv, ctx->iv_size,
+            ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
         if (ret != 0) {
-            WGW_WOLFSSL_ERROR("wc_AesGcmDecrypt", ret);
-            return GNUTLS_E_DECRYPTION_FAILED;
+            WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+            gnutls_free(decr);
+            return GNUTLS_E_ENCRYPTION_FAILED;
         }
         else {
-            /* Authentication data used - reset count. */
-            ctx->auth_data_size = 0;
-        }
-    } else if (ctx->mode == CCM) {
-        WGW_LOG("wc_AesCcmDecrypt");
-
-        ctx->enc = 0;
-
-        /* for CCM mode, we need to use the CCM decrypt function with AAD */
-        ret = wc_AesCcmDecrypt(&ctx->enc_aes_ctx, dst, src, src_size,
-            ctx->iv, ctx->iv_size, ctx->tag, ctx->tag_size, ctx->auth_data,
-                ctx->auth_data_size);
-        if (ret != 0) {
-            WGW_WOLFSSL_ERROR("wc_AesCcmDecrypt", ret);
-            return GNUTLS_E_DECRYPTION_FAILED;
-        }
-        else {
-            /* Authentication data used - reset count. */
-            ctx->auth_data_size = 0;
+            /* Copy out the last decrypted data. */
+            XMEMCPY(dst, decr + ctx->data_size - src_size, src_size);
+            gnutls_free(decr);
         }
 #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
     } else if (ctx->mode == CFB8) {
         WGW_LOG("wc_AesCfb8Decrypt");
 
-        ret = wc_AesCfb8Decrypt(&ctx->dec_aes_ctx, dst, src, src_size);
+        /* Always use the decryption context for decryption operations. */
+        ret = wc_AesCfb8Decrypt(&ctx->cipher.pair.aes_dec, dst, src, src_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesCfb8Decrypt", ret);
             return GNUTLS_E_DECRYPTION_FAILED;
@@ -868,18 +1051,21 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
     } else if (ctx->mode == XTS) {
         WGW_LOG("wc_AesXtsDecrypt");
 
-        ret = wc_AesXtsDecrypt(&ctx->xts, dst, src, src_size, ctx->iv,
-            ctx->iv_size);
+        /* Decrypt the data with the IV. */
+        ret = wc_AesXtsDecrypt(&ctx->cipher.aes_xts, dst, src, src_size,
+            ctx->iv, ctx->iv_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesXtsDecrypt", ret);
             if (ret == BAD_FUNC_ARG) {
+                /* If the plaintext size is invalid then return invalid
+                 * request. */
                 return GNUTLS_E_INVALID_REQUEST;
             }
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
 #endif
     } else {
-        WGW_LOG("AES mode not set");
+        WGW_LOG("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -898,7 +1084,8 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
  */
 static void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
 {
-    WGW_LOG("wolfssl_cipher_tag with tag_size %zu", tag_size);
+    WGW_FUNC_ENTER();
+    WGW_LOG("tag_size %zu", tag_size);
 
     struct wolfssl_cipher_ctx *ctx = _ctx;
 
@@ -914,61 +1101,52 @@ static void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
 
     /* Check if tag available. */
     if (ctx->tag_set) {
-        XMEMCPY(tag, ctx->tag, tag_size);
-        WGW_LOG("tag stored successfully");
-    /* When encrypting, generate tag now. */
+        if (ctx->mode == GCM) {
+            XMEMCPY(tag, ctx->tag, tag_size);
+            /* Authentication data used - reset count. */
+            ctx->auth_data_size = 0;
+            /* Dispose of cached data. */
+            gnutls_free(ctx->data);
+            ctx->data = NULL;
+            ctx->data_size = 0;
+            WGW_LOG("tag returned successfully");
+        } else {
+            WGW_LOG("AES mode not supported: %d", ctx->mode);
+        }
     } else if (ctx->enc) {
         int ret = -1;
 
+        /* Encrypting and no tag set means we don't have plaintext. */
         if (ctx->mode == GCM) {
             WGW_LOG("wc_AesGcmEncrypt");
 
-            /* Do encryption now we have all the data. */
-            ret = wc_AesGcmEncrypt(&ctx->enc_aes_ctx, ctx->plaintext,
-                ctx->plaintext, ctx->plaintext_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+            /* Do authentication with no plaintext. */
+            ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, NULL, NULL, 0, ctx->iv,
+                ctx->iv_size, ctx->tag, ctx->tag_size, ctx->auth_data,
+                ctx->auth_data_size);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
             }
-        } else if (ctx->mode == CCM) {
-            WGW_LOG("wc_AesCcmEncrypt");
-
-            /* Do encryption now we have all the data. */
-            ret = wc_AesCcmEncrypt(&ctx->enc_aes_ctx, ctx->plaintext,
-                ctx->plaintext, ctx->plaintext_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesCcmEncrypt", ret);
+            else {
+                /* Copy out tag. */
+                ctx->tag_set = 1;
+                XMEMCPY(tag, ctx->tag, tag_size);
+                WGW_LOG("tag stored successfully");
             }
-        }
-        if (ret == 0) {
-            int i;
-            unsigned char* enc = ctx->plaintext;
-
-            /* Copy out the encrypted data into various locations. */
-            for (i = 0; i < ctx->dec_cnt; i++) {
-                XMEMCPY(ctx->dec_loc[i].data, enc, ctx->dec_loc[i].size);
-                enc += ctx->dec_loc[i].size;
-            }
-            /* Done with encryption locations. */
-            ctx->dec_cnt = 0;
-
             /* Authentication data used - reset count. */
             ctx->auth_data_size = 0;
             /* Dispose of cached plaintext. */
-            gnutls_free(ctx->plaintext);
-            ctx->plaintext = NULL;
-            ctx->plaintext_size = 0;
-
-            /* Have a tag and copy it out. */
-            ctx->tag_set = 1;
-            XMEMCPY(tag, ctx->tag, tag_size);
-            WGW_LOG("tag stored successfully");
+            gnutls_free(ctx->data);
+            ctx->data = NULL;
+            ctx->data_size = 0;
+        } else {
+            WGW_LOG("AES mode not supported: %d", ctx->mode);
         }
-    /* Decrypting and we need to set tag for decrypt operation. */
     } else {
+        /* Decrypting and we need to set tag for decrypt operation. */
         XMEMCPY(ctx->tag, tag, tag_size);
         ctx->tag_set = 1;
+        ctx->tag_set_ext = 1;
         WGW_LOG("tag provided successfully");
     }
 }
@@ -1018,23 +1196,28 @@ static int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
 
     ctx->enc = 1;
 
-    /* Set the IV/nonce. */
-    ret = wolfssl_cipher_setiv(_ctx, nonce, nonce_size);
-    if (ret != 0) {
-        return ret;
+    if (ctx->mode == GCM) {
+        WGW_LOG("wc_AesGcmEncrypt");
+        /* Encrypt with AES-GCM. */
+        ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, encr, plain, plain_size,
+            nonce, nonce_size, encr + plain_size, tag_size, auth, auth_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+            return GNUTLS_E_ENCRYPTION_FAILED;
+        }
+    } else if (ctx->mode == CCM) {
+        WGW_LOG("wc_AesCcmEncrypt");
+        /* Encrypt with AES-CCM. */
+        ret = wc_AesCcmEncrypt(&ctx->cipher.aes_ctx, encr, plain, plain_size,
+            nonce, nonce_size, encr + plain_size, tag_size, auth, auth_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesCcmEncrypt", ret);
+            return GNUTLS_E_ENCRYPTION_FAILED;
+        }
+    } else {
+        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        return GNUTLS_E_INVALID_REQUEST;
     }
-    /* Set the authentication data. */
-    ret = wolfssl_cipher_auth(_ctx, auth, auth_size);
-    if (ret != 0) {
-        return ret;
-    }
-    /* Encrypt plain text. */
-    ret = wolfssl_cipher_encrypt(_ctx, plain, plain_size, encr, encr_size);
-    if (ret != 0) {
-        return ret;
-    }
-    /* Put tag after the encrypted data. */
-    wolfssl_cipher_tag(_ctx, encr + plain_size, tag_size);
 
     return 0;
 }
@@ -1074,8 +1257,10 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    if (encr_size < tag_size) {
-        WGW_LOG("encrypted size too small: %d < %d ", encr_size, tag_size);
+    /* Check decrypted data is big enough for ciphertext. */
+    if (plain_size + tag_size < encr_size) {
+        WGW_LOG("plain size too small: %d + %d < %d ", plain_size, tag_size,
+            encr_size);
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
@@ -1084,20 +1269,30 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
     /* Encrypted size includes tag. */
     encr_size -= tag_size;
 
-    /* Set the IV/nonce. */
-    ret = wolfssl_cipher_setiv(_ctx, nonce, nonce_size);
-    if (ret != 0) {
-        return ret;
+    if (ctx->mode == GCM) {
+        WGW_LOG("wc_AesGcmDncrypt");
+        /* Decrypt with AES-GCM. */
+        ret = wc_AesGcmDecrypt(&ctx->cipher.aes_ctx, plain, encr, encr_size,
+            nonce, nonce_size, encr + encr_size, tag_size, auth, auth_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesGcmDecrypt", ret);
+            return GNUTLS_E_DECRYPTION_FAILED;
+        }
+        return 0;
+    } else if (ctx->mode == CCM) {
+        WGW_LOG("wc_AesCcmDncrypt");
+        /* Decrypt with AES-CCM. */
+        ret = wc_AesCcmDecrypt(&ctx->cipher.aes_ctx, plain, encr, encr_size,
+            nonce, nonce_size, encr + encr_size, tag_size, auth, auth_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesCcmEncrypt", ret);
+            return GNUTLS_E_DECRYPTION_FAILED;
+        }
+        return 0;
+    } else {
+        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        return GNUTLS_E_INVALID_REQUEST;
     }
-    /* Set the authentication data. */
-    ret = wolfssl_cipher_auth(_ctx, auth, auth_size);
-    if (ret != 0) {
-        return ret;
-    }
-    /* Set the tag for decrypt to use. */
-    wolfssl_cipher_tag(_ctx, ((byte*)encr) + encr_size, tag_size);
-    /* Decrypt ciphertext. */
-    return wolfssl_cipher_decrypt(_ctx, encr, encr_size, plain, plain_size);
 }
 
 
@@ -1113,13 +1308,28 @@ static void wolfssl_cipher_deinit(void *_ctx)
     struct wolfssl_cipher_ctx *ctx = _ctx;
 
     if (ctx && ctx->initialized) {
-        gnutls_free(ctx->plaintext);
-        /* free the wolfSSL AES contexts */
-    #ifdef WOLFSSL_AES_XTS
-        wc_AesXtsFree(&ctx->xts);
-    #endif
-        wc_AesFree(&ctx->enc_aes_ctx);
-        wc_AesFree(&ctx->dec_aes_ctx);
+        gnutls_free(ctx->data);
+        /* Free the wolfSSL AES contexts */
+        switch (ctx->mode) {
+        #ifdef WOLFSSL_AES_XTS
+            case XTS:
+                wc_AesXtsFree(&ctx->cipher.aes_xts);
+                break;
+        #endif
+            case GCM:
+            case CCM:
+                wc_AesFree(&ctx->cipher.aes_ctx);
+                break;
+            case CBC:
+        #if defined(WOLFSSL_AES_CFB) && !defined(WOLFSSL_NO_AES_CFB_1_8)
+            case CFB8:
+        #endif
+                wc_AesFree(&ctx->cipher.pair.aes_enc);
+                wc_AesFree(&ctx->cipher.pair.aes_dec);
+                break;
+            default:
+                break;
+        }
         ctx->initialized = 0;
         ctx->enc_initialized = 0;
         ctx->dec_initialized = 0;
@@ -1151,6 +1361,15 @@ static const gnutls_crypto_cipher_st wolfssl_cipher_aead_struct = {
     .aead_decrypt = wolfssl_cipher_aead_decrypt,
     .auth = wolfssl_cipher_auth,
     .tag = wolfssl_cipher_tag,
+    .deinit = wolfssl_cipher_deinit,
+};
+
+/** Function pointers for the wolfSSL implementation of AEAD only ciphers. */
+static const gnutls_crypto_cipher_st wolfssl_cipher_aead_only_struct = {
+    .init = wolfssl_cipher_init,
+    .setkey = wolfssl_cipher_setkey,
+    .aead_encrypt = wolfssl_cipher_aead_encrypt,
+    .aead_decrypt = wolfssl_cipher_aead_decrypt,
     .deinit = wolfssl_cipher_deinit,
 };
 
@@ -1252,8 +1471,8 @@ static int wolfssl_cipher_register(void)
     /* Register AES-128-CCM */
     if (wolfssl_cipher_supported[GNUTLS_CIPHER_AES_128_CCM]) {
         WGW_LOG("registering AES-128-CCM");
-        ret = gnutls_crypto_single_cipher_register(
-                GNUTLS_CIPHER_AES_128_CCM, 80, &wolfssl_cipher_aead_struct, 0);
+        ret = gnutls_crypto_single_cipher_register(GNUTLS_CIPHER_AES_128_CCM,
+            80, &wolfssl_cipher_aead_only_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering AES-128-CCM failed");
             return ret;
@@ -1263,8 +1482,8 @@ static int wolfssl_cipher_register(void)
     /* Register AES-256-CCM */
     if (wolfssl_cipher_supported[GNUTLS_CIPHER_AES_256_CCM]) {
         WGW_LOG("registering AES-256-CCM");
-        ret = gnutls_crypto_single_cipher_register(
-                GNUTLS_CIPHER_AES_256_CCM, 80, &wolfssl_cipher_aead_struct, 0);
+        ret = gnutls_crypto_single_cipher_register(GNUTLS_CIPHER_AES_256_CCM,
+            80, &wolfssl_cipher_aead_only_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering AES-256-CCM failed");
             return ret;
@@ -1275,7 +1494,7 @@ static int wolfssl_cipher_register(void)
     if (wolfssl_cipher_supported[GNUTLS_CIPHER_AES_128_CCM_8]) {
         WGW_LOG("registering AES-128-CCM-8");
         ret = gnutls_crypto_single_cipher_register(GNUTLS_CIPHER_AES_128_CCM_8,
-            80, &wolfssl_cipher_aead_struct, 0);
+            80, &wolfssl_cipher_aead_only_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering AES-128-CCM-8 failed");
             return ret;
@@ -1286,7 +1505,7 @@ static int wolfssl_cipher_register(void)
     if (wolfssl_cipher_supported[GNUTLS_CIPHER_AES_256_CCM_8]) {
         WGW_LOG("registering AES-256-CCM-8");
         ret = gnutls_crypto_single_cipher_register(GNUTLS_CIPHER_AES_256_CCM_8,
-            80, &wolfssl_cipher_aead_struct, 0);
+            80, &wolfssl_cipher_aead_only_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering AES-256-CCM-8 failed");
             return ret;
@@ -1754,11 +1973,9 @@ static size_t cmac_alg_key_size(gnutls_mac_algorithm_t algorithm)
 {
     if (algorithm == GNUTLS_MAC_AES_CMAC_128) {
         return AES_128_KEY_SIZE;
-    }
-    else if (algorithm == GNUTLS_MAC_AES_CMAC_256) {
+    } else if (algorithm == GNUTLS_MAC_AES_CMAC_256) {
         return AES_256_KEY_SIZE;
-    }
-    else {
+    } else {
          WGW_LOG("Unsupported algorithm: %d\n", algorithm);
          return (size_t)-1;
     }
@@ -2077,14 +2294,11 @@ static size_t gmac_alg_key_size(gnutls_mac_algorithm_t algorithm)
 {
     if (algorithm == GNUTLS_MAC_AES_GMAC_128) {
         return AES_128_KEY_SIZE;
-    }
-    else if (algorithm == GNUTLS_MAC_AES_GMAC_192) {
+    } else if (algorithm == GNUTLS_MAC_AES_GMAC_192) {
         return AES_192_KEY_SIZE;
-    }
-    else if (algorithm == GNUTLS_MAC_AES_GMAC_256) {
+    } else if (algorithm == GNUTLS_MAC_AES_GMAC_256) {
         return AES_256_KEY_SIZE;
-    }
-    else {
+    } else {
          WGW_LOG("Unsupported algorithm: %d\n", algorithm);
          return (size_t)-1;
     }
