@@ -64,6 +64,14 @@ void __attribute__((constructor)) wolfssl_init(void) {
 #endif
 
 /**
+ * Log an error message that can be printed with printf formating.
+ *
+ * @param [in] fmt   Format of string to print.
+ * @param [in] args  Arguments to use when printing.
+ */
+#define WGW_ERROR(fmt, args...)    wgw_log(__LINE__, "ERROR: " fmt, ## args)
+
+/**
  * Log a message that can be printed with printf formating.
  *
  * @param [in] fmt   Format of string to print.
@@ -129,7 +137,7 @@ struct cache_dec_loc {
     size_t size;
 };
 
-/** Context structure for wolfssl AES. */
+/** Context structure for wolfSSL AES. */
 struct wolfssl_cipher_ctx {
     union {
         struct {
@@ -219,13 +227,8 @@ static const int wolfssl_cipher_supported[] = {
  */
 static int is_cipher_supported(int algorithm)
 {
-    if (algorithm >= 0 && algorithm < WOLFSSL_CIPHER_SUPPORTED_LEN &&
-            wolfssl_cipher_supported[algorithm] == 1) {
-        return 1;
-    }
-
-    WGW_LOG("cipher %d is not supported", algorithm);
-    return 0;
+    return (algorithm >= 0 && algorithm < WOLFSSL_CIPHER_SUPPORTED_LEN &&
+            wolfssl_cipher_supported[algorithm] == 1);
 }
 
 /**
@@ -299,14 +302,14 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 
     /* check if cipher is supported */
     if (!is_cipher_supported((int)algorithm)) {
-        WGW_LOG("Cipher not supported: %d", algorithm);
+        WGW_ERROR("cipher %d is not supported", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* allocate context */
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_cipher_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -466,7 +469,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     WGW_LOG("keysize %zu", keysize);
 
     if (!ctx->initialized) {
-        WGW_LOG("cipher context not initialized");
+        WGW_ERROR("cipher context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -474,12 +477,12 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     exp_key_size = get_cipher_key_size(ctx->algorithm);
     /* Check if key size was found. */
     if (exp_key_size == 0) {
-        WGW_LOG("Key size not supported for algorithm: %d", ctx->algorithm);
+        WGW_ERROR("Key size not supported for algorithm: %d", ctx->algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
     /* Check key size is the expected length. */
     if (keysize != exp_key_size) {
-        WGW_LOG("Key size is not the expected length: %d != %d (%d)", keysize,
+        WGW_ERROR("Key size is not the expected length: %d != %d (%d)", keysize,
             exp_key_size, ctx->algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
@@ -488,7 +491,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     if (ctx->mode == XTS) {
         /* XTS has two AES keys that are no allowed to be the same. */
         if (XMEMCMP(key, key + exp_key_size / 2, exp_key_size / 2) == 0) {
-            WGW_LOG("XTS keys are the same");
+            WGW_ERROR("XTS keys are the same");
             return GNUTLS_E_INVALID_REQUEST;
         }
     }
@@ -553,7 +556,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
             }
             break;
         default:
-            WGW_LOG("AES mode not supported: %d", ctx->mode);
+            WGW_ERROR("AES mode not supported: %d", ctx->mode);
             return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -629,7 +632,7 @@ static int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
     }
     /* Check IV size range. */
     if (iv_size < min_size || iv_size > max_size) {
-        WGW_LOG("IV out of range: %d <= %d <= %d (%d)", min_size, iv_size,
+        WGW_ERROR("IV out of range: %d <= %d <= %d (%d)", min_size, iv_size,
             max_size, ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
@@ -674,7 +677,7 @@ static int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
             break;
     #endif
         default:
-            WGW_LOG("encryption/decryption struct not correctly initialized");
+            WGW_ERROR("encryption/decryption struct not correctly initialized");
             return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -699,19 +702,19 @@ static int wolfssl_cipher_getiv(void *_ctx, void *iv, size_t iv_size)
     struct wolfssl_cipher_ctx *ctx = _ctx;
 
     if (!ctx->initialized) {
-        WGW_LOG("cipher context not initialized");
+        WGW_ERROR("cipher context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Only CFB8 supported. */
     if (ctx->mode != CFB8) {
-        WGW_LOG("Mode not supported: ", ctx->mode);
+        WGW_ERROR("Mode not supported: ", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check buffer is big enough. */
     if (iv_size < ctx->iv_size) {
-        WGW_LOG("IV buffer too small");
+        WGW_ERROR("IV buffer too small");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
@@ -741,20 +744,20 @@ static int wolfssl_cipher_auth(void *_ctx, const void *auth_data,
     WGW_LOG("auth_size %zu", auth_size);
 
     if (!ctx->initialized) {
-        WGW_LOG("cipher context not initialized");
+        WGW_ERROR("cipher context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check authentication data will fit in cache. */
     if (ctx->auth_data_size + auth_size > sizeof(ctx->auth_data)) {
-        WGW_LOG("Auth data too big: %ld + %ld > %ld", ctx->auth_data_size,
+        WGW_ERROR("Auth data too big: %ld + %ld > %ld", ctx->auth_data_size,
             auth_size, sizeof(ctx->auth_data));
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
     /* Streaming must be a multiple of block size except for last. */
     if ((ctx->auth_data_size % AES_BLOCK_SIZE) != 0) {
-        WGW_LOG("Can only do multiple updates if multiple of block size");
+        WGW_ERROR("Can only do multiple updates if multiple of block size");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -790,19 +793,19 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
     WGW_LOG("data size %zu", src_size);
 
     if (!ctx->initialized) {
-        WGW_LOG("cipher context not initialized");
+        WGW_ERROR("cipher context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check if encryption context is initialized. */
     if (!ctx->enc_initialized) {
-        WGW_LOG("encryption context not initialized");
+        WGW_ERROR("encryption context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check destination is big enough for encrypted data. */
     if (dst_size < src_size) {
-        WGW_LOG("Destination size is too small for source size");
+        WGW_ERROR("Destination size is too small for source size");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
@@ -811,7 +814,7 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
 
         /* Check block alignment for CBC mode. */
         if (src_size % AES_BLOCK_SIZE != 0) {
-            WGW_LOG("Source size not a multiple of the block size");
+            WGW_ERROR("Source size not a multiple of the block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
@@ -831,19 +834,19 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
 
         /* Streaming must be a multiple of block size except for last. */
         if ((ctx->data_size % AES_BLOCK_SIZE) != 0) {
-            WGW_LOG("Can only do multiple updates if multiple of block size");
+            WGW_ERROR("Can only do multiple updates if multiple of block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
         if (ctx->data_size + src_size > MAX_AES_GCM_PLAINTEXT) {
-            WGW_LOG("too much data for one request");
+            WGW_ERROR("too much data for one request");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
         /* Add the new plaintext on to the existing buffer. */
         ptr = gnutls_realloc(ctx->data, ctx->data_size + src_size);
         if (ptr == NULL) {
-            WGW_LOG("realloc of gmac data failed");
+            WGW_ERROR("realloc of gmac data failed");
             return GNUTLS_E_INVALID_REQUEST;
         }
         ctx->data = ptr;
@@ -853,7 +856,7 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
         /* Allocate an encrypted data buffer to encrypt all plaintext into. */
         encr = gnutls_malloc(ctx->data_size + src_size);
         if (ptr == NULL) {
-            WGW_LOG("realloc of gmac data failed");
+            WGW_ERROR("realloc of gmac data failed");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
@@ -902,7 +905,7 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
         }
 #endif
     } else {
-        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        WGW_ERROR("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -934,19 +937,19 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
     WGW_LOG("data size %zu", src_size);
 
     if (!ctx->initialized) {
-        WGW_LOG("decryption failed - context not initialized");
+        WGW_ERROR("decryption failed - context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check if decryption context is initialized. */
     if (!ctx->dec_initialized) {
-        WGW_LOG("decryption context not initialized");
+        WGW_ERROR("decryption context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check destination is big enough for encrypted data. */
     if (dst_size < src_size) {
-        WGW_LOG("Destination size is too small for source size");
+        WGW_ERROR("Destination size is too small for source size");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
@@ -955,7 +958,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
 
         /* Check block alignment for CBC mode. */
         if (src_size % AES_BLOCK_SIZE != 0) {
-            WGW_LOG("Source size not a multiple of the block size");
+            WGW_ERROR("Source size not a multiple of the block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
@@ -975,14 +978,14 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
 
         /* Streaming must be a multiple of block size except for last. */
         if ((ctx->data_size % AES_BLOCK_SIZE) != 0) {
-            WGW_LOG("Can only do multiple updates if multiple of block size");
+            WGW_ERROR("Can only do multiple updates if multiple of block size");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
         /* Add the new ciphertext on to the existing buffer. */
         ptr = gnutls_realloc(ctx->data, ctx->data_size + src_size);
         if (ptr == NULL) {
-            WGW_LOG("realloc of encrypted data failed");
+            WGW_ERROR("realloc of encrypted data failed");
             return GNUTLS_E_INVALID_REQUEST;
         }
         ctx->data = ptr;
@@ -992,7 +995,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         /* Allocate a decrypted data buffer to decrypt all ciphertext into. */
         decr = gnutls_malloc(ctx->data_size + src_size);
         if (ptr == NULL) {
-            WGW_LOG("realloc of decrypted data failed");
+            WGW_ERROR("realloc of decrypted data failed");
             return GNUTLS_E_INVALID_REQUEST;
         }
 
@@ -1065,7 +1068,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         }
 #endif
     } else {
-        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        WGW_ERROR("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -1183,14 +1186,14 @@ static int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
     WGW_FUNC_ENTER();
 
     if (!ctx->initialized) {
-        WGW_LOG("aead encrypt failed - context not initialized");
+        WGW_ERROR("aead encrypt failed - context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check encrypted data is big enough for ciphertext and tag. */
     if (encr_size < plain_size + tag_size) {
-        WGW_LOG("encrypted size too small: %d < %d + %d", encr_size, plain_size,
-            tag_size);
+        WGW_ERROR("encrypted size too small: %d < %d + %d", encr_size,
+            plain_size, tag_size);
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
@@ -1215,7 +1218,7 @@ static int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
     } else {
-        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        WGW_ERROR("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -1253,13 +1256,13 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
     WGW_FUNC_ENTER();
 
     if (!ctx->initialized) {
-        WGW_LOG("aead decrypt failed - context not initialized");
+        WGW_ERROR("aead decrypt failed - context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check decrypted data is big enough for ciphertext. */
     if (plain_size + tag_size < encr_size) {
-        WGW_LOG("plain size too small: %d + %d < %d ", plain_size, tag_size,
+        WGW_ERROR("plain size too small: %d + %d < %d ", plain_size, tag_size,
             encr_size);
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
@@ -1290,7 +1293,7 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
         }
         return 0;
     } else {
-        WGW_LOG("AES mode not supported: %d", ctx->mode);
+        WGW_ERROR("AES mode not supported: %d", ctx->mode);
         return GNUTLS_E_INVALID_REQUEST;
     }
 }
@@ -1576,7 +1579,10 @@ static int wolfssl_cipher_register(void)
 
 /*************************** MAC algorithms (HMAC) ***************************/
 
-/** Context for wolfssl HMAC. */
+/** Maximum size of a digest output from a HMAC operation. */
+#define MAX_HMAC_DIGEST_SIZE    WC_SHA512_DIGEST_SIZE
+
+/** Context for wolfSSL HMAC. */
 struct wolfssl_hmac_ctx {
     /** wolfSSL HMAC object. */
     Hmac hmac_ctx;
@@ -1646,13 +1652,8 @@ static int get_hash_type(gnutls_mac_algorithm_t algorithm)
  */
 static int is_mac_supported(gnutls_mac_algorithm_t algorithm)
 {
-    if (algorithm >= 0 && algorithm < WOLFSSL_MAC_SUPPORTED_LEN &&
-            wolfssl_mac_supported[algorithm]) {
-        return 1;
-    }
-
-    WGW_LOG("mac algorithm %d is not supported", algorithm);
-    return 0;
+    return (algorithm >= 0 && algorithm < WOLFSSL_MAC_SUPPORTED_LEN &&
+            wolfssl_mac_supported[algorithm]);
 }
 
 /**
@@ -1673,19 +1674,20 @@ static int wolfssl_hmac_init(gnutls_mac_algorithm_t algorithm, void **_ctx)
     WGW_FUNC_ENTER();
     WGW_LOG("HMAC algorithm %d", algorithm);
 
-    /* check if mac is supported */
+    /* Check if MAC algorithm is supported. */
     if (!is_mac_supported(algorithm)) {
+        WGW_ERROR("mac algorithm %d is not supported", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* allocate context */
+    /* Allocate context. */
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_hmac_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
-    /* initialize wolfSSL HMAC context */
+    /* Initialize wolfSSL HMAC context. */
     ret = wc_HmacInit(&ctx->hmac_ctx, NULL, INVALID_DEVID);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HmacInit", ret);
@@ -1722,18 +1724,18 @@ static int wolfssl_hmac_setkey(void *_ctx, const void *key, size_t keysize)
     WGW_LOG("keysize %zu", keysize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* get wolfssl hash type */
+    /* Get wolfSSL hash type. */
     hash_type = get_hash_type(ctx->algorithm);
     if (hash_type < 0) {
-        WGW_LOG("HMAC algorithm not supported");
+        WGW_ERROR("HMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* set the key */
+    /* Set the key. */
     ret = wc_HmacSetKey(&ctx->hmac_ctx, hash_type, (const byte*)key,
         (word32)keysize);
     if (ret != 0) {
@@ -1754,7 +1756,7 @@ static int wolfssl_hmac_setkey(void *_ctx, const void *key, size_t keysize)
  * @param [in]      textsize  Size of text in bytes.
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when context is not initialized.
- * @return  GNUTLS_E_HASH_FAILED when wolfssl HMAC update fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL HMAC update fails.
  */
 static int wolfssl_hmac_hash(void *_ctx, const void *text, size_t textsize)
 {
@@ -1765,7 +1767,7 @@ static int wolfssl_hmac_hash(void *_ctx, const void *text, size_t textsize)
     WGW_LOG("data size %zu", textsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -1777,7 +1779,7 @@ static int wolfssl_hmac_hash(void *_ctx, const void *text, size_t textsize)
             size = textsize;
         }
 
-        /* update the hmac */
+        /* Update the HMAC. */
         ret = wc_HmacUpdate(&ctx->hmac_ctx, (const byte*)text, size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_HmacUpdate", ret);
@@ -1817,24 +1819,24 @@ static int wolfssl_hmac_output(void *_ctx, void *digest, size_t digestsize)
     WGW_LOG("digestsize %zu", digestsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* get the digest size based on the hash algorithm */
+    /* Get the digest size based on the hash algorithm. */
     digest_size = wc_HmacSizeByType(get_hash_type(ctx->algorithm));
     if (digest_size <= 0) {
-        WGW_LOG("HMAC not supported");
+        WGW_ERROR("HMAC not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* make sure the output buffer is large enough */
+    /* Make sure the output buffer is large enough. */
     if (digestsize < (size_t)digest_size) {
-        WGW_LOG("digestsize too small");
+        WGW_ERROR("digestsize too small");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
-    /* finalize the hmac and get the result */
+    /* Finalize the HMAC and get the result. */
     ret = wc_HmacFinal(&ctx->hmac_ctx, (byte*)digest);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HmacFinal", ret);
@@ -1855,7 +1857,7 @@ static void wolfssl_hmac_deinit(void *_ctx)
 {
     struct wolfssl_hmac_ctx *ctx = _ctx;
 
-    WGW_LOG("wolfssl_hmac_deinit");
+    WGW_FUNC_ENTER();
 
     if (ctx && ctx->initialized) {
         /* free the wolfSSL HMAC context */
@@ -1876,7 +1878,7 @@ static void wolfssl_hmac_deinit(void *_ctx)
  * @return 0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when digest algorithm is not supported.
  * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
- * @return  GNUTLS_E_HASH_FAILED when wolfSSL  operation fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL operation fails.
  */
 static int wolfssl_hmac_fast(gnutls_mac_algorithm_t algorithm,
     const void *nonce, size_t nonce_size, const void *key, size_t keysize,
@@ -1909,8 +1911,8 @@ static int wolfssl_hmac_fast(gnutls_mac_algorithm_t algorithm,
         return ret;
     }
 
-    /* Output the MAC. */
-    ret = wolfssl_hmac_output(ctx, digest, WC_SHA512_DIGEST_SIZE);
+    /* Output the MAC - pass in maximum size to ensure length test passes. */
+    ret = wolfssl_hmac_output(ctx, digest, MAX_HMAC_DIGEST_SIZE);
     if (ret != 0) {
         wolfssl_hmac_deinit(ctx);
         return ret;
@@ -1943,16 +1945,11 @@ static const gnutls_crypto_mac_st wolfssl_mac_struct = {
  */
 static int is_mac_cmac(gnutls_mac_algorithm_t algorithm)
 {
-    if (algorithm == GNUTLS_MAC_AES_CMAC_128 ||
-            algorithm == GNUTLS_MAC_AES_CMAC_256) {
-        return 1;
-    }
-
-    WGW_LOG("mac algorithm %d is not CMAC", algorithm);
-    return 0;
+    return (algorithm == GNUTLS_MAC_AES_CMAC_128 ||
+            algorithm == GNUTLS_MAC_AES_CMAC_256);
 }
 
-/** Context for wolfssl CMAC. */
+/** Context for wolfSSL CMAC. */
 struct wolfssl_cmac_ctx {
     /** wolfSSL CMAC object. */
     Cmac cmac_ctx;
@@ -1976,8 +1973,7 @@ static size_t cmac_alg_key_size(gnutls_mac_algorithm_t algorithm)
     } else if (algorithm == GNUTLS_MAC_AES_CMAC_256) {
         return AES_256_KEY_SIZE;
     } else {
-         WGW_LOG("Unsupported algorithm: %d\n", algorithm);
-         return (size_t)-1;
+        return (size_t)-1;
     }
 }
 
@@ -1998,20 +1994,22 @@ static int wolfssl_cmac_init(gnutls_mac_algorithm_t algorithm, void **_ctx)
     WGW_FUNC_ENTER();
     WGW_LOG("CMAC algorithm %d", algorithm);
 
-    /* check if mac is supported */
+    /* Check if mac is supported. */
     if (!is_mac_supported(algorithm)) {
+        WGW_ERROR("mac algorithm %d is not supported", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Check if mac is CMAC. */
+    /* Check if MAC algorithm is a CMAC. */
     if (!is_mac_cmac(algorithm)) {
+        WGW_ERROR("Unsupported algorithm: %d\n", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* allocate context */
+    /* Allocate context. */
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_cmac_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -2019,7 +2017,7 @@ static int wolfssl_cmac_init(gnutls_mac_algorithm_t algorithm, void **_ctx)
     ctx->algorithm = algorithm;
     *_ctx = ctx;
 
-    WGW_LOG("cmac context initialized successfully");
+    WGW_LOG("CMAC context initialized successfully");
     return 0;
 }
 
@@ -2043,13 +2041,13 @@ static int wolfssl_cmac_setkey(void *_ctx, const void *key, size_t keysize)
     WGW_LOG("keysize %zu", keysize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check key size. */
     if (keysize != cmac_alg_key_size(ctx->algorithm)) {
-        WGW_LOG("CMAC algorithm not supported");
+        WGW_ERROR("CMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -2074,7 +2072,7 @@ static int wolfssl_cmac_setkey(void *_ctx, const void *key, size_t keysize)
  * @param [in]      textsize  Size of text in bytes.
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when context is not initialized.
- * @return  GNUTLS_E_HASH_FAILED when wolfssl CMAC update fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL CMAC update fails.
  */
 static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
 {
@@ -2085,7 +2083,7 @@ static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
     WGW_LOG("data size %zu", textsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -2097,7 +2095,7 @@ static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
             size = textsize;
         }
 
-        /* update the cmac */
+        /* Update CMAC. */
         ret = wc_CmacUpdate(&ctx->cmac_ctx, (const byte*)text, size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_CmacUpdate", ret);
@@ -2136,17 +2134,17 @@ static int wolfssl_cmac_output(void *_ctx, void *digest, size_t digestsize)
     WGW_LOG("digestsize %zu", digestsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* make sure the output buffer is large enough */
+    /* Make sure output buffer is large enough. */
     if (digestsize < WC_CMAC_TAG_MIN_SZ) {
-        WGW_LOG("digestsize too small");
+        WGW_ERROR("digestsize too small");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
-    /* finalize the cmac and get the result */
+    /* Finalize CMAC and get the result. */
     ret = wc_CmacFinal(&ctx->cmac_ctx, (byte*)digest, &digest_size);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_CmacFinal", ret);
@@ -2187,7 +2185,7 @@ static void wolfssl_cmac_deinit(void *_ctx)
  * @return 0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when digest algorithm is not supported.
  * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
- * @return  GNUTLS_E_HASH_FAILED when wolfSSL  operation fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL operation fails.
  */
 static int wolfssl_cmac_fast(gnutls_mac_algorithm_t algorithm,
     const void *nonce, size_t nonce_size, const void *key, size_t keysize,
@@ -2254,22 +2252,17 @@ static const gnutls_crypto_mac_st wolfssl_cmac_struct = {
  */
 static int is_mac_gmac(gnutls_mac_algorithm_t algorithm)
 {
-    if (algorithm == GNUTLS_MAC_AES_GMAC_128 ||
-            algorithm == GNUTLS_MAC_AES_GMAC_192  ||
-            algorithm == GNUTLS_MAC_AES_GMAC_256) {
-        return 1;
-    }
-
-    WGW_LOG("mac algorithm %d is not GMAC", algorithm);
-    return 0;
+    return (algorithm == GNUTLS_MAC_AES_GMAC_128 ||
+            algorithm == GNUTLS_MAC_AES_GMAC_192 ||
+            algorithm == GNUTLS_MAC_AES_GMAC_256);
 }
 
-/** Context for wolfssl GMAC. */
+/** Context for wolfSSL GMAC. */
 struct wolfssl_gmac_ctx {
     /** wolfSSL GMAC object. */
     Gmac gmac_ctx;
     /** Indicates that this context as been initialized. */
-    int initialized;
+    int initialized:1;
     /** The GnuTLS cipher algorithm ID. */
     gnutls_mac_algorithm_t algorithm;
     /** Nonce. */
@@ -2298,10 +2291,9 @@ static size_t gmac_alg_key_size(gnutls_mac_algorithm_t algorithm)
         return AES_192_KEY_SIZE;
     } else if (algorithm == GNUTLS_MAC_AES_GMAC_256) {
         return AES_256_KEY_SIZE;
-    } else {
-         WGW_LOG("Unsupported algorithm: %d\n", algorithm);
-         return (size_t)-1;
     }
+
+    return (size_t)-1;
 }
 
 /**
@@ -2322,24 +2314,26 @@ static int wolfssl_gmac_init(gnutls_mac_algorithm_t algorithm, void **_ctx)
     WGW_FUNC_ENTER();
     WGW_LOG("GMAC algorithm %d", algorithm);
 
-    /* check if mac is supported */
+    /* Check if MAC algorithm is supported */
     if (!is_mac_supported(algorithm)) {
+        WGW_ERROR("mac algorithm %d is not supported", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Check if mac is GMAC. */
+    /* Check if MAC algorithm is a GMAC. */
     if (!is_mac_gmac(algorithm)) {
+        WGW_ERROR("mac algorithm %d is not GMAC", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* allocate context */
+    /* Allocate context. */
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_gmac_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
-    /* initialize wolfSSL GMAC context */
+    /* Initialize wolfSSL GMAC context. */
     ret = wc_AesInit(&ctx->gmac_ctx.aes, NULL, INVALID_DEVID);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_AesInit", ret);
@@ -2375,13 +2369,13 @@ static int wolfssl_gmac_setkey(void *_ctx, const void *key, size_t keysize)
     WGW_LOG("keysize %zu", keysize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     /* Check the key size is valid for algorithm. */
     if (keysize != gmac_alg_key_size(ctx->algorithm)) {
-        WGW_LOG("GMAC algorithm not supported");
+        WGW_ERROR("GMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -2417,12 +2411,13 @@ static int wolfssl_gmac_setnonce(void *_ctx, const void *nonce,
     WGW_LOG("nonce_size %zu", nonce_size);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Check nonce is valid size. */
     if (nonce_size < GCM_NONCE_MIN_SZ || nonce_size > GCM_NONCE_MAX_SZ) {
-        WGW_LOG("Nonce size not supported: %d", nonce_size);
+        WGW_ERROR("Nonce size not supported: %d", nonce_size);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -2442,7 +2437,7 @@ static int wolfssl_gmac_setnonce(void *_ctx, const void *nonce,
  * @param [in]      textsize  Size of text in bytes.
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when context is not initialized.
- * @return  GNUTLS_E_HASH_FAILED when wolfssl GMAC update fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL GMAC update fails.
  */
 static int wolfssl_gmac_hash(void *_ctx, const void *text, size_t textsize)
 {
@@ -2453,17 +2448,20 @@ static int wolfssl_gmac_hash(void *_ctx, const void *text, size_t textsize)
     WGW_LOG("data size %zu", textsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Increase size of cached data. */
     ptr = gnutls_realloc(ctx->data, ctx->data_size + textsize);
     if (ptr == NULL) {
-        WGW_LOG("realloc of gmac data failed");
+        WGW_ERROR("realloc of gmac data failed");
         return GNUTLS_E_HASH_FAILED;
     }
 
+    /* Replace pointer with new resized one. */
     ctx->data = ptr;
+    /* Add to cached data. */
     XMEMCPY(ctx->data + ctx->data_size, text, textsize);
     ctx->data_size += textsize;
 
@@ -2493,18 +2491,20 @@ static int wolfssl_gmac_output(void *_ctx, void *digest, size_t digestsize)
     WGW_LOG("digestsize %zu", digestsize);
 
     if (!ctx->initialized) {
-        WGW_LOG("MAC context not initialized");
+        WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* make sure the output buffer is large enough */
+    /* Make sure the output buffer is large enough. */
     if (digestsize < AES_BLOCK_SIZE) {
-        WGW_LOG("digestsize too small");
+        WGW_ERROR("digestsize too small");
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
+    /* Update all data at once. */
     ret = wc_GmacUpdate(&ctx->gmac_ctx, ctx->nonce, ctx->nonce_size, ctx->data,
         ctx->data_size, digest, digestsize);
+    /* Dispose of data. */
     gnutls_free(ctx->data);
     ctx->data = NULL;
     if (ret != 0) {
@@ -2528,7 +2528,7 @@ static void wolfssl_gmac_deinit(void *_ctx)
     WGW_LOG("wolfssl_gmac_deinit");
 
     if (ctx && ctx->initialized) {
-        /* free the wolfSSL GMAC context */
+        /* Free the wolfSSL GMAC context. */
         gnutls_free(ctx->data);
         wc_AesFree(&ctx->gmac_ctx.aes);
         ctx->initialized = 0;
@@ -2547,7 +2547,7 @@ static void wolfssl_gmac_deinit(void *_ctx)
  * @return 0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when digest algorithm is not supported.
  * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
- * @return  GNUTLS_E_HASH_FAILED when wolfSSL  operation fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL operation fails.
  */
 static int wolfssl_gmac_fast(gnutls_mac_algorithm_t algorithm,
     const void *nonce, size_t nonce_size, const void *key, size_t keysize,
@@ -2754,20 +2754,14 @@ struct wolfssl_hash_ctx {
         wc_Sha512 sha512;
         /** wolfSSL SHA-512 object.  */
         wc_Sha3   sha3;
-    #if defined(WOLFSSL_SHAKE128) || defined(WOLFSSL_SHAKE256)
-        wc_Shake  shake;
-    #endif
     } obj;
     /** The GnuTLS digest algorithm ID. */
     gnutls_digest_algorithm_t algorithm;
     /** Indicates that this context as been initialized. */
-    int initialized;
-#if defined(WOLFSSL_SHAKE128) || defined(WOLFSSL_SHAKE256)
-    int squeezing;
-#endif
+    int initialized:1;
 };
 
-/** Array of supported ciphers. */
+/** Array of supported digests. */
 static const int wolfssl_digest_supported[] = {
     [GNUTLS_DIG_MD5] = 1,
     [GNUTLS_DIG_SHA1] = 1,
@@ -2779,12 +2773,6 @@ static const int wolfssl_digest_supported[] = {
     [GNUTLS_DIG_SHA3_256] = 1,
     [GNUTLS_DIG_SHA3_384] = 1,
     [GNUTLS_DIG_SHA3_512] = 1,
-#ifdef WOLFSSL_SHAKE128
-    [GNUTLS_DIG_SHAKE_128] = 1,
-#endif
-#ifdef WOLFSSL_SHAKE256
-    [GNUTLS_DIG_SHAKE_256] = 1,
-#endif
 };
 /** Length of array of supported digests. */
 #define WOLFSSL_DIGEST_SUPPORTED_LEN (int)(sizeof(wolfssl_digest_supported) / \
@@ -2799,17 +2787,12 @@ static const int wolfssl_digest_supported[] = {
  */
 static int is_digest_supported(int algorithm)
 {
-    if (algorithm >= 0 && algorithm < WOLFSSL_DIGEST_SUPPORTED_LEN &&
-            wolfssl_digest_supported[algorithm] == 1) {
-        return 1;
-    }
-
-    WGW_LOG("digest %d is not supported", algorithm);
-    return 0;
+    return (algorithm >= 0 && algorithm < WOLFSSL_DIGEST_SUPPORTED_LEN &&
+            wolfssl_digest_supported[algorithm] == 1);
 }
 
 /**
- * Initialize the wolfssl digest.
+ * Initialize the wolfSSL digest.
  *
  * @param [in, out] ctx  Hash context.
  * @return  0 on success.
@@ -2820,7 +2803,7 @@ static int wolfssl_digest_init_alg(struct wolfssl_hash_ctx *ctx)
     int ret = -1;
     gnutls_digest_algorithm_t algorithm = ctx->algorithm;
 
-    /* initialize the wolfssl digest object */
+    /* initialize the wolfSSL digest object */
     if (algorithm == GNUTLS_DIG_MD5) {
         ret = wc_InitMd5(&ctx->obj.md5);
     } else if (algorithm == GNUTLS_DIG_SHA1) {
@@ -2841,14 +2824,6 @@ static int wolfssl_digest_init_alg(struct wolfssl_hash_ctx *ctx)
         ret = wc_InitSha3_384(&ctx->obj.sha3, NULL, INVALID_DEVID);
     } else if (algorithm == GNUTLS_DIG_SHA3_512) {
         ret = wc_InitSha3_512(&ctx->obj.sha3, NULL, INVALID_DEVID);
-#ifdef WOLFSSL_SHAKE128
-    } else if (algorithm == GNUTLS_DIG_SHAKE_128) {
-        ret = wc_InitShake128(&ctx->obj.shake, NULL, INVALID_DEVID);
-#endif
-#ifdef WOLFSSL_SHAKE256
-    } else if (algorithm == GNUTLS_DIG_SHAKE_256) {
-        ret = wc_InitShake256(&ctx->obj.shake, NULL, INVALID_DEVID);
-#endif
     }
 
     return ret;
@@ -2871,18 +2846,20 @@ static int wolfssl_digest_init(gnutls_digest_algorithm_t algorithm, void **_ctx)
     WGW_FUNC_ENTER();
     WGW_LOG("Digest algorithm %d", algorithm);
 
-    /* return error if digest's not supported */
+    /* Return error if digest's not supported */
     if (!is_digest_supported(algorithm)) {
+        WGW_ERROR("digest %d is not supported", algorithm);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* allocate gnutls context */
+    /* Allocate context. */
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_hash_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Set algorithm. */
     ctx->algorithm = algorithm;
 
     /* Initialize digest. */
@@ -2917,16 +2894,9 @@ static int wolfssl_digest_hash(void *_ctx, const void *text, size_t textsize)
     WGW_FUNC_ENTER();
 
     if (!ctx->initialized) {
-        WGW_LOG("Digest context not initialized");
+        WGW_ERROR("Digest context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
-
-#if defined(WOLFSSL_SHAKE128) || defined(WOLFSSL_SHAKE256)
-    if (ctx->squeezing) {
-        WGW_LOG("SHAKE is already aqueezing");
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-#endif
 
     /* Can only do 32-bit sized updates at a time. */
     do {
@@ -2936,7 +2906,7 @@ static int wolfssl_digest_hash(void *_ctx, const void *text, size_t textsize)
             size = textsize;
         }
 
-        /* update the wolfssl digest object with data */
+        /* Update the wolfSSL digest object with data */
         if (ctx->algorithm == GNUTLS_DIG_MD5) {
             ret = wc_Md5Update(&ctx->obj.md5, (const byte*)text, size);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
@@ -2957,14 +2927,6 @@ static int wolfssl_digest_hash(void *_ctx, const void *text, size_t textsize)
             ret = wc_Sha3_384_Update(&ctx->obj.sha3, (const byte*)text, size);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA3_512) {
             ret = wc_Sha3_512_Update(&ctx->obj.sha3, (const byte*)text, size);
-    #ifdef WOLFSSL_SHAKE128
-        } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
-            ret = wc_Shake128_Update(&ctx->obj.shake, (const byte*)text, size);
-    #endif
-    #ifdef WOLFSSL_SHAKE256
-        } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
-            ret = wc_Shake256_Update(&ctx->obj.shake, (const byte*)text, size);
-    #endif
         }
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wolfSSL digest update", ret);
@@ -2999,7 +2961,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
     WGW_FUNC_ENTER();
 
     if (!ctx->initialized) {
-        WGW_LOG("Digest context not initialized");
+        WGW_ERROR("Digest context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -3012,89 +2974,77 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         return 0;
     }
 
-    /* finalize the digest and get the result */
+    /* Finalize the digest and get the result. */
     if (ctx->algorithm == GNUTLS_DIG_MD5) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_MD5_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for MD5 output");
+            WGW_ERROR("digestsize too small for MD5 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Md5Final(&ctx->obj.md5, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA-1 output");
+            WGW_ERROR("digestsize too small for SHA-1 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_ShaFinal(&ctx->obj.sha, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA224) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA224_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA-224 output");
+            WGW_ERROR("digestsize too small for SHA-224 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha224Final(&ctx->obj.sha224, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA256) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA256_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA-256 output");
+            WGW_ERROR("digestsize too small for SHA-256 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha256Final(&ctx->obj.sha256, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA384) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA384_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA-384 output");
+            WGW_ERROR("digestsize too small for SHA-384 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha384Final(&ctx->obj.sha384, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA512) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA512_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA-512 output");
+            WGW_ERROR("digestsize too small for SHA-512 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha512Final(&ctx->obj.sha512, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_224) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_224_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA3-224 output");
+            WGW_ERROR("digestsize too small for SHA3-224 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha3_224_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_256) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_256_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA3-256 output");
+            WGW_ERROR("digestsize too small for SHA3-256 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha3_256_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_384) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_384_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA3-384 output");
+            WGW_ERROR("digestsize too small for SHA3-384 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha3_384_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_512) {
-        /* make sure the output buffer is large enough */
+        /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_512_DIGEST_SIZE) {
-            WGW_LOG("digestsize too small for SHA3-512 output");
+            WGW_ERROR("digestsize too small for SHA3-512 output");
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Sha3_512_Final(&ctx->obj.sha3, (byte*)digest);
-#ifdef WOLFSSL_SHAKE128
-    } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
-        ret = wc_Shake128_Final(&ctx->obj.shake, (byte*)digest, digestsize);
-        /* When squeezing, can no longer add data. */
-        ctx->squeezing = 1;
-#endif
-#ifdef WOLFSSL_SHAKE256
-    } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
-        ret = wc_Shake256_Final(&ctx->obj.sha3, (byte*)digest, digestsize);
-        /* When squeezing, can no longer add data. */
-        ctx->squeezing = 1;
-#endif
     }
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wolfSSL digest final", ret);
@@ -3116,7 +3066,7 @@ static void wolfssl_digest_deinit(void *_ctx)
     WGW_FUNC_ENTER();
 
     if (ctx && ctx->initialized) {
-        /* free the wolfssl digest object */
+        /* Free the wolfSSL digest object. */
         if (ctx->algorithm == GNUTLS_DIG_MD5) {
             wc_Md5Free(&ctx->obj.md5);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
@@ -3137,14 +3087,6 @@ static void wolfssl_digest_deinit(void *_ctx)
             wc_Sha3_384_Free(&ctx->obj.sha3);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA3_512) {
             wc_Sha3_512_Free(&ctx->obj.sha3);
-    #ifdef WOLFSSL_SHAKE128
-        } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
-            wc_Shake128_Free(&ctx->obj.shake);
-    #endif
-    #ifdef WOLFSSL_SHAKE256
-        } else if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
-            wc_Shake256_Free(&ctx->obj.shake);
-    #endif
         }
         ctx->initialized = 0;
     }
@@ -3162,7 +3104,7 @@ static void wolfssl_digest_deinit(void *_ctx)
  * @return 0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when digest algorithm is not supported.
  * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
- * @return  GNUTLS_E_HASH_FAILED when wolfSSL  operation fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL operation fails.
  */
 static int wolfssl_digest_fast(gnutls_digest_algorithm_t algorithm,
     const void *text, size_t textsize, void *digest)
@@ -3207,6 +3149,394 @@ static const gnutls_crypto_digest_st wolfssl_digest_struct = {
     .deinit = wolfssl_digest_deinit,
     .fast = wolfssl_digest_fast
 };
+
+#if defined(WOLFSSL_SHAKE128) || defined(WOLFSSL_SHAKE256)
+#ifdef WOLFSSL_SHAKE128
+/** Max block size. */
+#define MAX_SHAKE_BLOCK_SIZE    WC_SHA3_128_BLOCK_SIZE
+#else
+/** Max block size. */
+#define MAX_SHAKE_BLOCK_SIZE    WC_SHA3_256_BLOCK_SIZE
+#endif
+
+/** Context structure for Shake operations with wolfSSL. */
+struct wolfssl_shake_ctx {
+    wc_Shake  shake;
+    /** The GnuTLS digest algorithm ID. */
+    gnutls_digest_algorithm_t algorithm;
+    /** Indicates that this context as been initialized. */
+    int initialized:1;
+    /** Started squeezing - no more absorb calls allowed. */
+    int squeezing:1;
+    /** Output block. */
+    byte block[MAX_SHAKE_BLOCK_SIZE];
+    /** Number of bytes of block already returned. */
+    int used;
+};
+
+/** Array of supported Shakes. */
+static const int wolfssl_shake_supported[] = {
+#ifdef WOLFSSL_SHAKE128
+    [GNUTLS_DIG_SHAKE_128] = 1,
+#endif
+#ifdef WOLFSSL_SHAKE256
+    [GNUTLS_DIG_SHAKE_256] = 1,
+#endif
+};
+/** Length of array of supported digests. */
+#define WOLFSSL_SHAKE_SUPPORTED_LEN (int)(sizeof(wolfssl_shake_supported) / \
+                                          sizeof(wolfssl_shake_supported[0]))
+
+/**
+ * Check if GnuTLS Shake digest algorithm ID is supported.
+ *
+ * @param [in] algorithm  GnuTLS digest algorithm ID.
+ * @return  1 when supported.
+ * @return  0 when not supported.
+ */
+static int is_shake_supported(int algorithm)
+{
+    return (algorithm >= 0 && algorithm < WOLFSSL_SHAKE_SUPPORTED_LEN &&
+            wolfssl_shake_supported[algorithm] == 1);
+}
+
+/**
+ * Initialize the wolfSSL Shake.
+ *
+ * @param [in, out] ctx  Hash context.
+ * @return  0 on success.
+ * @return  Other value on failure.
+ */
+static int wolfssl_shake_init_alg(struct wolfssl_shake_ctx *ctx)
+{
+    int ret = -1;
+    gnutls_digest_algorithm_t algorithm = ctx->algorithm;
+
+    /* initialize the wolfSSL digest object */
+#ifdef WOLFSSL_SHAKE128
+    if (algorithm == GNUTLS_DIG_SHAKE_128) {
+        ret = wc_InitShake128(&ctx->shake, NULL, INVALID_DEVID);
+    }
+#endif
+#ifdef WOLFSSL_SHAKE256
+    if (algorithm == GNUTLS_DIG_SHAKE_256) {
+        ret = wc_InitShake256(&ctx->shake, NULL, INVALID_DEVID);
+    }
+#endif
+
+    return ret;
+}
+/**
+ * Initialize a Shake digest context.
+ *
+ * @param [in]  algorithm  GnuTLS Shake digest algorithm ID.
+ * @param [out] _ctx       Digest context.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when Shake digest algorithm is not
+ *           supported.
+ * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
+ * @return  GNUTLS_E_HASH_FAILED when initialization of Shake digest fails.
+ */
+static int wolfssl_shake_init(gnutls_digest_algorithm_t algorithm, void **_ctx)
+{
+    struct wolfssl_shake_ctx *ctx;
+    int ret;
+
+    WGW_FUNC_ENTER();
+    WGW_LOG("Digest algorithm %d", algorithm);
+
+    /* Return error if Shake digest is not supported */
+    if (!is_shake_supported(algorithm)) {
+        WGW_ERROR("Shake digest %d is not supported", algorithm);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Allocate context. */
+    ctx = gnutls_calloc(1, sizeof(struct wolfssl_shake_ctx));
+    if (ctx == NULL) {
+        WGW_ERROR("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* Initialize digest. */
+    ret = wolfssl_shake_init_alg(ctx);
+    if (ret != 0) {
+        WGW_WOLFSSL_ERROR("wolfSSL digest init", ret);
+        gnutls_free(ctx);
+        return GNUTLS_E_HASH_FAILED;
+    }
+
+    ctx->algorithm = algorithm;
+    ctx->initialized = 1;
+    *_ctx = ctx;
+
+    return 0;
+}
+
+/**
+ * Update the Shake digest with data.
+ *
+ * @param [in, out] _ctx      Digest context.
+ * @param [in]      text      Text to update digest with.
+ * @param [in]      textsize  Size of text in bytes.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when context not initialized.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL update operation fails.
+ */
+static int wolfssl_shake_hash(void *_ctx, const void *text, size_t textsize)
+{
+    struct wolfssl_shake_ctx *ctx = _ctx;
+    int ret = -1;
+
+    WGW_FUNC_ENTER();
+
+    if (!ctx->initialized) {
+        WGW_ERROR("Digest context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+#if defined(WOLFSSL_SHAKE128) || defined(WOLFSSL_SHAKE256)
+    if (ctx->squeezing) {
+        WGW_ERROR("SHAKE is already aqueezing");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+#endif
+
+    /* Can only do 32-bit sized updates at a time. */
+    do {
+        /* Use a max that is a multiple of the block size. */
+        word32 size = 0xfffffff0;
+        if (textsize < (size_t)size) {
+            size = textsize;
+        }
+
+        /* Update the wolfSSL Shake digest object with data */
+    #ifdef WOLFSSL_SHAKE128
+        if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
+            ret = wc_Shake128_Absorb(&ctx->shake, (const byte*)text, size);
+        }
+    #endif
+    #ifdef WOLFSSL_SHAKE256
+        if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
+            ret = wc_Shake256_Absorb(&ctx->shake, (const byte*)text, size);
+        }
+    #endif
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wolfSSL digest update", ret);
+            return GNUTLS_E_HASH_FAILED;
+        }
+
+        /* Move over processed text. */
+        text += size;
+        textsize -= size;
+    } while (textsize > 0);
+
+    return 0;
+}
+
+/**
+ * Output the Shake digest data.
+ *
+ * @param [in, out]  _ctx         Digest context.
+ * @param [out]      digest      Buffer to hold digest.
+ * @param [in]       digestsize  Size of buffer in bytes.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when context is not initialized.
+ * @return  GNUTLS_E_SHORT_MEMORY_BUFFER when digestsize is too small for HMAC
+ *          output.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL HMAC operation fails.
+ */
+static int wolfssl_shake_output(void *_ctx, void *digest, size_t digestsize)
+{
+    struct wolfssl_shake_ctx *ctx = _ctx;
+    int ret = -1;
+    size_t size;
+
+    WGW_FUNC_ENTER();
+
+    if (!ctx->initialized) {
+        WGW_ERROR("Digest context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (digest == NULL) {
+        /* No output buffer means to discard result and re-initialize. */
+        ret = wolfssl_shake_init_alg(ctx);
+        if (ret != 0) {
+            return GNUTLS_E_HASH_FAILED;
+        }
+        return 0;
+    }
+
+#ifdef WOLFSSL_SHAKE128
+    if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
+        /* Take from cache if not any and not all used. */
+	if (ctx->used > 0 && ctx->used < WC_SHA3_128_BLOCK_SIZE) {
+            size = MIN(digestsize, WC_SHA3_128_BLOCK_SIZE);
+            XMEMCPY(digest, ctx->block + ctx->used, size);
+            digest += size;
+            digestsize -= size;
+            ctx->used += size;
+        }
+
+        /* Generate more blocks if more output needed. */
+        while (digestsize > 0) {
+            size = MIN(digestsize, WC_SHA3_128_BLOCK_SIZE);
+
+            /* Put straight into output if all bytes needed for output. */
+            if (size == WC_SHA3_128_BLOCK_SIZE) {
+                ret = wc_Shake128_SqueezeBlocks(&ctx->shake, (byte*)digest,
+                    size);
+            /* Put into cache and copy out needed bytes. */
+            } else {
+                ret = wc_Shake128_SqueezeBlocks(&ctx->shake, ctx->block,
+                    size);
+                if (ret == 0) {
+                    XMEMCPY(digest, ctx->block, size);
+                    ctx->used = size;
+                }
+            }
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_Shake128_SqueezeBlocks", ret);
+                return GNUTLS_E_HASH_FAILED;
+            }
+
+            /* Skip over output generated. */
+            digest += size;
+            digestsize -= size;
+        }
+    }
+#endif
+#ifdef WOLFSSL_SHAKE256
+    if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
+        /* Take from cache if not any and not all used. */
+        if (ctx->used > 0 && ctx->used < WC_SHA3_256_BLOCK_SIZE) {
+            size = MIN(digestsize, WC_SHA3_256_BLOCK_SIZE);
+            XMEMCPY(digest, ctx->block + ctx->used, size);
+            digest += size;
+            digestsize -= size;
+            ctx->used += size;
+        }
+
+        /* Generate more blocks if more output needed. */
+        while (digestsize > 0) {
+            size = MIN(digestsize, WC_SHA3_256_BLOCK_SIZE);
+
+            /* Put straight into output if all bytes needed for output. */
+            if (size == WC_SHA3_256_BLOCK_SIZE) {
+                ret = wc_Shake256_SqueezeBlocks(&ctx->shake, (byte*)digest,
+                    size);
+            /* Put into cache and copy out needed bytes. */
+            } else {
+                ret = wc_Shake256_SqueezeBlocks(&ctx->shake, ctx->block,
+                    size);
+                if (ret == 0) {
+                    XMEMCPY(digest, ctx->block, size);
+                    ctx->used = size;
+                }
+            }
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_Shake256_SqueezeBlocks", ret);
+                return GNUTLS_E_HASH_FAILED;
+            }
+
+            /* Skip over output generated. */
+            digest += size;
+            digestsize -= size;
+        }
+    }
+#endif
+
+    /* When squeezing, can no longer add data. */
+    ctx->squeezing = 1;
+
+    return 0;
+}
+
+/**
+ * Clean up digest resources.
+ *
+ * @param [in, out]  _ctx  Digest context.
+ */
+static void wolfssl_shake_deinit(void *_ctx)
+{
+    struct wolfssl_shake_ctx *ctx = _ctx;
+
+    WGW_FUNC_ENTER();
+
+    if (ctx && ctx->initialized) {
+        /* Free the wolfSSL Shake digest object. */
+    #ifdef WOLFSSL_SHAKE128
+        if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
+            wc_Shake128_Free(&ctx->shake);
+        }
+    #endif
+    #ifdef WOLFSSL_SHAKE256
+        if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
+            wc_Shake256_Free(&ctx->shake);
+        }
+    #endif
+        ctx->initialized = 0;
+    }
+
+    gnutls_free(ctx);
+}
+
+/**
+ * One-shot Shake hash function.
+ *
+ * @param [in]  algorithm  GnuTLS digest algorithm ID.
+ * @param [in]  text       Text to update digest with.
+ * @param [in]  textsize   Size of text in bytes.
+ * @param [out] digest     Buffer to hold digest.
+ * @return 0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when digest algorithm is not supported.
+ * @return  GNUTLS_E_MEMORY_ERROR when dynamic memory allocation fails.
+ * @return  GNUTLS_E_HASH_FAILED when wolfSSL operation fails.
+ */
+static int wolfssl_shake_fast(gnutls_digest_algorithm_t algorithm,
+    const void *text, size_t textsize, void *digest)
+{
+    struct wolfssl_shake_ctx *ctx;
+    int ret = -1;
+
+    WGW_FUNC_ENTER();
+
+    /* Initialize Shake digest context. */
+    ret = wolfssl_shake_init(algorithm, (void**)&ctx);
+    if (ret != 0) {
+        return ret;
+    }
+
+    /* Absorb the text. */
+    ret = wolfssl_shake_hash(ctx, text, textsize);
+    if (ret != 0) {
+        wolfssl_shake_deinit(ctx);
+        return ret;
+    }
+
+    /* Output the Shake data. */
+    ret = wolfssl_shake_output(ctx, digest, WC_SHA512_DIGEST_SIZE);
+    if (ret != 0) {
+        wolfssl_shake_deinit(ctx);
+        return ret;
+    }
+
+    /* Dispose of Shake digest context. */
+    wolfssl_shake_deinit(ctx);
+
+    return 0;
+}
+
+/** Function pointers for the Shake digest implementation. */
+static const gnutls_crypto_digest_st wolfssl_shake_struct = {
+    .init = wolfssl_shake_init,
+    .hash = wolfssl_shake_hash,
+    .output = wolfssl_shake_output,
+    .deinit = wolfssl_shake_deinit,
+    .fast = wolfssl_shake_fast
+};
+#endif /* WOLFSSL_SHAKE128 || WOLFSSL_SHAKE256 */
 
 /**
  * Register the digest algorithms with GnuTLS.
@@ -3319,14 +3649,12 @@ static int wolfssl_digest_register(void)
             return ret;
         }
     }
-    /* TODO: fix this to reflect different usage.
-     *       finished function and output multiple blocks */
 #ifdef WOLFSSL_SHAKE128
     /* register shake-128 if it's supported */
     if (wolfssl_digest_supported[GNUTLS_DIG_SHAKE_128]) {
         WGW_LOG("registering shake-128");
         ret = gnutls_crypto_single_digest_register(
-                GNUTLS_DIG_SHAKE_128, 80, &wolfssl_digest_struct, 0);
+                GNUTLS_DIG_SHAKE_128, 80, &wolfssl_shake_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering shake-128 failed");
             return ret;
@@ -3338,7 +3666,7 @@ static int wolfssl_digest_register(void)
     if (wolfssl_digest_supported[GNUTLS_DIG_SHAKE_256]) {
         WGW_LOG("registering shake-256");
         ret = gnutls_crypto_single_digest_register(
-                GNUTLS_DIG_SHAKE_256, 80, &wolfssl_digest_struct, 0);
+                GNUTLS_DIG_SHAKE_256, 80, &wolfssl_shake_struct, 0);
         if (ret < 0) {
             WGW_LOG("registering shake-256 failed");
             return ret;
@@ -4026,7 +4354,7 @@ static int wolfssl_pk_register(void)
 
 /***************************** RNG functions **********************************/
 
-/** Context structure for wolfssl RNG. */
+/** Context structure for wolfSSL RNG. */
 struct wolfssl_rng_ctx {
     /** wolfSSL RNG object for private data. */
     WC_RNG priv_rng;
@@ -4055,7 +4383,7 @@ static int wolfssl_rnd_init(void **_ctx)
 
     ctx = gnutls_calloc(1, sizeof(struct wolfssl_rng_ctx));
     if (ctx == NULL) {
-        WGW_LOG("Memory allocation failed");
+        WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -4107,7 +4435,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     WGW_FUNC_ENTER();
 
     if (!ctx || !ctx->initialized) {
-        WGW_LOG("random context not initialized");
+        WGW_ERROR("random context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4119,7 +4447,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
         WGW_LOG("using public random");
         rng = &ctx->pub_rng;
     } else {
-        WGW_LOG("level not supported: %d", level);
+        WGW_ERROR("level not supported: %d", level);
         return GNUTLS_E_RANDOM_FAILED;
     }
 
@@ -4151,7 +4479,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
 
         ret = wc_RNG_GenerateBlock(rng, data, size);
         if (ret != 0) {
-            WGW_LOG("Requested %d bytes", size);
+            WGW_ERROR("Requested %d bytes", size);
             WGW_WOLFSSL_ERROR("wc_RNG_GenerateBlock", ret);
             return GNUTLS_E_RANDOM_FAILED;
         }
@@ -4295,7 +4623,7 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
             }
             break;
         default:
-            WGW_LOG("prf mac %d is not supported", mac);
+            WGW_ERROR("prf mac %d is not supported", mac);
             return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4346,7 +4674,7 @@ static int wolfssl_hkdf_extract(gnutls_mac_algorithm_t mac, const void *key,
     /* Get hash algorithm. */
     hash_type = get_hash_type(mac);
     if (hash_type < 0) {
-        WGW_LOG("MAC algorithm not supported");
+        WGW_ERROR("MAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4387,7 +4715,7 @@ static int wolfssl_hkdf_expand(gnutls_mac_algorithm_t mac, const void *key,
     /* Get hash algorithm. */
     hash_type = get_hash_type(mac);
     if (hash_type < 0) {
-        WGW_LOG("MAC algorithm not supported");
+        WGW_ERROR("MAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4432,7 +4760,7 @@ static int wolfssl_pbkdf2(gnutls_mac_algorithm_t mac, const void *key,
     /* Get hash algorithm. */
     hash_type = get_hash_type(mac);
     if (hash_type < 0) {
-        WGW_LOG("HMAC algorithm not supported");
+        WGW_ERROR("HMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4528,7 +4856,7 @@ static int wolfssl_tls13_update_secret(gnutls_mac_algorithm_t mac,
     /* Get hash algorithm. */
     hash_type = get_hash_type(mac);
     if (hash_type < 0) {
-        WGW_LOG("HMAC algorithm not supported");
+        WGW_ERROR("HMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -4574,7 +4902,7 @@ static int wolfssl_tls13_expand_secret(gnutls_mac_algorithm_t mac,
     /* Get hash algorithm. */
     hash_type = get_hash_type(mac);
     if (hash_type < 0) {
-        WGW_LOG("HMAC algorithm not supported");
+        WGW_ERROR("HMAC algorithm not supported");
         return GNUTLS_E_INVALID_REQUEST;
     }
     /* Get the secret size. */
