@@ -11,32 +11,37 @@ index d4c1b1a..47c1a76 100644
  gnutls_prf_raw@GNUTLS_3_4
  gnutls_prf_rfc5705@GNUTLS_3_4
 diff --git a/lib/abstract_int.h b/lib/abstract_int.h
-index 88d4cb4..2c564ad 100644
+index 88d4cb4..82c8f66 100644
 --- a/lib/abstract_int.h
 +++ b/lib/abstract_int.h
-@@ -30,6 +30,13 @@ typedef int (*gnutls_privkey_pk_params_func)(gnutls_privkey_t key,
+@@ -30,6 +30,15 @@ typedef int (*gnutls_privkey_pk_params_func)(gnutls_privkey_t key,
  					     gnutls_pk_params_st *params);
  
  struct gnutls_privkey_st {
 +    gnutls_pk_generate_func generate_backend;
-+    gnutls_pk_export_pubkey_func export_pubkey_backend;
-+    gnutls_pk_sign_func sign_backend;
-+    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
++    gnutls_pk_import_privkey_url_func import_privkey_url_backend;
++    gnutls_pk_privkey_decrypt_func privkey_decrypt_backend;
 +    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_sign_func sign_backend;
++    gnutls_pk_sign_hash_func sign_hash_backend;
 +    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
  	gnutls_privkey_type_t type;
  	gnutls_pk_algorithm_t pk_algorithm;
  
-@@ -57,6 +64,15 @@ struct gnutls_privkey_st {
+@@ -57,6 +66,18 @@ struct gnutls_privkey_st {
  };
  
  struct gnutls_pubkey_st {
 +    gnutls_pk_generate_func generate_backend;
 +    gnutls_pk_export_pubkey_func export_pubkey_backend;
-+    gnutls_pk_sign_func sign_backend;
-+    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_import_pubkey_url_func import_pubkey_url_backend;
++    gnutls_pk_import_pubkey_x509_func import_pubkey_x509_backend;
++    gnutls_pk_pubkey_encrypt_func pubkey_encrypt_backend;
 +    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_verify_hash_func verify_hash_backend;
 +    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
 +	gnutls_privkey_type_t type;
@@ -44,30 +49,8 @@ index 88d4cb4..2c564ad 100644
  	unsigned int bits; /* an indication of the security parameter */
  
  	/* the size of params depends on the public
-diff --git a/lib/constate.c b/lib/constate.c
-index ca253a2..c6c453f 100644
---- a/lib/constate.c
-+++ b/lib/constate.c
-@@ -344,13 +344,14 @@ static int _tls13_set_early_keys(gnutls_session_t session,
- 	}
- 
- 	ret = _tls13_expand_secret2(
--		session->internals.resumed_security_parameters.prf, "key", 3,
--		NULL, 0, session->key.proto.tls13.e_ckey, key_size, key_block);
-+		session->internals.resumed_security_parameters.prf->id, "key",
-+		3, NULL, 0, session->key.proto.tls13.e_ckey, key_size,
-+		key_block);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
- 	ret = _tls13_expand_secret2(
--		session->internals.resumed_security_parameters.prf, "iv", 2,
-+		session->internals.resumed_security_parameters.prf->id, "iv", 2,
- 		NULL, 0, session->key.proto.tls13.e_ckey, iv_size, iv_block);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
 diff --git a/lib/crypto-backend.c b/lib/crypto-backend.c
-index 63db24b..008ef96 100644
+index 63db24b..413eeb3 100644
 --- a/lib/crypto-backend.c
 +++ b/lib/crypto-backend.c
 @@ -23,10 +23,10 @@
@@ -82,19 +65,15 @@ index 63db24b..008ef96 100644
  #include "random.h"
  #include "cipher_int.h"
  
-@@ -34,6 +34,11 @@
+@@ -34,6 +34,7 @@
  int crypto_mac_prio = INT_MAX;
  int crypto_digest_prio = INT_MAX;
  int crypto_cipher_prio = INT_MAX;
-+int crypto_rnd_prio = INT_MAX;
-+int crypto_prf_prio = INT_MAX;
-+int crypto_kdf_prio = INT_MAX;
-+int crypto_tls13_hkdf_prio = INT_MAX;
 +int crypto_pk_prio = INT_MAX;
  
  typedef struct algo_list {
  	int algorithm;
-@@ -187,6 +192,8 @@ _gnutls_get_crypto_cipher(gnutls_cipher_algorithm_t algo)
+@@ -187,6 +188,8 @@ _gnutls_get_crypto_cipher(gnutls_cipher_algorithm_t algo)
  	return _get_algo(&glob_cl, algo);
  }
  
@@ -103,24 +82,28 @@ index 63db24b..008ef96 100644
  /**
   * gnutls_crypto_register_cipher:
   * @algorithm: is the gnutls algorithm identifier
-@@ -324,6 +331,97 @@ int gnutls_crypto_rnd_register(int priority, const gnutls_crypto_rnd_st *s)
+@@ -324,6 +327,40 @@ int gnutls_crypto_rnd_register(int priority, const gnutls_crypto_rnd_st *s)
  	return GNUTLS_E_CRYPTO_ALREADY_REGISTERED;
  }
  
-+extern gnutls_crypto_prf_st _gnutls_prf_ops;
++extern int crypto_prf_prio;
++extern gnutls_crypto_prf_st* _gnutls_prf_ops;
 +
 +/*-
 + * gnutls_crypto_prf_register:
-+ * @priority: is the priority of the PRF
-+ * @s: is a structure holding new PRF's data
++ * @priority: is the priority of the generator
++ * @s: is a structure holding new generator's data
 + *
-+ * This function will register a PRF to be used by
-+ * gnutls.  Any PRF registered will override the included
-+ * PRF and by convention kernel implemented PRF have
-+ * priority of 90 and CPU-assisted of 80. The PRF with the lowest priority will be
++ * This function will register a random generator to be used by
++ * gnutls.  Any generator registered will override the included
++ * generator and by convention kernel implemented generators have
++ * priority of 90 and CPU-assisted of 80. The generator with the lowest priority will be
 + * used by gnutls.
 + *
 + * This function should be called before gnutls_global_init().
++ *
++ * For simplicity you can use the convenience
++ * gnutls_crypto_prf_register() macro.
 + *
 + * Returns: %GNUTLS_E_SUCCESS on success, otherwise a negative error code.
 + *
@@ -137,71 +120,10 @@ index 63db24b..008ef96 100644
 +	return GNUTLS_E_CRYPTO_ALREADY_REGISTERED;
 +}
 +
-+extern gnutls_crypto_kdf_st _gnutls_kdf_ops;
-+
-+/*-
-+ * gnutls_crypto_kdf_register:
-+ * @priority: is the priority of the KDF
-+ * @s: is a structure holding new KDF's data
-+ *
-+ * This function will register a KDF to be used by
-+ * gnutls.  Any KDF registered will override the included
-+ * KDF and by convention kernel implemented KDF have
-+ * priority of 90 and CPU-assisted of 80. The KDF with the lowest priority will be
-+ * used by gnutls.
-+ *
-+ * This function should be called before gnutls_global_init().
-+ *
-+ * Returns: %GNUTLS_E_SUCCESS on success, otherwise a negative error code.
-+ *
-+ * Since: 2.6.0
-+ -*/
-+int gnutls_crypto_kdf_register(int priority, const gnutls_crypto_kdf_st *s)
-+{
-+	if (crypto_kdf_prio >= priority) {
-+		memcpy(&_gnutls_kdf_ops, s, sizeof(*s));
-+		crypto_kdf_prio = priority;
-+		return 0;
-+	}
-+
-+	return GNUTLS_E_CRYPTO_ALREADY_REGISTERED;
-+}
-+
-+extern gnutls_crypto_tls13_hkdf_st _gnutls_tls13_hkdf_ops;
-+
-+/*-
-+ * gnutls_crypto_TLS 1.3 hkdf_register:
-+ * @priority: is the priority of the HKDF
-+ * @s: is a structure holding new HKDF's data
-+ *
-+ * This function will register a HKDF to be used by
-+ * gnutls.  Any HKDF registered will override the included
-+ * HKDF and by convention kernel implemented HKDF have
-+ * priority of 90 and CPU-assisted of 80. The HKDF with the lowest priority will be
-+ * used by gnutls.
-+ *
-+ * This function should be called before gnutls_global_init().
-+ *
-+ * Returns: %GNUTLS_E_SUCCESS on success, otherwise a negative error code.
-+ *
-+ * Since: 2.6.0
-+ -*/
-+int gnutls_crypto_tls13_hkdf_register(int priority,
-+				      const gnutls_crypto_tls13_hkdf_st *s)
-+{
-+	if (crypto_tls13_hkdf_prio >= priority) {
-+		memcpy(&_gnutls_tls13_hkdf_ops, s, sizeof(*s));
-+		crypto_tls13_hkdf_prio = priority;
-+		return 0;
-+	}
-+
-+	return GNUTLS_E_CRYPTO_ALREADY_REGISTERED;
-+}
-+
  /*-
   * gnutls_crypto_single_mac_register:
   * @algorithm: is the gnutls algorithm identifier
-@@ -463,3 +561,75 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
+@@ -463,3 +500,58 @@ int gnutls_crypto_register_digest(gnutls_digest_algorithm_t algorithm,
  		"called the deprecated gnutls_crypto_register_digest()\n");
  	return 0;
  }
@@ -239,23 +161,6 @@ index 63db24b..008ef96 100644
 +        }
 +    }
 +
-+    {
-+        typedef gnutls_crypto_kdf_st*(*kdf_ops_func)(void);
-+        kdf_ops_func func = (kdf_ops_func)dlsym(handle, "gnutls_get_kdf_ops");
-+        if (func != NULL) {
-+            gnutls_crypto_kdf_register(80, func());
-+        }
-+    }
-+
-+    {
-+        typedef gnutls_crypto_tls13_hkdf_st*(*tls13_hkdf_ops_func)(void);
-+        tls13_hkdf_ops_func func = (tls13_hkdf_ops_func)dlsym(handle,
-+            "gnutls_get_tls13_hkdf_ops");
-+        if (func != NULL) {
-+            gnutls_crypto_tls13_hkdf_register(80, func());
-+        }
-+    }
-+
 +    fprintf(stderr, "Successfully loaded crypto provider\n");
 +    return 0;
 +}
@@ -278,7 +183,7 @@ index 63db24b..008ef96 100644
 +    return _get_algo(&glob_pk, algo);
 +}
 diff --git a/lib/crypto-backend.h b/lib/crypto-backend.h
-index f213a43..d607f9a 100644
+index f213a43..82a5581 100644
 --- a/lib/crypto-backend.h
 +++ b/lib/crypto-backend.h
 @@ -23,8 +23,11 @@
@@ -301,91 +206,58 @@ index f213a43..d607f9a 100644
  typedef struct {
  	int (*hkdf_extract)(gnutls_mac_algorithm_t, const void *key,
  			    size_t keysize, const void *salt, size_t saltsize,
-@@ -95,6 +99,29 @@ typedef struct gnutls_crypto_rnd {
+@@ -95,6 +99,13 @@ typedef struct gnutls_crypto_rnd {
  	int (*self_test)(void); /* this should not require rng initialization */
  } gnutls_crypto_rnd_st;
  
 +typedef struct gnutls_crypto_prf {
-+	int (*raw)(gnutls_mac_algorithm_t mac, size_t master_size,
++        int (*raw)(gnutls_mac_algorithm_t mac, size_t master_size,
 +		   const void *master, size_t label_size, const char *label,
 +		   size_t seed_size, const uint8_t *seed, size_t outsize,
 +		   char *out);
 +} gnutls_crypto_prf_st;
 +
-+typedef struct {
-+	int (*init)(gnutls_mac_algorithm_t mac, const uint8_t *psk,
-+		    size_t psk_size, void *out, size_t output_size);
-+        int (*update)(gnutls_mac_algorithm_t mac, const uint8_t *key,
-+		      size_t key_size, const uint8_t *salt, size_t salt_size,
-+		      uint8_t *secret);
-+	int (*derive)(gnutls_mac_algorithm_t mac, const char *label,
-+		      unsigned label_size, const uint8_t *tbh, size_t tbh_size,
-+		      const uint8_t* secret, void *out, size_t output_size);
-+	int (*expand)(gnutls_mac_algorithm_t mac, const char *label,
-+		      unsigned label_size, const uint8_t *msg, size_t msg_size,
-+		      const uint8_t* secret, unsigned out_size, void *out);
-+} gnutls_crypto_tls13_hkdf_st;
-+
-+
-+
  typedef void *bigint_t;
  
  /**
-@@ -246,15 +273,15 @@ typedef enum {
- 	GNUTLS_PK_FLAG_RSA_PSS_FIXED_SALT_LENGTH = 4
- } gnutls_pk_flag_t;
- 
--#define FIX_SIGN_PARAMS(params, flags, dig)                            \
--	do {                                                           \
-+#define FIX_SIGN_PARAMS(params, flags, dig)			    \
-+	do {							   \
- 		if ((flags) & GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE) {      \
- 			(params).flags |= GNUTLS_PK_FLAG_REPRODUCIBLE; \
--		}                                                      \
--		if ((params).pk == GNUTLS_PK_DSA ||                    \
--		    (params).pk == GNUTLS_PK_ECDSA) {                  \
--			(params).dsa_dig = (dig);                      \
--		}                                                      \
-+		}						      \
-+		if ((params).pk == GNUTLS_PK_DSA ||		    \
-+		    (params).pk == GNUTLS_PK_ECDSA) {		  \
-+			(params).dsa_dig = (dig);		      \
-+		}						      \
- 	} while (0)
- 
- void gnutls_pk_params_release(gnutls_pk_params_st *p);
-@@ -374,6 +401,13 @@ typedef enum {
+@@ -374,6 +385,22 @@ typedef enum {
  
  /* Public key algorithms */
  typedef struct gnutls_crypto_pk {
 +    gnutls_pk_generate_func generate_backend;
 +    gnutls_pk_export_pubkey_func export_pubkey_backend;
++    gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
++    gnutls_pk_pubkey_encrypt_func pubkey_encrypt_backend;
++    gnutls_pk_privkey_decrypt_func privkey_decrypt_backend;
++    gnutls_pk_import_pubkey_x509_func import_pubkey_x509_backend;
++    gnutls_pk_import_privkey_url_func import_privkey_url_backend;
++    gnutls_pk_import_pubkey_url_func import_pubkey_url_backend;
 +    gnutls_pk_sign_func sign_backend;
 +    gnutls_pk_verify_func verify_backend;
++    gnutls_pk_sign_hash_func sign_hash_backend;
++    gnutls_pk_verify_hash_func verify_hash_backend;
 +    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
++	gnutls_pk_copy_func copy_backend;
 +    gnutls_pk_deinit_func deinit_backend;
 +    void *pk_ctx;
  	/* The params structure should contain the private or public key
  	 * parameters, depending on the operation */
  	int (*encrypt)(gnutls_pk_algorithm_t, gnutls_datum_t *ciphertext,
-@@ -438,7 +472,16 @@ int gnutls_crypto_single_digest_register(
+@@ -438,7 +465,13 @@ int gnutls_crypto_single_digest_register(
  	gnutls_digest_algorithm_t algorithm, int priority,
  	const gnutls_crypto_single_digest_st *s, int free_s);
  
 +int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
-+				    int priority,
-+				    const gnutls_crypto_pk_st *s,
-+				    int free_s);
++                                    int priority,
++                                    const gnutls_crypto_pk_st *s,
++                                    int free_s);
 +
  int gnutls_crypto_rnd_register(int priority, const gnutls_crypto_rnd_st *s);
 +int gnutls_crypto_prf_register(int priority, const gnutls_crypto_prf_st *s);
-+int gnutls_crypto_kdf_register(int priority, const gnutls_crypto_kdf_st *s);
-+int gnutls_crypto_tls13_hkdf_register(int priority,
-+				      const gnutls_crypto_tls13_hkdf_st *s);
  int gnutls_crypto_pk_register(int priority, const gnutls_crypto_pk_st *s);
  int gnutls_crypto_bigint_register(int priority,
  				  const gnutls_crypto_bigint_st *s);
-@@ -467,4 +510,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
+@@ -467,4 +500,6 @@ int _gnutls_rsa_pss_sign_pad(gnutls_x509_spki_st *params, size_t key_bits,
  			     const gnutls_datum_t *data, unsigned char *buffer,
  			     size_t buffer_size);
  
@@ -411,97 +283,6 @@ index 9403560..f52f50a 100644
 +const gnutls_crypto_pk_st *_gnutls_get_crypto_pk(gnutls_pk_algorithm_t algo);
  
  #endif /* GNUTLS_LIB_CRYPTO_H */
-diff --git a/lib/ext/pre_shared_key.c b/lib/ext/pre_shared_key.c
-index 51c4891..ba22484 100644
---- a/lib/ext/pre_shared_key.c
-+++ b/lib/ext/pre_shared_key.c
-@@ -58,7 +58,7 @@ static int compute_psk_from_ticket(const tls13_ticket_st *ticket,
- 	}
- 	key->size = ticket->prf->output_size;
- 
--	ret = _tls13_expand_secret2(ticket->prf, RESUMPTION_LABEL,
-+	ret = _tls13_expand_secret2(ticket->prf->id, RESUMPTION_LABEL,
- 				    sizeof(RESUMPTION_LABEL) - 1, ticket->nonce,
- 				    ticket->nonce_size,
- 				    ticket->resumption_master_secret, key->size,
-@@ -111,13 +111,14 @@ static int compute_binder_key(const mac_entry_st *prf, const uint8_t *key,
- 	uint8_t tmp_key[MAX_HASH_SIZE];
- 
- 	/* Compute HKDF-Extract(0, psk) */
--	ret = _tls13_init_secret2(prf, key, keylen, tmp_key);
-+	ret = _tls13_init_secret2(prf->id, key, keylen, tmp_key,
-+				  prf->output_size);
- 	if (ret < 0)
- 		return ret;
- 
- 	/* Compute Derive-Secret(secret, label, transcript_hash) */
--	ret = _tls13_derive_secret2(prf, label, label_len, NULL, 0, tmp_key,
--				    out);
-+	ret = _tls13_derive_secret2(prf->id, label, label_len, NULL, 0, tmp_key,
-+				    out, prf->output_size);
- 	if (ret < 0)
- 		return ret;
- 
-@@ -237,11 +238,11 @@ static int generate_early_secrets(gnutls_session_t session,
- 	int ret;
- 
- 	ret = _tls13_derive_secret2(
--		prf, EARLY_TRAFFIC_LABEL, sizeof(EARLY_TRAFFIC_LABEL) - 1,
-+		prf->id, EARLY_TRAFFIC_LABEL, sizeof(EARLY_TRAFFIC_LABEL) - 1,
- 		session->internals.handshake_hash_buffer.data,
- 		session->internals.handshake_hash_buffer_client_hello_len,
- 		session->key.proto.tls13.temp_secret,
--		session->key.proto.tls13.e_ckey);
-+		session->key.proto.tls13.e_ckey, prf->output_size);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
-@@ -252,12 +253,12 @@ static int generate_early_secrets(gnutls_session_t session,
- 		return gnutls_assert_val(ret);
- 
- 	ret = _tls13_derive_secret2(
--		prf, EARLY_EXPORTER_MASTER_LABEL,
-+		prf->id, EARLY_EXPORTER_MASTER_LABEL,
- 		sizeof(EARLY_EXPORTER_MASTER_LABEL) - 1,
- 		session->internals.handshake_hash_buffer.data,
- 		session->internals.handshake_hash_buffer_client_hello_len,
- 		session->key.proto.tls13.temp_secret,
--		session->key.proto.tls13.ap_expkey);
-+		session->key.proto.tls13.ap_expkey, prf->output_size);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
-@@ -286,8 +287,9 @@ int _gnutls_generate_early_secrets_for_psk(gnutls_session_t session)
- 	if (unlikely(psk_size == 0))
- 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
- 
--	ret = _tls13_init_secret2(prf, psk, psk_size,
--				  session->key.proto.tls13.temp_secret);
-+	ret = _tls13_init_secret2(prf->id, psk, psk_size,
-+				  session->key.proto.tls13.temp_secret,
-+				  prf->output_size);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
-@@ -391,7 +393,8 @@ static int derive_ipsk(const mac_entry_st *prf,
- 	int ret;
- 
- 	/* epskx = HKDF-Extract(0, epsk) */
--	ret = _tls13_init_secret2(prf, epsk->data, epsk->size, epskx);
-+	ret = _tls13_init_secret2(prf->id, epsk->data, epsk->size, epskx,
-+				  prf->output_size);
- 	if (ret < 0) {
- 		return ret;
- 	}
-@@ -402,7 +405,7 @@ static int derive_ipsk(const mac_entry_st *prf,
- 		return ret;
- 	}
- 	/* ipskx = HKDF-Expand-Label(epskx, "derived psk", Hash(ImportedIdentity), L) */
--	return _tls13_expand_secret2(prf, DERIVED_PSK_LABEL,
-+	return _tls13_expand_secret2(prf->id, DERIVED_PSK_LABEL,
- 				     sizeof(DERIVED_PSK_LABEL) - 1,
- 				     hashed_identity, prf->output_size, epskx,
- 				     prf->output_size, ipsk);
 diff --git a/lib/global.c b/lib/global.c
 index 9aa95dd..ba1e736 100644
 --- a/lib/global.c
@@ -557,7 +338,7 @@ index 3cf34e5..ecaa4e5 100644
  
  		return 0;
 diff --git a/lib/includes/gnutls/crypto.h b/lib/includes/gnutls/crypto.h
-index 400072d..df0b1d4 100644
+index 400072d..c36c5db 100644
 --- a/lib/includes/gnutls/crypto.h
 +++ b/lib/includes/gnutls/crypto.h
 @@ -191,7 +191,7 @@ int gnutls_rnd(gnutls_rnd_level_t level, void *data, size_t len);
@@ -569,7 +350,7 @@ index 400072d..df0b1d4 100644
   */
  
  typedef int (*gnutls_cipher_init_func)(gnutls_cipher_algorithm_t, void **ctx,
-@@ -261,6 +261,24 @@ int gnutls_crypto_register_mac(
+@@ -261,6 +261,41 @@ int gnutls_crypto_register_mac(
  	gnutls_mac_deinit_func deinit,
  	gnutls_mac_fast_func hash_fast) _GNUTLS_GCC_ATTR_DEPRECATED;
  
@@ -577,12 +358,28 @@ index 400072d..df0b1d4 100644
 +                                          gnutls_pk_algorithm_t algo,
 +                                          unsigned int bits);
 +
-+typedef int (*gnutls_pk_export_pubkey_func)(void *ctx, const void* pubkey);
++typedef int (*gnutls_pk_export_pubkey_func)(void **pub_key_ctx, void *priv_key_ctx, const void* pubkey);
++typedef int (*gnutls_pk_import_privkey_x509_func)(void **ctx, const void *privkey,
++        const gnutls_datum_t * data, gnutls_x509_crt_fmt_t format);
++typedef int (*gnutls_pk_import_pubkey_x509_func)(void **ctx, const void *pubkey,
++        gnutls_datum_t * data, unsigned int flags);
++typedef int (*gnutls_pk_pubkey_encrypt_func)(void *ctx, gnutls_pubkey_t key, const gnutls_datum_t * plaintext, gnutls_datum_t * ciphertext);
++typedef int (*gnutls_pk_privkey_decrypt_func)(void *ctx, gnutls_privkey_t key, const gnutls_datum_t * ciphertext, gnutls_datum_t * plaintext);
++typedef int (*gnutls_pk_import_privkey_url_func)(void **ctx, const void *privkey, const char *url);
++typedef int (*gnutls_pk_import_pubkey_url_func)(void **ctx, const void *pubkey, const char *url);
 +typedef int (*gnutls_pk_sign_func)(void *ctx,
 +                                   const void *privkey,
 +                                   gnutls_digest_algorithm_t hash,
 +                                   const void *data,
 +                                   const void *signature);
++typedef int (*gnutls_pk_sign_hash_func)(void *ctx, const void *privkey,
++                                      gnutls_digest_algorithm_t hash_algo,
++                                      const gnutls_datum_t *hash_data,
++                                      gnutls_datum_t *signature);
++typedef int (*gnutls_pk_verify_hash_func)(void *ctx, const void *pubkey,
++                                        gnutls_sign_algorithm_t algo,
++                                        const gnutls_datum_t *hash,
++                                        const gnutls_datum_t *signature);
 +typedef int (*gnutls_pk_verify_func)(void *ctx,
 +                                     const void *pubkey,
 +                                     gnutls_sign_algorithm_t hash,
@@ -590,11 +387,12 @@ index 400072d..df0b1d4 100644
 +                                     const void *signature);
 +typedef int (*gnutls_pk_derive_shared_secret_func)(void *ctx, const void *privkey, const void *pubkey, const gnutls_datum_t *nonce, gnutls_datum_t *secret);
 +typedef void (*gnutls_pk_deinit_func)(void *ctx);
++typedef int (*gnutls_pk_copy_func)(void **dst, void *src, gnutls_pk_algorithm_t algo);
 +
  typedef int (*gnutls_digest_init_func)(gnutls_digest_algorithm_t, void **ctx);
  typedef int (*gnutls_digest_hash_func)(void *ctx, const void *text,
  				       size_t textsize);
-@@ -299,6 +317,12 @@ int gnutls_encode_gost_rs_value(gnutls_datum_t *sig_value,
+@@ -299,6 +334,12 @@ int gnutls_encode_gost_rs_value(gnutls_datum_t *sig_value,
  int gnutls_decode_gost_rs_value(const gnutls_datum_t *sig_value,
  				gnutls_datum_t *r, gnutls_datum_t *s);
  
@@ -631,10 +429,10 @@ index c236683..dce31be 100644
  	*;
  } GNUTLS_3_8_4;
 diff --git a/lib/nettle/pk.c b/lib/nettle/pk.c
-index 73e356a..1748742 100644
+index 8e07586..28e94a9 100644
 --- a/lib/nettle/pk.c
 +++ b/lib/nettle/pk.c
-@@ -4826,8 +4826,6 @@ static int wrap_nettle_pk_fixup(gnutls_pk_algorithm_t algo,
+@@ -4828,8 +4828,6 @@ static int wrap_nettle_pk_fixup(gnutls_pk_algorithm_t algo,
  	return 0;
  }
  
@@ -644,33 +442,22 @@ index 73e356a..1748742 100644
  	.encrypt = _wrap_nettle_pk_encrypt,
  	.decrypt = _wrap_nettle_pk_decrypt,
 diff --git a/lib/nettle/prf.c b/lib/nettle/prf.c
-index 317f91f..a209804 100644
+index 317f91f..cc0b7fb 100644
 --- a/lib/nettle/prf.c
 +++ b/lib/nettle/prf.c
-@@ -125,3 +125,8 @@ int _gnutls_prf_raw(gnutls_mac_algorithm_t mac, size_t master_size,
+@@ -125,3 +125,10 @@ int _gnutls_prf_raw(gnutls_mac_algorithm_t mac, size_t master_size,
  
  	return 0;
  }
++
++int crypto_prf_prio = INT_MAX;
 +
 +gnutls_crypto_prf_st _gnutls_prf_ops = {
 +    .raw = _gnutls_prf_raw,
 +};
 +
-diff --git a/lib/nettle/rnd.c b/lib/nettle/rnd.c
-index c228737..5a37f7a 100644
---- a/lib/nettle/rnd.c
-+++ b/lib/nettle/rnd.c
-@@ -267,8 +267,6 @@ static void wrap_nettle_rnd_refresh(void *_ctx)
- 	wrap_nettle_rnd(_ctx, GNUTLS_RND_RANDOM, &tmp, 1);
- }
- 
--int crypto_rnd_prio = INT_MAX;
--
- gnutls_crypto_rnd_st _gnutls_rnd_ops = {
- 	.init = wrap_nettle_rnd_init,
- 	.deinit = wrap_nettle_rnd_deinit,
 diff --git a/lib/prf.c b/lib/prf.c
-index 95f2fef..05cf500 100644
+index 95f2fef..3f7ad02 100644
 --- a/lib/prf.c
 +++ b/lib/prf.c
 @@ -33,6 +33,17 @@
@@ -708,28 +495,7 @@ index 95f2fef..05cf500 100644
  
  	return ret;
  }
-@@ -100,8 +111,9 @@ static int _tls13_derive_exporter(const mac_entry_st *prf,
- 	unsigned digest_size = prf->output_size;
- 	int ret;
- 
--	ret = _tls13_derive_secret2(prf, label, label_size, NULL, 0,
--				    session->key.proto.tls13.ap_expkey, secret);
-+	ret = _tls13_derive_secret2(prf->id, label, label_size, NULL, 0,
-+				    session->key.proto.tls13.ap_expkey, secret,
-+				    prf->output_size);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
-@@ -110,7 +122,7 @@ static int _tls13_derive_exporter(const mac_entry_st *prf,
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
--	return _tls13_expand_secret2(prf, EXPORTER_LABEL,
-+	return _tls13_expand_secret2(prf->id, EXPORTER_LABEL,
- 				     sizeof(EXPORTER_LABEL) - 1, digest,
- 				     digest_size, secret, outsize, out);
- }
-@@ -321,10 +333,10 @@ int gnutls_prf(gnutls_session_t session, size_t label_size, const char *label,
+@@ -321,10 +332,10 @@ int gnutls_prf(gnutls_session_t session, size_t label_size, const char *label,
  		memcpy(seed + 2 * GNUTLS_RANDOM_SIZE, extra, extra_size);
  	}
  
@@ -745,7 +511,7 @@ index 95f2fef..05cf500 100644
  	gnutls_free(seed);
  
 diff --git a/lib/privkey.c b/lib/privkey.c
-index 84e984f..0d6a81a 100644
+index 84e984f..d21c706 100644
 --- a/lib/privkey.c
 +++ b/lib/privkey.c
 @@ -20,6 +20,10 @@
@@ -776,7 +542,26 @@ index 84e984f..0d6a81a 100644
  	if (key == NULL)
  		return;
  
-@@ -1115,6 +1129,18 @@ int gnutls_privkey_generate2(gnutls_privkey_t pkey, gnutls_pk_algorithm_t algo,
+@@ -961,6 +975,18 @@ int gnutls_privkey_import_x509(gnutls_privkey_t pkey, gnutls_x509_privkey_t key,
+ 			       unsigned int flags)
+ {
+ 	int ret;
++	int result;
++
++	pkey->pk_algorithm = gnutls_x509_privkey_get_pk_algorithm(key);
++	const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(pkey->pk_algorithm);
++
++	if (cc != NULL && cc->copy_backend != NULL) {
++		result = cc->copy_backend(&pkey->pk_ctx, key->pk_ctx, key->params.algo);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		}
++	}
+ 
+ 	ret = check_if_clean(pkey);
+ 	if (ret < 0) {
+@@ -1115,6 +1141,18 @@ int gnutls_privkey_generate2(gnutls_privkey_t pkey, gnutls_pk_algorithm_t algo,
  {
  	int ret;
  
@@ -795,24 +580,123 @@ index 84e984f..0d6a81a 100644
  	ret = gnutls_x509_privkey_init(&pkey->key.x509);
  	if (ret < 0)
  		return gnutls_assert_val(ret);
-@@ -1163,6 +1189,16 @@ int gnutls_privkey_sign_data(gnutls_privkey_t signer,
+@@ -1162,6 +1200,19 @@ int gnutls_privkey_sign_data(gnutls_privkey_t signer,
+ {
  	int ret;
  	gnutls_x509_spki_st params;
- 
++	int result;
++
 +    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(signer->pk_algorithm);
 +
-+    if (cc != NULL && cc->generate_backend != NULL) {
-+        if (cc->sign_backend(signer->pk_ctx, signer, hash, data, signature) < 0) {
-+                return gnutls_assert_val(-1);
++    if (cc != NULL && cc->sign_backend != NULL) {
++        result = cc->sign_backend(signer->pk_ctx, &signer->key.x509->params.raw_priv, hash, data, signature);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
+ 
+ 	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA)
+ 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+@@ -1212,6 +1263,21 @@ int gnutls_privkey_sign_data2(gnutls_privkey_t signer,
+ 	int ret;
+ 	gnutls_x509_spki_st params;
+ 	const gnutls_sign_entry_st *se;
++	int result;
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(signer->pk_algorithm);
++
++    if (cc != NULL && cc->sign_backend != NULL) {
++		se = _gnutls_sign_to_entry(algo);
++		gnutls_digest_algorithm_t hash = se->hash;
++        result = cc->sign_backend(signer->pk_ctx, &signer->key.x509->params.raw_priv, hash, data, signature);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
+ 
+ 	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA)
+ 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+@@ -1271,6 +1337,23 @@ int gnutls_privkey_sign_hash2(gnutls_privkey_t signer,
+ 	int ret;
+ 	gnutls_x509_spki_st params;
+ 	const gnutls_sign_entry_st *se;
++	int result;
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(signer->pk_algorithm);
++
++	if (cc != NULL && cc->sign_hash_backend != NULL) {
++		se = _gnutls_sign_to_entry(algo);
++		gnutls_digest_algorithm_t hash = se->hash;
++		result = cc->sign_hash_backend(signer->pk_ctx, &signer->key.x509->params.raw_priv, hash, hash_data, signature);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++
++		return 0;
++	}
+ 
+ 	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA) {
+ 		/* the corresponding signature algorithm is SIGN_RSA_RAW,
+@@ -1397,6 +1480,16 @@ int gnutls_privkey_sign_hash(gnutls_privkey_t signer,
+ 	gnutls_x509_spki_st params;
+ 	const gnutls_sign_entry_st *se;
+ 
++	const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(signer->pk_algorithm);
++
++	if (cc != NULL && cc->sign_hash_backend != NULL) {
++		if (cc->sign_hash_backend(signer->pk_ctx, signer, hash_algo, hash_data, signature) < 0) {
++			return gnutls_assert_val(-1);
++		}
++
++		return 0;
++	}
++
+ 	ret = _gnutls_privkey_get_spki_params(signer, &params);
+ 	if (ret < 0) {
+ 		gnutls_assert();
+@@ -1587,6 +1680,16 @@ int gnutls_privkey_decrypt_data(gnutls_privkey_t key, unsigned int flags,
+ 				const gnutls_datum_t *ciphertext,
+ 				gnutls_datum_t *plaintext)
+ {
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->privkey_decrypt_backend != NULL) {
++        if (cc->privkey_decrypt_backend(&key->pk_ctx, key, ciphertext, plaintext) < 0) {
++            return gnutls_assert_val(-1);
 +        }
 +
 +        return 0;
 +    }
 +
- 	if (flags & GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA)
- 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
+ 	switch (key->type) {
+ 	case GNUTLS_PRIVKEY_X509:
+ 		return _gnutls_pk_decrypt(key->pk_algorithm, plaintext,
+@@ -1766,6 +1869,15 @@ int gnutls_privkey_import_url(gnutls_privkey_t key, const char *url,
+ {
+ 	unsigned i;
+ 	int ret;
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->import_privkey_url_backend != NULL) {
++        if (cc->import_privkey_url_backend(&key->pk_ctx, key, url) < 0) {
++            return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
  
-@@ -2059,6 +2095,17 @@ int gnutls_privkey_derive_secret(gnutls_privkey_t privkey,
+ 	for (i = 0; i < _gnutls_custom_urls_size; i++) {
+ 		if (strncmp(url, _gnutls_custom_urls[i].name,
+@@ -2059,6 +2171,17 @@ int gnutls_privkey_derive_secret(gnutls_privkey_t privkey,
  				 const gnutls_datum_t *nonce,
  				 gnutls_datum_t *secret, unsigned int flags)
  {
@@ -831,7 +715,7 @@ index 84e984f..0d6a81a 100644
  		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
  	}
 diff --git a/lib/pubkey.c b/lib/pubkey.c
-index 811e531..377d8f1 100644
+index 811e531..66b4b58 100644
 --- a/lib/pubkey.c
 +++ b/lib/pubkey.c
 @@ -19,6 +19,11 @@
@@ -859,261 +743,177 @@ index 811e531..377d8f1 100644
  	if (!key)
  		return;
  	gnutls_pk_params_release(&key->params);
-@@ -260,6 +271,19 @@ int gnutls_pubkey_import_x509_crq(gnutls_pubkey_t key, gnutls_x509_crq_t crq,
+@@ -179,6 +190,20 @@ int gnutls_pubkey_import_x509(gnutls_pubkey_t key, gnutls_x509_crt_t crt,
+ 			      unsigned int flags)
+ {
+ 	int ret;
++	int result;
++
++	key->pk_algorithm = GNUTLS_PK_UNKNOWN;
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->import_pubkey_x509_backend != NULL) {
++		result = cc->import_pubkey_x509_backend(&key->pk_ctx, key, &crt->der, flags);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
+ 
+ 	gnutls_pk_params_release(&key->params);
+ 	/* params initialized in _gnutls_x509_crt_get_mpis */
+@@ -260,6 +285,20 @@ int gnutls_pubkey_import_x509_crq(gnutls_pubkey_t key, gnutls_x509_crq_t crq,
  int gnutls_pubkey_import_privkey(gnutls_pubkey_t key, gnutls_privkey_t pkey,
  				 unsigned int usage, unsigned int flags)
  {
 +    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(pkey->pk_algorithm);
++	int result;
 +
 +    if (cc != NULL && cc->export_pubkey_backend != NULL) {
 +        key->pk_algorithm = pkey->pk_algorithm;
-+        key->pk_ctx = pkey->pk_ctx;
-+
-+        if (cc->export_pubkey_backend(pkey->pk_ctx, key) < 0) {
-+                return gnutls_assert_val(-1);
-+        }
-+
-+        return 0;
++        result = cc->export_pubkey_backend(&key->pk_ctx, pkey->pk_ctx, key);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
 +    }
 +
  	gnutls_pk_params_release(&key->params);
  	gnutls_pk_params_init(&key->params);
  
-@@ -2177,6 +2201,16 @@ int gnutls_pubkey_verify_data2(gnutls_pubkey_t pubkey,
+@@ -1664,6 +1703,15 @@ int gnutls_pubkey_import_url(gnutls_pubkey_t key, const char *url,
+ 			     unsigned int flags)
+ {
+ 	unsigned i;
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->import_pubkey_url_backend != NULL) {
++        if (cc->import_pubkey_url_backend(&key->pk_ctx, key, url) < 0) {
++            return gnutls_assert_val(-1);
++        }
++
++        return 0;
++    }
+ 
+ 	for (i = 0; i < _gnutls_custom_urls_size; i++) {
+ 		if (strncmp(url, _gnutls_custom_urls[i].name,
+@@ -2176,6 +2224,20 @@ int gnutls_pubkey_verify_data2(gnutls_pubkey_t pubkey,
+ 	const mac_entry_st *me;
  	gnutls_x509_spki_st params;
  	const gnutls_sign_entry_st *se;
- 
++	int result;
++
 +    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(pubkey->pk_algorithm);
 +
 +    if (cc != NULL && cc->verify_backend != NULL) {
-+        if (cc->verify_backend(pubkey->pk_ctx, pubkey, algo, data, signature) < 0) {
-+                return gnutls_assert_val(-1);
++		result = cc->verify_backend(pubkey->pk_ctx, &pubkey->params.raw_pub, algo, data, signature);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
++
+ 
+ 	if (pubkey == NULL) {
+ 		gnutls_assert();
+@@ -2247,6 +2309,19 @@ int gnutls_pubkey_verify_hash2(gnutls_pubkey_t key,
+ 	gnutls_x509_spki_st params;
+ 	const gnutls_sign_entry_st *se;
+ 	int ret;
++	int result;
++
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->verify_hash_backend!= NULL) {
++		result = cc->verify_hash_backend(key->pk_ctx, key, algo, hash, signature);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
+ 
+ 	if (key == NULL) {
+ 		gnutls_assert();
+@@ -2330,6 +2405,16 @@ int gnutls_pubkey_encrypt_data(gnutls_pubkey_t key, unsigned int flags,
+ 			       const gnutls_datum_t *plaintext,
+ 			       gnutls_datum_t *ciphertext)
+ {
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->pubkey_encrypt_backend != NULL) {
++        if (cc->pubkey_encrypt_backend(&key->pk_ctx, key, plaintext, ciphertext) < 0) {
++            return gnutls_assert_val(-1);
 +        }
 +
 +        return 0;
 +    }
 +
- 	if (pubkey == NULL) {
+ 	if (key == NULL) {
  		gnutls_assert();
  		return GNUTLS_E_INVALID_REQUEST;
-diff --git a/lib/secrets.c b/lib/secrets.c
-index a0b12a6..d3bcbe6 100644
---- a/lib/secrets.c
-+++ b/lib/secrets.c
-@@ -36,22 +36,20 @@ int _tls13_init_secret(gnutls_session_t session, const uint8_t *psk,
- 	session->key.proto.tls13.temp_secret_size =
- 		session->security_parameters.prf->output_size;
+diff --git a/lib/x509/privkey.c b/lib/x509/privkey.c
+index 6c7bf13..0a1b5af 100644
+--- a/lib/x509/privkey.c
++++ b/lib/x509/privkey.c
+@@ -24,6 +24,7 @@
  
--	return _tls13_init_secret2(session->security_parameters.prf, psk,
--				   psk_size,
--				   session->key.proto.tls13.temp_secret);
-+	return _gnutls_tls13_hkdf_ops.init(session->security_parameters.prf->id,
-+				psk, psk_size,
-+				session->key.proto.tls13.temp_secret,
-+				session->security_parameters.prf->output_size);
- }
+ #include "gnutls_int.h"
+ #include "datum.h"
++#include "crypto-backend.h"
+ #include "global.h"
+ #include "errors.h"
+ #include "tls-sig.h"
+@@ -36,6 +37,7 @@
+ #include "ecc.h"
+ #include "pin.h"
  
--int _tls13_init_secret2(const mac_entry_st *prf, const uint8_t *psk,
--			size_t psk_size, void *out)
-+int _tls13_init_secret2(gnutls_mac_algorithm_t mac, const uint8_t *psk,
-+			size_t psk_size, void *out, size_t output_size)
- {
- 	char buf[128];
- 
--	if (unlikely(prf == NULL))
--		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
--
- 	/* when no PSK, use the zero-value */
- 	if (psk == NULL) {
--		psk_size = prf->output_size;
-+		psk_size = output_size;
- 		if (unlikely(psk_size >= sizeof(buf)))
- 			return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
- 
-@@ -59,24 +57,35 @@ int _tls13_init_secret2(const mac_entry_st *prf, const uint8_t *psk,
- 		psk = (uint8_t *)buf;
- 	}
- 
--	return gnutls_hmac_fast(prf->id, "", 0, psk, psk_size, out);
-+	return gnutls_hmac_fast(mac, "", 0, psk, psk_size, out);
- }
- 
- /* HKDF-Extract(Prev-Secret, key) */
- int _tls13_update_secret(gnutls_session_t session, const uint8_t *key,
- 			 size_t key_size)
-+{
-+	return _gnutls_tls13_hkdf_ops.update(
-+				session->security_parameters.prf->id,
-+				key, key_size,
-+				session->key.proto.tls13.temp_secret,
-+				session->key.proto.tls13.temp_secret_size,
-+				session->key.proto.tls13.temp_secret);
-+}
 +
-+int _tls13_update_secret2(gnutls_mac_algorithm_t mac, const uint8_t *key,
-+			  size_t key_size, const uint8_t *salt,
-+			  size_t salt_size, uint8_t *secret)
- {
- 	gnutls_datum_t _key;
--	gnutls_datum_t salt;
-+	gnutls_datum_t _salt;
- 	int ret;
+ /**
+  * gnutls_x509_privkey_init:
+  * @key: A pointer to the type to be initialized
+@@ -557,6 +559,19 @@ int gnutls_x509_privkey_import(gnutls_x509_privkey_t key,
+ 	int result = 0, need_free = 0;
+ 	gnutls_datum_t _data;
  
- 	_key.data = (void *)key;
- 	_key.size = key_size;
--	salt.data = (void *)session->key.proto.tls13.temp_secret;
--	salt.size = session->key.proto.tls13.temp_secret_size;
-+	_salt.data = (void*)salt;
-+	_salt.size = salt_size;
- 
--	ret = _gnutls_hkdf_extract(session->security_parameters.prf->id, &_key,
--				   &salt, session->key.proto.tls13.temp_secret);
-+	ret = _gnutls_hkdf_extract(mac, &_key, &_salt, secret);
- 	if (ret < 0)
- 		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
- 	else
-@@ -86,28 +95,25 @@ int _tls13_update_secret(gnutls_session_t session, const uint8_t *key,
- }
- 
- /* Derive-Secret(Secret, Label, Messages) */
--int _tls13_derive_secret2(const mac_entry_st *prf, const char *label,
-+int _tls13_derive_secret2(gnutls_mac_algorithm_t mac, const char *label,
- 			  unsigned label_size, const uint8_t *tbh,
- 			  size_t tbh_size, const uint8_t secret[MAX_HASH_SIZE],
--			  void *out)
-+			  void *out, size_t output_size)
- {
- 	uint8_t digest[MAX_HASH_SIZE];
- 	int ret;
--	unsigned digest_size;
- 
--	if (unlikely(prf == NULL))
--		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
- 	if (unlikely(label_size >= sizeof(digest)))
- 		return gnutls_assert_val(GNUTLS_E_INVALID_REQUEST);
- 
--	digest_size = prf->output_size;
--	ret = gnutls_hash_fast((gnutls_digest_algorithm_t)prf->id, tbh,
--			       tbh_size, digest);
-+	ret = gnutls_hash_fast((gnutls_digest_algorithm_t)mac, tbh, tbh_size,
-+			       digest);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
- 
--	return _tls13_expand_secret2(prf, label, label_size, digest,
--				     digest_size, secret, digest_size, out);
-+	return _gnutls_tls13_hkdf_ops.expand(mac, label, label_size, digest,
-+					     output_size, secret, output_size,
-+					     out);
- }
- 
- /* Derive-Secret(Secret, Label, Messages) */
-@@ -119,12 +125,15 @@ int _tls13_derive_secret(gnutls_session_t session, const char *label,
- 	if (unlikely(session->security_parameters.prf == NULL))
- 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
- 
--	return _tls13_derive_secret2(session->security_parameters.prf, label,
--				     label_size, tbh, tbh_size, secret, out);
-+	return _gnutls_tls13_hkdf_ops.derive(
-+				session->security_parameters.prf->id,
-+				label, label_size, tbh, tbh_size,
-+				secret, out,
-+				session->security_parameters.prf->output_size);
- }
- 
- /* HKDF-Expand-Label(Secret, Label, HashValue, Length) */
--int _tls13_expand_secret2(const mac_entry_st *prf, const char *label,
-+int _tls13_expand_secret2(gnutls_mac_algorithm_t mac, const char *label,
- 			  unsigned label_size, const uint8_t *msg,
- 			  size_t msg_size, const uint8_t secret[MAX_HASH_SIZE],
- 			  unsigned out_size, void *out)
-@@ -160,11 +169,11 @@ int _tls13_expand_secret2(const mac_entry_st *prf, const char *label,
- 	}
- 
- 	key.data = (void *)secret;
--	key.size = _gnutls_mac_get_algo_len(mac_to_entry(prf->id));
-+	key.size = _gnutls_mac_get_algo_len(mac_to_entry(mac));
- 	info.data = str.data;
- 	info.size = str.length;
- 
--	ret = _gnutls_hkdf_expand(prf->id, &key, &info, out, out_size);
-+	ret = _gnutls_hkdf_expand(mac, &key, &info, out, out_size);
- 	if (ret < 0) {
- 		_gnutls_switch_fips_state(GNUTLS_FIPS140_OP_ERROR);
++	key->pk_algorithm = GNUTLS_PK_UNKNOWN;
++    const gnutls_crypto_pk_st *cc = _gnutls_get_crypto_pk(key->pk_algorithm);
++
++    if (cc != NULL && cc->import_privkey_x509_backend != NULL) {
++		result = cc->import_privkey_x509_backend(&key->pk_ctx, key, data, format);
++		if (result < 0 && result != GNUTLS_E_ALGO_NOT_SUPPORTED) {
++			gnutls_assert();
++			return result;
++		} else if (result == 0) {
++			return 0;
++		}
++    }
++
+ 	if (key == NULL) {
  		gnutls_assert();
-@@ -198,7 +207,16 @@ int _tls13_expand_secret(gnutls_session_t session, const char *label,
- 	if (unlikely(session->security_parameters.prf == NULL))
- 		return gnutls_assert_val(GNUTLS_E_INTERNAL_ERROR);
+ 		return GNUTLS_E_INVALID_REQUEST;
+diff --git a/lib/x509/x509_int.h b/lib/x509/x509_int.h
+index 30f8051..a669d3d 100644
+--- a/lib/x509/x509_int.h
++++ b/lib/x509/x509_int.h
+@@ -140,6 +140,10 @@ struct pbkdf2_params {
+ };
  
--	return _tls13_expand_secret2(session->security_parameters.prf, label,
--				     label_size, msg, msg_size, secret,
--				     out_size, out);
-+	return _gnutls_tls13_hkdf_ops.expand(
-+					session->security_parameters.prf->id,
-+					label, label_size, msg, msg_size,
-+					secret, out_size, out);
- }
+ typedef struct gnutls_x509_privkey_int {
++    void *pk_ctx;
++	gnutls_privkey_type_t type;
++	gnutls_pk_algorithm_t pk_algorithm;
 +
-+/** Function pointer for the TLS PRF implementation. */
-+gnutls_crypto_tls13_hkdf_st _gnutls_tls13_hkdf_ops = {
-+	.init = _tls13_init_secret2,
-+	.update = _tls13_update_secret2,
-+	.derive = _tls13_derive_secret2,
-+	.expand = _tls13_expand_secret2
-+};
-diff --git a/lib/secrets.h b/lib/secrets.h
-index 17cb528..654da03 100644
---- a/lib/secrets.h
-+++ b/lib/secrets.h
-@@ -29,26 +29,30 @@ int _tls13_init_secret(gnutls_session_t session, const uint8_t *psk,
- 		       size_t psk_size);
- int _tls13_update_secret(gnutls_session_t session, const uint8_t *key,
- 			 size_t key_size);
-+int _tls13_update_secret2(gnutls_mac_algorithm_t mac, const uint8_t *key,
-+                         size_t key_size, const uint8_t *salt, size_t salt_size,                         uint8_t *secret);
- 
--int _tls13_init_secret2(const mac_entry_st *prf, const uint8_t *psk,
--			size_t psk_size, void *out);
-+int _tls13_init_secret2(gnutls_mac_algorithm_t mac, const uint8_t *psk,
-+			size_t psk_size, void *out, size_t output_size);
- 
- int _tls13_derive_secret(gnutls_session_t session, const char *label,
- 			 unsigned label_size, const uint8_t *msg,
- 			 size_t msg_size, const uint8_t secret[MAX_HASH_SIZE],
- 			 void *out /* of enough length to hold PRF MAC */);
--int _tls13_derive_secret2(const mac_entry_st *prf, const char *label,
-+int _tls13_derive_secret2(gnutls_mac_algorithm_t mac, const char *label,
- 			  unsigned label_size, const uint8_t *tbh,
- 			  size_t tbh_size, const uint8_t secret[MAX_HASH_SIZE],
--			  void *out);
-+			  void *out, size_t output_size);
- 
- int _tls13_expand_secret(gnutls_session_t session, const char *label,
- 			 unsigned label_size, const uint8_t *msg,
- 			 size_t msg_size, const uint8_t secret[MAX_HASH_SIZE],
- 			 unsigned out_size, void *out);
--int _tls13_expand_secret2(const mac_entry_st *prf, const char *label,
-+int _tls13_expand_secret2(gnutls_mac_algorithm_t mac, const char *label,
- 			  unsigned label_size, const uint8_t *msg,
- 			  size_t msg_size, const uint8_t secret[MAX_HASH_SIZE],
- 			  unsigned out_size, void *out);
- 
-+extern gnutls_crypto_tls13_hkdf_st _gnutls_tls13_hkdf_ops;
-+
- #endif /* GNUTLS_LIB_SECRETS_H */
-diff --git a/lib/tls13/finished.c b/lib/tls13/finished.c
-index 422e7d3..131ea5f 100644
---- a/lib/tls13/finished.c
-+++ b/lib/tls13/finished.c
-@@ -36,7 +36,7 @@ int _gnutls13_compute_finished(const mac_entry_st *prf, const uint8_t *base_key,
- 	uint8_t fkey[MAX_HASH_SIZE];
- 	uint8_t ts_hash[MAX_HASH_SIZE];
- 
--	ret = _tls13_expand_secret2(prf, "finished", 8, NULL, 0, base_key,
-+	ret = _tls13_expand_secret2(prf->id, "finished", 8, NULL, 0, base_key,
- 				    prf->output_size, fkey);
- 	if (ret < 0)
- 		return gnutls_assert_val(ret);
+ 	/* the size of params depends on the public
+ 	 * key algorithm
+ 	 */
 diff --git a/src/danetool.c b/src/danetool.c
 index cb088a3..881b63d 100644
 --- a/src/danetool.c
@@ -1129,39 +929,6 @@ index cb088a3..881b63d 100644
  		gnutls_free(t.data);
  	}
  	priv->found = 1;
-diff --git a/tests/kdf-api.c b/tests/kdf-api.c
-index d476482..dbb2e4f 100644
---- a/tests/kdf-api.c
-+++ b/tests/kdf-api.c
-@@ -175,7 +175,12 @@ void doit(void)
- 		  "90b6c73bb50f9c3122ec844ad7c2b3e5",
- 		  "3cb25f25faacd57a90434f64d0362f2a"
- 		  "2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
--		  "34007208d5b887185865");
-+#ifndef GNUTLS_WOLFSSL
-+		  "34007208d5b887185865"
-+#else
-+		  "f6028a0678531c01a700"
-+#endif
-+	);
- 
- 	/* Test vector from RFC 6070.  More thorough testing is done
- 	 * in nettle. */
-@@ -186,12 +191,14 @@ void doit(void)
- 		/* Key sizes and output sizes less than 112-bit are not approved.  */
- 		GNUTLS_FIPS140_OP_NOT_APPROVED);
- 
-+#ifndef GNUTLS_WOLFSSL
- 	test_pbkdf2(GNUTLS_MAC_AES_CMAC_128,
- 		    "70617373776f726470617373776f7264", /* "passwordpassword" */
- 		    "73616c74", /* "salt" */
- 		    4096, 20, "c4c112c6e1e3b8757640603dec78825ff87605a7",
- 		    /* Use of AES-CMAC in PBKDF2 is not supported in ACVP.  */
- 		    GNUTLS_FIPS140_OP_NOT_APPROVED);
-+#endif
- 
- 	gnutls_fips140_context_deinit(fips_context);
- }
 diff --git a/tests/tls12-prf.c b/tests/tls12-prf.c
 index da5adff..12d32fa 100644
 --- a/tests/tls12-prf.c
