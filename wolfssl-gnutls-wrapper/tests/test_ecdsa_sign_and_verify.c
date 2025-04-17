@@ -25,10 +25,24 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     gnutls_datum_t signature;
     const char *test_data = "Test data to be signed";
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
+    gnutls_digest_algorithm_t digest_algo;
+    gnutls_sign_algorithm_t sign_algo;
+
+    if (bits == 256) {
+        digest_algo = GNUTLS_DIG_SHA256;
+        sign_algo = GNUTLS_SIGN_ECDSA_SHA256;
+    } else if (bits == 384) {
+        digest_algo = GNUTLS_DIG_SHA384;
+        sign_algo = GNUTLS_SIGN_ECDSA_SHA384;
+    } else if (bits == 521) {
+        digest_algo = GNUTLS_DIG_SHA512;
+        sign_algo = GNUTLS_SIGN_ECDSA_SHA512;
+    }
 
     memset(&signature, 0, sizeof(signature));
 
     printf("\n=== Testing ECDSA with %s (%d bits) ===\n", curve_name, bits);
+
 
     /* Initialize keys */
     ret = gnutls_privkey_init(&privkey);
@@ -67,7 +81,7 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
 
     /* Sign the test data */
     printf("input data: \"%s\"\n", test_data);
-    ret = gnutls_privkey_sign_data(privkey, GNUTLS_DIG_SHA256, 0, &data, &signature);
+    ret = gnutls_privkey_sign_data(privkey, digest_algo, 0, &data, &signature);
     if (ret != 0) {
         printf("Error signing data: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
@@ -81,7 +95,7 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
 
     /* Verify the signature */
     printf("Verifying signature...\n");
-    ret = gnutls_pubkey_verify_data2(pubkey, GNUTLS_SIGN_ECDSA_SHA256,
+    ret = gnutls_pubkey_verify_data2(pubkey, sign_algo,
                                     0, &data, &signature);
     if (ret == 0) {
         printf("SUCCESS for %s\n", curve_name);

@@ -58,7 +58,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         gnutls_privkey_deinit(alice_privkey);
         return 1;
     }
-    
+
     ret = gnutls_privkey_init(&bob_privkey);
     if (ret != 0) {
         printf("Error initializing Bob's private key: %s\n", gnutls_strerror(ret));
@@ -136,12 +136,12 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     print_hex(shared_key.data, shared_key.size);
 
     /* Derive AES key using HKDF */
-    
+
     /* Step 1: HKDF-Extract to get pseudorandom key */
     unsigned char prk[32]; /* Size based on SHA-256 output */
     const gnutls_datum_t salt = { (unsigned char *)hkdf_salt, strlen(hkdf_salt) };
     const gnutls_datum_t key_datum = { shared_key.data, shared_key.size };
-    
+
     ret = gnutls_hkdf_extract(GNUTLS_MAC_SHA256, &key_datum, &salt, prk);
     if (ret < 0) {
         printf("Error in HKDF-Extract: %s\n", gnutls_strerror(ret));
@@ -152,15 +152,15 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         gnutls_privkey_deinit(alice_privkey);
         return 1;
     }
-    
+
     printf("HKDF-Extract PRK:\n");
     print_hex(prk, sizeof(prk));
-    
+
     /* Step 2: HKDF-Expand to get final key */
     unsigned char key_material[32]; /* 256 bits for AES-256 */
     const gnutls_datum_t prk_datum = { prk, sizeof(prk) };
     const gnutls_datum_t info = { (unsigned char *)hkdf_info, strlen(hkdf_info) };
-    
+
     ret = gnutls_hkdf_expand(GNUTLS_MAC_SHA256, &prk_datum, &info, key_material, sizeof(key_material));
     if (ret < 0) {
         printf("Error in HKDF-Expand: %s\n", gnutls_strerror(ret));
@@ -171,12 +171,12 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         gnutls_privkey_deinit(alice_privkey);
         return 1;
     }
-    
+
     printf("Derived AES key:\n");
     print_hex(key_material, sizeof(key_material));
-    
+
     gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
-    
+
     /* Create datum for IV */
     gnutls_datum_t iv = {
         .data = (unsigned char *)iv_data,
@@ -357,7 +357,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     }
     memcpy(decrypted_str, decrypted.data, decrypted.size);
     decrypted_str[decrypted.size] = '\0';
-    
+
     printf("Decrypted data: \"%s\"\n", decrypted_str);
 
     /* Check if decryption was successful */
@@ -385,7 +385,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     gnutls_privkey_deinit(bob_privkey);
     gnutls_pubkey_deinit(alice_pubkey);
     gnutls_privkey_deinit(alice_privkey);
-    
+
     return 0;
 }
 
@@ -425,6 +425,6 @@ int main(void) {
     /* Clean up global resources */
     gnutls_global_deinit();
 
-    printf("\nAll EC encryption/decryption tests completed successfully!\n");
+    printf("\nAll EC encryption/decryption tests completed!\n");
     return 0;
 }

@@ -3713,6 +3713,10 @@ static const int wolfssl_pk_supported[] = {
         [GNUTLS_PK_ECDH_X448] = 1,
         [GNUTLS_SIGN_ECDSA_SHA256] = 1,
         [GNUTLS_SIGN_ECDSA_SECP256R1_SHA256] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA384] = 1,
+        [GNUTLS_SIGN_ECDSA_SECP384R1_SHA384] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA512] = 1,
+        [GNUTLS_SIGN_ECDSA_SECP521R1_SHA512] = 1,
         [GNUTLS_SIGN_EDDSA_ED25519] = 1,
         [GNUTLS_SIGN_EDDSA_ED448] = 1,
 };
@@ -3812,19 +3816,7 @@ wolfssl_pk_import_privkey_x509(void **_ctx, const void *privkey,
         WGW_LOG("wolfssl: trying Ed25519 private key import");
         ret = wc_ed25519_init(&ctx->key.ed25519);
         if (ret == 0) {
-            /* If this is a PKCS#8 encoded key with ASN.1 wrapper, we need to extract just the 32-byte key */
-            byte* actualKeyData = keyData;
-            word32 actualKeySize = keySize;
-
-            /* Check if this looks like an ASN.1 OCTET STRING with proper Ed25519 key length */
-            if (keySize == 34 && keyData[0] == 0x04 && keyData[1] == 0x20) {
-                /* Skip the ASN.1 OCTET STRING header (0x04 0x20) to get the raw 32-byte key */
-                actualKeyData = keyData + 2;
-                actualKeySize = 32;
-                WGW_LOG("wolfssl: Detected ASN.1 wrapped Ed25519 key, using inner 32 bytes");
-            }
-
-            ret = wc_ed25519_import_private_only(actualKeyData, actualKeySize, &ctx->key.ed25519);
+            ret = wc_Ed25519PrivateKeyDecode(keyData, &(word32){0}, &ctx->key.ed25519, keySize);
 
             if (ret == 0) {
                 WGW_LOG("wolfssl: Ed25519 private key import succeeded");
@@ -3842,19 +3834,7 @@ wolfssl_pk_import_privkey_x509(void **_ctx, const void *privkey,
         WGW_LOG("wolfssl: trying Ed448 private key import");
         ret = wc_ed448_init(&ctx->key.ed448);
         if (ret == 0) {
-            /* If this is a PKCS#8 encoded key with ASN.1 wrapper, we need to extract just the 32-byte key */
-            byte* actualKeyData = keyData;
-            word32 actualKeySize = keySize;
-
-            /* Check if this looks like an ASN.1 OCTET STRING with proper Ed25519 key length */
-            if (keySize == 34 && keyData[0] == 0x04 && keyData[1] == 0x20) {
-                /* Skip the ASN.1 OCTET STRING header (0x04 0x20) to get the raw 32-byte key */
-                actualKeyData = keyData + 2;
-                actualKeySize = 32;
-                WGW_LOG("wolfssl: Detected ASN.1 wrapped Ed448 key, using inner 32 bytes");
-            }
-
-            ret = wc_ed448_import_private_only(actualKeyData, actualKeySize, &ctx->key.ed448);
+            ret = wc_Ed448PrivateKeyDecode(keyData, &(word32){0}, &ctx->key.ed448, keySize);
 
             if (ret == 0) {
                 WGW_LOG("wolfssl: Ed448 private key import succeeded");
@@ -4418,6 +4398,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
 
     /* Handle different key types */
     if (algo == GNUTLS_PK_ECDSA) {
+        WGW_LOG("ECDSA");
         int curve_id;
         int curve_size;
 
@@ -4433,12 +4414,15 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         /* Map GnuTLS curve to wolfSSL */
         switch (bits) {
             case 256: /* SECP256R1 */
+                WGW_LOG("SECP256R1");
                 curve_id = ECC_SECP256R1;
                 break;
             case 384: /* SECP384R1 */
+                WGW_LOG("SECP384R1");
                 curve_id = ECC_SECP384R1;
                 break;
             case 521: /* SECP521R1 */
+                WGW_LOG("SECP521R1");
                 curve_id = ECC_SECP521R1;
                 break;
             default:
@@ -4463,6 +4447,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         }
 
     } else if (algo == GNUTLS_PK_EDDSA_ED25519) {
+        WGW_LOG("ED25519");
         /* Initialize Ed25519 key */
         ret = wc_ed25519_init(&ctx->key.ed25519);
         if (ret != 0) {
@@ -4483,6 +4468,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         }
 
     } else if (algo == GNUTLS_PK_EDDSA_ED448) {
+        WGW_LOG("ED448");
         /* Initialize Ed448 key */
         ret = wc_ed448_init(&ctx->key.ed448);
         if (ret != 0) {
@@ -4503,6 +4489,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         }
 
     } else if (algo == GNUTLS_PK_ECDH_X25519) {
+        WGW_LOG("X25519");
         /* Initialize X25519 key */
         ret = wc_curve25519_init(&ctx->key.x25519);
         if (ret != 0) {
@@ -4522,6 +4509,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             return GNUTLS_E_PK_GENERATION_ERROR;
         }
     } else if (algo == GNUTLS_PK_ECDH_X448) {
+        WGW_LOG("X448");
         /* Initialize X448 key */
         ret = wc_curve448_init(&ctx->key.x448);
         if (ret != 0) {
@@ -5013,8 +5001,12 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
     }
 
     if (algo == GNUTLS_SIGN_ECDSA_SHA256 ||
-        algo == GNUTLS_SIGN_ECDSA_SECP256R1_SHA256 ||
-        ctx->algo == GNUTLS_PK_ECDSA) {
+            algo == GNUTLS_SIGN_ECDSA_SECP256R1_SHA256 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA384 ||
+            algo == GNUTLS_SIGN_ECDSA_SECP384R1_SHA384 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA512||
+            algo == GNUTLS_SIGN_ECDSA_SECP521R1_SHA512 ||
+            ctx->algo == GNUTLS_PK_ECDSA) {
         WGW_LOG("verifying with ECDSA");
 
         if (!(ctx->key.ecc.type == ECC_PUBLICKEY)) {
@@ -5027,9 +5019,31 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             }
         }
 
+        enum wc_HashType hash_type;
+        switch (algo) {
+            case GNUTLS_SIGN_ECDSA_SHA256:
+            case GNUTLS_SIGN_ECDSA_SECP256R1_SHA256:
+                hash_type = WC_HASH_TYPE_SHA256;
+                WGW_LOG("hash detected SHA256");
+                break;
+            case GNUTLS_SIGN_ECDSA_SHA384:
+            case GNUTLS_SIGN_ECDSA_SECP384R1_SHA384:
+                hash_type = WC_HASH_TYPE_SHA384;
+                WGW_LOG("hash detected SHA384");
+                break;
+            case GNUTLS_SIGN_ECDSA_SHA512:
+            case GNUTLS_SIGN_ECDSA_SECP521R1_SHA512:
+                hash_type = WC_HASH_TYPE_SHA512;
+                WGW_LOG("hash detected SHA512");
+                break;
+            default:
+                WGW_LOG("Unsupported algorithm: %d", algo);
+                return GNUTLS_E_INVALID_REQUEST;
+        }
+
         /* Verify the message with ECDSA using SignatureVerify */
         ret = wc_SignatureVerify(
-                WC_HASH_TYPE_SHA256,
+                hash_type,
                 WC_SIGNATURE_TYPE_ECC,
                 msg_data->data, msg_data->size,
                 sig->data, sig->size,
