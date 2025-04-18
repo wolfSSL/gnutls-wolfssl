@@ -1,4 +1,4 @@
-TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_ecdsa_encrypt_and_decrypt test_eddsa_sign_and_verify
+TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_ecdsa_encrypt_and_decrypt test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -49,6 +49,9 @@ test_ecdsa_encrypt_and_decrypt: test_ecdsa_encrypt_and_decrypt.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 test_eddsa_sign_and_verify: test_eddsa_sign_and_verify.c
+	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
+
+test_ecdh_encrypt_and_decrypt: test_ecdh_encrypt_and_decrypt.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 run-%:
