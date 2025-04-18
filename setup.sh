@@ -48,7 +48,7 @@ cd ../
 
 if [ ! -d "gnutls" ]; then
     echo "Cloning GnuTLS repository..."
-    git clone https://github.com/gasbytes/gnutls.git
+    git clone git@github.com:gasbytes/gnutls.git
 
     echo "Checking out to gnutls-wolfssl..."
     cd ./gnutls
@@ -74,7 +74,7 @@ if [ "$OS" = "macos" ]; then
     make -j$(sysctl -n hw.ncpu)
 else
     echo "Configuring GnuTLS for Linux..."
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
     make -j9
 fi
 
