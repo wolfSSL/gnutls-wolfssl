@@ -48,7 +48,7 @@ cd ../
 
 if [ ! -d "gnutls" ]; then
     echo "Cloning GnuTLS repository..."
-    git clone https://github.com/gasbytes/gnutls.git
+    git clone git@github.com:gasbytes/gnutls.git
 
     echo "Checking out to gnutls-wolfssl..."
     cd ./gnutls
