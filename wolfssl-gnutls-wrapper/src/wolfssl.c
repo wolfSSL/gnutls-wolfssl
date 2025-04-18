@@ -2778,6 +2778,9 @@ static const int wolfssl_digest_supported[] = {
     [GNUTLS_DIG_SHA3_256] = 1,
     [GNUTLS_DIG_SHA3_384] = 1,
     [GNUTLS_DIG_SHA3_512] = 1,
+#ifdef WOLFSSL_SHAKE256
+    [GNUTLS_DIG_SHAKE_256] = 1,
+#endif
 };
 /** Length of array of supported digests. */
 #define WOLFSSL_DIGEST_SUPPORTED_LEN (int)(sizeof(wolfssl_digest_supported) / \
@@ -4090,11 +4093,18 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, const void *pubkey,
        WGW_LOG("wolfssl: trying X25519 public key import");
        ret = wc_curve25519_init(&ctx->key.x25519);
        if (ret == 0) {
-           ret = wc_Curve25519PublicKeyDecode(publicKeyDer, &(word32){0},
-                   &ctx->key.x25519, publicKeySize);
+           ret = wc_curve25519_import_public(publicKeyDer, publicKeySize, &ctx->key.x25519);
 
            if (ret == 0) {
-               WGW_LOG("wolfssl: X25519 public key import succeeded\n");
+               WGW_LOG("wolfssl: x25519 public key import succeeded");
+               ctx->pub_data_len = CURVE25519_PUB_KEY_SIZE;
+               ret = wc_curve25519_export_public(&ctx->key.x25519, ctx->pub_data, &ctx->pub_data_len);
+               if (ret != 0) {
+                   WGW_LOG("wolfssl: x25519 public key export failed with code: %d", ret);
+                   return GNUTLS_E_INVALID_REQUEST;
+               } else {
+                   WGW_LOG("wolfssl: x25519 public key export succeeded");
+               }
                ctx->algo = GNUTLS_PK_ECDH_X25519;
                key_found = 1;
            } else {
@@ -4109,17 +4119,24 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, const void *pubkey,
         WGW_LOG("wolfssl: trying X448 public key import");
         ret = wc_curve448_init(&ctx->key.x448);
         if (ret == 0) {
-            ret = wc_Curve448PublicKeyDecode(publicKeyDer, &(word32){0},
-                    &ctx->key.x448, publicKeySize);
+           ret = wc_curve448_import_public(publicKeyDer, publicKeySize, &ctx->key.x448);
 
-            if (ret == 0) {
-                WGW_LOG("wolfssl: X448 public key import succeeded\n");
-                ctx->algo = GNUTLS_PK_ECDH_X448;
-                key_found = 1;
-            } else {
-                WGW_LOG("wolfssl: X448 public key import failed with code %d", ret);
-                wc_curve448_free(&ctx->key.x448);
-            }
+           if (ret == 0) {
+               WGW_LOG("wolfssl: x448 public key import succeeded");
+               ctx->pub_data_len = CURVE448_PUB_KEY_SIZE;
+               ret = wc_curve448_export_public(&ctx->key.x448, ctx->pub_data, &ctx->pub_data_len);
+               if (ret != 0) {
+                   WGW_LOG("wolfssl: x448 public key export failed with code: %d", ret);
+                   return GNUTLS_E_INVALID_REQUEST;
+               } else {
+                   WGW_LOG("wolfssl: x448 public key export succeeded");
+               }
+               ctx->algo = GNUTLS_PK_ECDH_X448;
+               key_found = 1;
+           } else {
+               WGW_LOG("wolfssl: X448 public key import failed with code %d", ret);
+               wc_curve448_free(&ctx->key.x448);
+           }
         }
     }
 
@@ -5170,7 +5187,6 @@ static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
     WGW_FUNC_ENTER();
 
     (void)nonce;
-    (void)privkey;
 
     /* Parameters sanity checks */
     if (!ctx || !ctx->initialized) {
@@ -5187,6 +5203,12 @@ static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
     const gnutls_datum_t *pub = (const gnutls_datum_t *)pubkey;
     if (!pub->data || pub->size == 0) {
         WGW_LOG("invalid public key data");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    const gnutls_datum_t *priv = (const gnutls_datum_t *)privkey;
+    if (!priv->data || priv->size == 0) {
+        WGW_LOG("invalid private key data");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -5314,6 +5336,15 @@ static int wolfssl_pk_derive_shared_secret(void *_ctx, const void *privkey,
                     WGW_LOG("X448 public key import failed with code %d", ret);
                     wc_curve448_free(&peer_key);
                     return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                if (!ctx->key.x448.privSet) {
+                    WGW_LOG("Private key is not set, importing now");
+                    ret = wc_curve448_import_private_ex(priv->data, priv->size, &ctx->key.x448, EC448_LITTLE_ENDIAN);
+                    if (ret != 0) {
+                        WGW_LOG("Error while importing key, failed with code %d", ret);
+                        return GNUTLS_E_INVALID_REQUEST;
+                    }
                 }
 
                 /* Generate the shared secret */
