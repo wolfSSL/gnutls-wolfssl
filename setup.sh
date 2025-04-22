@@ -48,34 +48,33 @@ cd ../
 
 if [ ! -d "gnutls" ]; then
     echo "Cloning GnuTLS repository..."
-    git clone --depth=1 https://github.com/gnutls/gnutls.git
+    git clone https://github.com/gasbytes/gnutls.git
+
+    echo "Checking out to gnutls-wolfssl..."
+    cd ./gnutls
+    git fetch --all
+    git checkout -b gnutls-wolfssl origin/gnutls-wolfssl
+else
+    cd ./gnutls
 fi
 
-cd ./gnutls
 ./bootstrap
-
-if [ -f "../patch.diff" ]; then
-    echo "Applying patch..."
-    git apply ../patch.diff
-fi
 
 autoreconf -fvi
 
 if [ "$OS" = "macos" ]; then
     echo "Configuring GnuTLS for macOS..."
-    CFLAGS="-I$(brew --prefix libunistring)/include -I$(brew --prefix gmp)/include -I$(brew --prefix libev)/include" \
+    CFLAGS="-I$(brew --prefix libunistring)/include -I$(brew --prefix gmp)/include -I$(brew --prefix libev)/include -DGNUTLS_WOLFSSL" \
     LDFLAGS="-L$(brew --prefix libunistring)/lib -L$(brew --prefix gmp)/lib -L$(brew --prefix libev)/lib -L$(brew --prefix bison)/lib" \
     GMP_CFLAGS="-I$(brew --prefix gmp)/include" \
     GMP_LIBS="-L$(brew --prefix gmp)/lib -lgmp" \
     PKG_CONFIG_PATH="$(brew --prefix libev)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH" \
     CC=clang \
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
-    
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost
     make -j$(sysctl -n hw.ncpu)
 else
     echo "Configuring GnuTLS for Linux..."
     ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
-    
     make -j9
 fi
 
