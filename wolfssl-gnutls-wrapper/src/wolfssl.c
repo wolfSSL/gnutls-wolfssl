@@ -4243,13 +4243,16 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, const void *pubkey,
 wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         gnutls_digest_algorithm_t hash_algo,
         const gnutls_datum_t *hash_data,
-        gnutls_datum_t *signature)
+        gnutls_datum_t *signature,
+        unsigned int flags,
+        gnutls_sign_algorithm_t algo)
 {
     WGW_LOG("wolfssl: wolfssl_pk_sign_hash with hash algorithm %d", hash_algo);
 
     (void)signer;
     struct wolfssl_pk_ctx *ctx = _ctx;
-    int ret;
+    int ret = 0;
+    int hash_type;
 
     if (ctx == NULL) {
         WGW_LOG("Context is NULL!");
@@ -4263,6 +4266,18 @@ wolfssl_pk_sign_hash(void *_ctx, const void *signer,
 
     if (!hash_data || !hash_data->data || hash_data->size == 0 || !signature) {
         return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    hash_type = get_hash_type((gnutls_mac_algorithm_t)hash_algo);
+    if (ret < 0) {
+        WGW_LOG("hash algo not supported: %d", hash_algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* check if any RSA-PSS flags/arguments were provided, and if so, update the algo */
+    if ((flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS) || algo == GNUTLS_PK_RSA_PSS) {
+        WGW_LOG("setting to rsa-pss");
+        ctx->algo = GNUTLS_PK_RSA_PSS;
     }
 
     if (ctx->algo == GNUTLS_PK_ECDSA) {
@@ -4341,12 +4356,285 @@ wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         memcpy(signature->data, sig_buf, sig_size);
         signature->size = sig_size;
 
+    } else if (ctx->algo == GNUTLS_PK_RSA) {
+        WGW_LOG("signing hash with RSA");
+        /* Get the maximum signature size - typically the key size */
+        word32 sig_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
+        word32 actual_sig_size = sig_buf_len;
+
+        byte *sig_buf = gnutls_malloc(sig_buf_len);
+        if (!sig_buf) {
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        WGW_LOG("sig_buf_len: %d", sig_buf_len);
+
+        WGW_LOG("using RSA PKCS#1 v1.5 padding");
+        /* Use wc_SignatureGenerate for PKCS#1 v1.5 */
+        ret = wc_SignatureGenerateHash(
+                hash_type,                       /* Hash algorithm type */
+                WC_SIGNATURE_TYPE_RSA,           /* Signature type (RSA) */
+                hash_data->data, hash_data->size,  /* Data hash to sign */
+                sig_buf, &actual_sig_size,       /* Output signature buffer and resulting length */
+                &ctx->key.rsa, sizeof(ctx->key.rsa), /* RSA key and size */
+                &ctx->rng                        /* RNG */
+                );
+
+        if (ret != 0) {
+            WGW_LOG("RSA PKCS#1 v1.5 signing failed with code %d", ret);
+            gnutls_free(sig_buf);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+
+        /* Allocate space for the final signature and copy it */
+        signature->data = gnutls_malloc(actual_sig_size);
+        if (!signature->data) {
+            gnutls_free(sig_buf);
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        WGW_LOG("RSA sig_size: %u", actual_sig_size);
+        XMEMCPY(signature->data, sig_buf, actual_sig_size);
+        signature->size = actual_sig_size;
+        gnutls_free(sig_buf);
+    } else if (ctx->algo == GNUTLS_PK_RSA_PSS) {
+        WGW_LOG("signing with RSA-PSS");
+        /* Get the maximum signature size - typically the key size */
+        word32 sig_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
+        word32 actual_sig_size = sig_buf_len;
+
+        byte *sig_buf = gnutls_malloc(sig_buf_len);
+        if (!sig_buf) {
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        WGW_LOG("using RSA-PSS padding");
+        int mgf = 0;
+
+        /* Map GnuTLS hash algorithm to WolfSSL hash type */
+        switch (hash_type) {
+            case WC_HASH_TYPE_SHA256:
+                mgf = WC_MGF1SHA256;
+                WGW_LOG("using MGF1SHA256");
+                break;
+            case WC_HASH_TYPE_SHA384:
+                mgf = WC_MGF1SHA384;
+                WGW_LOG("using MGF1SHA384");
+                break;
+            case WC_HASH_TYPE_SHA512:
+                mgf = WC_MGF1SHA512;
+                WGW_LOG("using MGF1SHA512");
+                break;
+            default:
+                WGW_LOG("Unsupported hash algorithm: %d", hash_type);
+                return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        ret = wc_RsaPSS_Sign(
+                hash_data->data, hash_data->size, /* Hash digest and length */
+                sig_buf, sig_buf_len,           /* Output buffer and length */
+                hash_type,                      /* Hash type */
+                mgf,                            /* Mask Generation Function */
+                &ctx->key.rsa,                  /* RSA key */
+                &ctx->rng                      /* RNG */
+                );
+
+        if (ret < 0) {
+            WGW_LOG("RSA-PSS signing failed with code %d", ret);
+            gnutls_free(sig_buf);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+
+        actual_sig_size = ret;
+        /* Allocate space for the final signature and copy it */
+        signature->data = gnutls_malloc(actual_sig_size);
+        if (!signature->data) {
+            gnutls_free(sig_buf);
+            WGW_LOG("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        WGW_LOG("RSA sig_size: %u", actual_sig_size);
+        XMEMCPY(signature->data, sig_buf, actual_sig_size);
+        signature->size = actual_sig_size;
+        gnutls_free(sig_buf);
     } else {
         WGW_LOG("wolfssl: unsupported algorithm for hash signing: %d\n", ctx->algo);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
     WGW_LOG("wolfssl: hash signed successfully");
+    return 0;
+}
+
+/**
+ * Helper function to determine the MGF type and hash length based on hash type
+ *
+ * @param hash_type The hash type to get MGF and length for
+ * @param mgf Pointer to store the resulting MGF value
+ * @param hash_len Pointer to store the resulting hash length
+ * @return 0 on success, -1 on error
+ */
+static int get_mgf_and_hash_len(int hash_type, int *mgf, int *hash_len)
+{
+    switch (hash_type) {
+        case WC_HASH_TYPE_SHA256:
+            *mgf = WC_MGF1SHA256;
+            *hash_len = WC_SHA256_DIGEST_SIZE;
+            WGW_LOG("using MGF1SHA256");
+            return 0;
+        case WC_HASH_TYPE_SHA384:
+            *mgf = WC_MGF1SHA384;
+            *hash_len = WC_SHA384_DIGEST_SIZE;
+            WGW_LOG("using MGF1SHA384");
+            return 0;
+        case WC_HASH_TYPE_SHA512:
+            *mgf = WC_MGF1SHA512;
+            *hash_len = WC_SHA512_DIGEST_SIZE;
+            WGW_LOG("using MGF1SHA512");
+            return 0;
+        default:
+            WGW_LOG("Unsupported hash algorithm: %d", hash_type);
+            return -1;
+    }
+}
+
+
+/**
+ * Verify using rsa-pss.
+ *
+ * @param hash_type The Wolf hash type
+ * @param msg_data The message data
+ * @param sig The signature to verify
+ * @param hash The GnuTLS hash algorithm
+ * @param rsa_key The RSA key
+ * @return GNUTLS status code (0 on success)
+ */
+static int verify_rsa_pss(
+        int hash_type,
+        const gnutls_datum_t *msg_data,
+        const gnutls_datum_t *sig,
+        gnutls_digest_algorithm_t hash,
+        RsaKey *rsa_key,
+        int hash_flag)
+{
+    int ret;
+    int mgf = 0;
+    int hash_len = 0;
+    byte *digest = NULL;
+    byte *verify_buf = NULL;
+
+    WGW_LOG("Using RSA-PSS verification");
+
+    /* Get MGF type and hash length */
+    if (get_mgf_and_hash_len(hash_type, &mgf, &hash_len) != 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (hash_flag) {
+        /* Allocate memory for the digest */
+        digest = gnutls_malloc(hash_len);
+        if (!digest) {
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        /* Hash the message */
+        ret = wolfssl_digest_fast(hash, msg_data->data, msg_data->size, digest);
+        if (ret != 0) {
+            WGW_LOG("Hashing of the message before verification failed with ret: %d", ret);
+            gnutls_free(digest);
+            return GNUTLS_E_PK_SIGN_FAILED;
+        }
+    }
+
+    /* Allocate memory for verification buffer */
+    verify_buf = gnutls_malloc(RSA_PSS_SIG_SIZE);
+    if (!verify_buf) {
+        gnutls_free(digest);
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    if (hash_flag) {
+        /* Verify using RSA-PSS */
+        ret = wc_RsaPSS_VerifyCheck(
+                sig->data, sig->size,
+                verify_buf, RSA_PSS_SIG_SIZE,
+                digest, hash_len,
+                hash_type,
+                mgf,
+                rsa_key
+                );
+        gnutls_free(digest);
+    } else {
+        /* Verify using RSA-PSS */
+        ret = wc_RsaPSS_VerifyCheck(
+                sig->data, sig->size,
+                verify_buf, RSA_PSS_SIG_SIZE,
+                msg_data->data, msg_data->size,
+                hash_type,
+                mgf,
+                rsa_key
+                );
+    }
+
+    /* Free resources */
+    gnutls_free(verify_buf);
+
+    WGW_LOG("ret: %d", ret);
+
+    return (ret < 0) ? GNUTLS_E_PK_SIG_VERIFY_FAILED : 0;
+}
+
+/**
+ * Helper function to verify using RSA PKCS#1 v1.5
+ *
+ * @param hash_type The Wolf hash type
+ * @param msg_data The message data
+ * @param sig The signature to verify
+ * @param rsa_key The RSA key
+ * @return GNUTLS status code (0 on success)
+ */
+static int verify_rsa_pkcs1(
+        int hash_type,
+        const gnutls_datum_t *msg_data,
+        const gnutls_datum_t *sig,
+        RsaKey *rsa_key,
+        int hash_flag)
+{
+    int ret;
+
+    WGW_LOG("Using RSA PKCS#1 v1.5 verification");
+
+    if (!hash_flag) {
+        WGW_LOG("data not already hashed");
+    /* Use SignatureVerify for PKCS#1 v1.5 */
+    ret = wc_SignatureVerify(
+            hash_type,                     /* Hash algorithm type */
+            WC_SIGNATURE_TYPE_RSA,         /* Signature type (RSA) */
+            msg_data->data, msg_data->size, /* Message buffer and length */
+            sig->data, sig->size,          /* Signature buffer and length */
+            rsa_key, sizeof(*rsa_key)      /* RSA key and size */
+            );
+    } else {
+        WGW_LOG("already hashed data");
+        /* Use SignatureVerify for PKCS#1 v1.5 */
+        ret = wc_SignatureVerifyHash(
+                hash_type,                     /* Hash algorithm type */
+                WC_SIGNATURE_TYPE_RSA,         /* Signature type (RSA) */
+                msg_data->data, msg_data->size, /* Message buffer and length */
+                sig->data, sig->size,          /* Signature buffer and length */
+                rsa_key, sizeof(*rsa_key)      /* RSA key and size */
+                );
+    }
+
+    if (ret != 0) {
+        WGW_LOG("RSA PKCS#1 v1.5 verification failed with code %d", ret);
+        return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+    }
+
     return 0;
 }
 
@@ -4435,6 +4723,83 @@ wolfssl_pk_verify_hash(void *_ctx, const void *key,
 
         if (verify_status != 1) {
             WGW_LOG("wolfssl: Ed448 hash signature verification failed\n");
+            return GNUTLS_E_PK_SIG_VERIFY_FAILED;
+        }
+    } else if (algo == GNUTLS_SIGN_RSA_SHA256 ||
+               algo == GNUTLS_SIGN_RSA_SHA384 ||
+               algo == GNUTLS_SIGN_RSA_SHA512 ||
+               algo == GNUTLS_SIGN_RSA_PSS_SHA256 ||
+               algo == GNUTLS_SIGN_RSA_PSS_SHA384 ||
+               algo == GNUTLS_SIGN_RSA_PSS_SHA512 ||
+               ctx->algo == GNUTLS_PK_RSA) {
+        WGW_LOG("verifying with RSA");
+        enum wc_HashType hash_type;
+        gnutls_digest_algorithm_t hash_gnutls;
+
+        /* Determine hash algorithm and if using PSS */
+        switch (algo) {
+            case GNUTLS_SIGN_RSA_SHA256:
+                hash_type = WC_HASH_TYPE_SHA256;
+                hash_gnutls = GNUTLS_DIG_SHA256;
+                WGW_LOG("hash detected SHA256 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA384:
+                hash_type = WC_HASH_TYPE_SHA384;
+                hash_gnutls = GNUTLS_DIG_SHA384;
+                WGW_LOG("hash detected SHA384 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA512:
+                hash_type = WC_HASH_TYPE_SHA512;
+                hash_gnutls = GNUTLS_DIG_SHA512;
+                WGW_LOG("hash detected SHA512 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_PSS_SHA256:
+                hash_type = WC_HASH_TYPE_SHA256;
+                hash_gnutls = GNUTLS_DIG_SHA256;
+                WGW_LOG("hash detected SHA256 (PSS)");
+                break;
+            case GNUTLS_SIGN_RSA_PSS_SHA384:
+                hash_type = WC_HASH_TYPE_SHA384;
+                hash_gnutls = GNUTLS_DIG_SHA384;
+                WGW_LOG("hash detected SHA384 (PSS)");
+                break;
+            case GNUTLS_SIGN_RSA_PSS_SHA512:
+                hash_type = WC_HASH_TYPE_SHA512;
+                hash_gnutls = GNUTLS_DIG_SHA512;
+                WGW_LOG("hash detected SHA512 (PSS)");
+                break;
+            default:
+                /* If no specific algorithm was provided but ctx->algo is RSA,
+                 * default to SHA256 */
+                hash_type = WC_HASH_TYPE_SHA256;
+                WGW_LOG("defaulting to SHA256 for RSA, algo: %d", algo);
+                break;
+        }
+
+        /* Import the public key if needed */
+        if (mp_iszero(&ctx->key.rsa.n) || mp_iszero(&ctx->key.rsa.e)) {
+            WGW_LOG("public key is not set, importing now");
+
+            /* Import the public key from DER */
+            ret = wc_RsaPublicKeyDecode(ctx->pub_data, &(word32){0}, &ctx->key.rsa, ctx->pub_data_len);
+            if (ret != 0) {
+                WGW_LOG("RSA public key import failed with code %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+        }
+
+        /* First try RSA-PSS verification */
+        WGW_LOG("Trying RSA-PSS verification for unknown algorithm");
+        ret = verify_rsa_pss(hash_type, hash, signature, hash_gnutls, &ctx->key.rsa, 0);
+
+        /* If RSA-PSS fails, fall back to PKCS#1 v1.5 */
+        if (ret < 0) {
+            WGW_LOG("RSA-PSS verification failed, trying PKCS#1 v1.5, ret: %d", ret);
+            ret = verify_rsa_pkcs1(hash_type, hash, signature, &ctx->key.rsa, 1);
+        }
+
+        if (ret < 0) {
+            WGW_LOG("RSA signature verification failed");
             return GNUTLS_E_PK_SIG_VERIFY_FAILED;
         }
     } else {
@@ -4880,7 +5245,7 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx, const void *p
 
 /* sign message */
 static int wolfssl_pk_sign(void *_ctx, const void *privkey,
-    gnutls_digest_algorithm_t hash, const void *data, const void *signature, unsigned int flags)
+    gnutls_digest_algorithm_t hash, const void *data, const void *signature, unsigned int flags, gnutls_sign_algorithm_t algo)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
@@ -4919,6 +5284,11 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         default:
             WGW_LOG("Unsupported hash algorithm: %d", hash);
             return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* check if any RSA-PSS flags/arguments were provided, and if so, update the algo */
+    if ((flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS) || algo == GNUTLS_PK_RSA_PSS) {
+        ctx->algo = GNUTLS_PK_RSA_PSS;
     }
 
     if (ctx->algo == GNUTLS_PK_ECDSA) {
@@ -5107,7 +5477,7 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         XMEMCPY(sig->data, sig_buf, sig_size);
         sig->size = sig_size;
         gnutls_free(sig_buf);
-    } else if (ctx->algo == GNUTLS_PK_RSA && !(flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS)) {
+    } else if (ctx->algo == GNUTLS_PK_RSA) {
         WGW_LOG("signing with RSA");
         /* Get the maximum signature size - typically the key size */
         word32 sig_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
@@ -5148,8 +5518,7 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         XMEMCPY(sig->data, sig_buf, actual_sig_size);
         sig->size = actual_sig_size;
         gnutls_free(sig_buf);
-    } else if (ctx->algo == GNUTLS_PK_RSA_PSS ||
-              (ctx->algo == GNUTLS_PK_RSA && (flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS))) {
+    } else if (ctx->algo == GNUTLS_PK_RSA_PSS) {
         WGW_LOG("signing with RSA-PSS");
         /* Get the maximum signature size - typically the key size */
         word32 sig_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
@@ -5231,142 +5600,6 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
     return 0;
 }
 
-
-/**
- * Helper function to determine the MGF type and hash length based on hash type
- *
- * @param hash_type The hash type to get MGF and length for
- * @param mgf Pointer to store the resulting MGF value
- * @param hash_len Pointer to store the resulting hash length
- * @return 0 on success, -1 on error
- */
-static int get_mgf_and_hash_len(int hash_type, int *mgf, int *hash_len)
-{
-    switch (hash_type) {
-        case WC_HASH_TYPE_SHA256:
-            *mgf = WC_MGF1SHA256;
-            *hash_len = WC_SHA256_DIGEST_SIZE;
-            WGW_LOG("using MGF1SHA256");
-            return 0;
-        case WC_HASH_TYPE_SHA384:
-            *mgf = WC_MGF1SHA384;
-            *hash_len = WC_SHA384_DIGEST_SIZE;
-            WGW_LOG("using MGF1SHA384");
-            return 0;
-        case WC_HASH_TYPE_SHA512:
-            *mgf = WC_MGF1SHA512;
-            *hash_len = WC_SHA512_DIGEST_SIZE;
-            WGW_LOG("using MGF1SHA512");
-            return 0;
-        default:
-            WGW_LOG("Unsupported hash algorithm: %d", hash_type);
-            return -1;
-    }
-}
-
-/**
- * Verify using rsa-pss.
- *
- * @param hash_type The Wolf hash type
- * @param msg_data The message data
- * @param sig The signature to verify
- * @param hash The GnuTLS hash algorithm
- * @param rsa_key The RSA key
- * @return GNUTLS status code (0 on success)
- */
-static int verify_rsa_pss(
-        int hash_type,
-        const gnutls_datum_t *msg_data,
-        const gnutls_datum_t *sig,
-        gnutls_digest_algorithm_t hash,
-        RsaKey *rsa_key)
-{
-    int ret;
-    int mgf = 0;
-    int hash_len = 0;
-    byte *digest = NULL;
-    byte *verify_buf = NULL;
-
-    WGW_LOG("Using RSA-PSS verification");
-
-    /* Get MGF type and hash length */
-    if (get_mgf_and_hash_len(hash_type, &mgf, &hash_len) != 0) {
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    /* Allocate memory for the digest */
-    digest = gnutls_malloc(hash_len);
-    if (!digest) {
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-
-    /* Hash the message */
-    ret = wolfssl_digest_fast(hash, msg_data->data, msg_data->size, digest);
-    if (ret != 0) {
-        WGW_LOG("Hashing of the message before verification failed with ret: %d", ret);
-        gnutls_free(digest);
-        return GNUTLS_E_PK_SIGN_FAILED;
-    }
-
-    /* Allocate memory for verification buffer */
-    verify_buf = gnutls_malloc(RSA_PSS_SIG_SIZE);
-    if (!verify_buf) {
-        gnutls_free(digest);
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-
-    /* Verify using RSA-PSS */
-    ret = wc_RsaPSS_VerifyCheck(
-            sig->data, sig->size,
-            verify_buf, RSA_PSS_SIG_SIZE,
-            digest, hash_len,
-            hash_type,
-            mgf,
-            rsa_key
-            );
-
-    /* Free resources */
-    gnutls_free(digest);
-    gnutls_free(verify_buf);
-
-    return (ret < 0) ? GNUTLS_E_PK_SIG_VERIFY_FAILED : 0;
-}
-
-/**
- * Helper function to verify using RSA PKCS#1 v1.5
- *
- * @param hash_type The Wolf hash type
- * @param msg_data The message data
- * @param sig The signature to verify
- * @param rsa_key The RSA key
- * @return GNUTLS status code (0 on success)
- */
-static int verify_rsa_pkcs1(
-        int hash_type,
-        const gnutls_datum_t *msg_data,
-        const gnutls_datum_t *sig,
-        RsaKey *rsa_key)
-{
-    int ret;
-
-    WGW_LOG("Using RSA PKCS#1 v1.5 verification");
-
-    /* Use SignatureVerify for PKCS#1 v1.5 */
-    ret = wc_SignatureVerify(
-            hash_type,                     /* Hash algorithm type */
-            WC_SIGNATURE_TYPE_RSA,         /* Signature type (RSA) */
-            msg_data->data, msg_data->size, /* Message buffer and length */
-            sig->data, sig->size,          /* Signature buffer and length */
-            rsa_key, sizeof(*rsa_key)      /* RSA key and size */
-            );
-
-    if (ret != 0) {
-        WGW_LOG("RSA PKCS#1 v1.5 verification failed with code %d", ret);
-        return GNUTLS_E_PK_SIG_VERIFY_FAILED;
-    }
-
-    return 0;
-}
 
 /* verify message */
 static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
@@ -5528,7 +5761,6 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
         WGW_LOG("verifying with RSA");
         enum wc_HashType hash_type;
         gnutls_digest_algorithm_t hash;
-        int is_pss = 0;
 
         /* Determine hash algorithm and if using PSS */
         switch (algo) {
@@ -5550,19 +5782,16 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             case GNUTLS_SIGN_RSA_PSS_SHA256:
                 hash_type = WC_HASH_TYPE_SHA256;
                 hash = GNUTLS_DIG_SHA256;
-                is_pss = 1;
                 WGW_LOG("hash detected SHA256 (PSS)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA384:
                 hash_type = WC_HASH_TYPE_SHA384;
                 hash = GNUTLS_DIG_SHA384;
-                is_pss = 1;
                 WGW_LOG("hash detected SHA384 (PSS)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA512:
                 hash_type = WC_HASH_TYPE_SHA512;
                 hash = GNUTLS_DIG_SHA512;
-                is_pss = 1;
                 WGW_LOG("hash detected SHA512 (PSS)");
                 break;
             default:
@@ -5585,38 +5814,18 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             }
         }
 
-        /* Verify the signature */
-        if (algo == GNUTLS_PK_UNKNOWN) {
-            /* algo is unknown, trial and error approach */
+        /* First try RSA-PSS verification */
+        ret = verify_rsa_pss(hash_type, msg_data, sig, hash, &ctx->key.rsa, 1);
 
-            /* First try RSA-PSS verification */
-            WGW_LOG("Trying RSA-PSS verification for unknown algorithm");
-            ret = verify_rsa_pss(hash_type, msg_data, sig, hash, &ctx->key.rsa);
+        /* If RSA-PSS fails, fall back to PKCS#1 v1.5 */
+        if (ret < 0) {
+            WGW_LOG("RSA-PSS verification failed, trying PKCS#1 v1.5");
+            ret = verify_rsa_pkcs1(hash_type, msg_data, sig, &ctx->key.rsa, 0);
+        }
 
-            /* If RSA-PSS fails, fall back to PKCS#1 v1.5 */
-            if (ret < 0) {
-                WGW_LOG("RSA-PSS verification failed, trying PKCS#1 v1.5");
-                ret = verify_rsa_pkcs1(hash_type, msg_data, sig, &ctx->key.rsa);
-            }
-
-            if (ret < 0) {
-                WGW_LOG("RSA signature verification failed");
-                return GNUTLS_E_PK_SIG_VERIFY_FAILED;
-            }
-        } else if (is_pss) {
-            ret = verify_rsa_pss(hash_type, msg_data, sig, hash, &ctx->key.rsa);
-
-            if (ret < 0) {
-                WGW_LOG("RSA-PSS verification failed, with ret %d", ret);
-                return GNUTLS_E_PK_SIG_VERIFY_FAILED;
-            }
-        } else {
-            ret = verify_rsa_pkcs1(hash_type, msg_data, sig, &ctx->key.rsa);
-
-            if (ret < 0) {
-                WGW_LOG("RSA-PKCS#1 v1.5 verification failed, with ret %d", ret);
-                return GNUTLS_E_PK_SIG_VERIFY_FAILED;
-            }
+        if (ret < 0) {
+            WGW_LOG("RSA signature verification failed");
+            return GNUTLS_E_PK_SIG_VERIFY_FAILED;
         }
     } else {
         WGW_LOG("unsupported algorithm for verification: %d", algo);
