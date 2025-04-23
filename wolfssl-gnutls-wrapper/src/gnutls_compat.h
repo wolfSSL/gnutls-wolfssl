@@ -330,6 +330,19 @@ typedef enum {
 	GNUTLS_EXPORT = 1
 } gnutls_direction_t;
 
+typedef enum gnutls_privkey_flags {
+	GNUTLS_PRIVKEY_IMPORT_AUTO_RELEASE = 1,
+	GNUTLS_PRIVKEY_IMPORT_COPY = 1 << 1,
+	GNUTLS_PRIVKEY_DISABLE_CALLBACKS = 1 << 2,
+	GNUTLS_PRIVKEY_SIGN_FLAG_TLS1_RSA = 1 << 4,
+	GNUTLS_PRIVKEY_FLAG_PROVABLE = 1 << 5,
+	GNUTLS_PRIVKEY_FLAG_EXPORT_COMPAT = 1 << 6,
+	GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS = 1 << 7,
+	GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE = 1 << 8,
+	GNUTLS_PRIVKEY_FLAG_CA = 1 << 9,
+	GNUTLS_PRIVKEY_FLAG_RSA_PSS_FIXED_SALT_LENGTH = 1 << 10
+} gnutls_privkey_flags_t;
+
 /* Public key algorithms */
 typedef struct gnutls_crypto_pk {
     gnutls_pk_generate_func generate_backend;
