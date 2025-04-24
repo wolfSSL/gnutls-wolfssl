@@ -4019,6 +4019,15 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, gnutls_pk_algorithm_t **pubkey_algo,
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Initialize RNG */
+    ret = wc_InitRng(&ctx->rng);
+    if (ret != 0) {
+        WGW_LOG("wolfssl: wc_InitRng failed with code %d", ret);
+        gnutls_free(ctx);
+        return GNUTLS_E_RANDOM_FAILED;
+    }
+    ctx->rng_initialized = 1;
+
     /* Empty data check */
     if (!data->data || data->size == 0) {
         WGW_LOG("wolfssl: empty data for public key import");
@@ -4218,8 +4227,6 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, gnutls_pk_algorithm_t **pubkey_algo,
     }
 
     if (ret != 0) {
-        WGW_LOG("wolfssl: wc_InitRng failed with code %d", ret);
-
         /* Free the key we found */
         if (ctx->algo == GNUTLS_PK_ECDSA) {
             wc_ecc_free(&ctx->key.ecc);
@@ -6131,6 +6138,146 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
     }
 }
 
+/* encrypt with pk */
+static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
+                             const gnutls_datum_t *plaintext,
+                             gnutls_datum_t *ciphertext)
+{
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+
+    WGW_FUNC_ENTER();
+    (void)key;
+
+    if (!ctx || !ctx->initialized) {
+        WGW_LOG("PK context not initialized, using fallback");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!plaintext || !plaintext->data || plaintext->size == 0 || !ciphertext) {
+        WGW_LOG("Bad plaintext data or ciphertext");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Only support RSA for encryption */
+    if (ctx->algo != GNUTLS_PK_RSA) {
+        WGW_LOG("Only RSA is supported for encryption, algorithm is: %d", ctx->algo);
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    /* Get the maximum ciphertext size - typically the key size */
+    word32 cipher_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
+    byte *cipher_buf = gnutls_malloc(cipher_buf_len);
+    if (!cipher_buf) {
+        WGW_LOG("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ret = wc_RsaSetRNG(&ctx->key.rsa, &ctx->rng);
+
+    /* Encrypt using RSA PKCS#1 v1.5 padding */
+    ret = wc_RsaPublicEncrypt(
+            plaintext->data, plaintext->size,   /* Data to encrypt */
+            cipher_buf, cipher_buf_len,         /* Output buffer and length */
+            &ctx->key.rsa,                      /* RSA key */
+            &ctx->rng                           /* RNG */
+    );
+
+    if (ret < 0) {
+        WGW_LOG("RSA encryption failed with code %d", ret);
+        gnutls_free(cipher_buf);
+        return GNUTLS_E_PK_SIGN_FAILED;
+    }
+
+    /* Actual size of the ciphertext */
+    word32 actual_cipher_size = ret;
+
+    /* Allocate space for the ciphertext and copy it */
+    ciphertext->data = gnutls_malloc(actual_cipher_size);
+    if (!ciphertext->data) {
+        gnutls_free(cipher_buf);
+        WGW_LOG("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    WGW_LOG("RSA cipher_size: %u", actual_cipher_size);
+    XMEMCPY(ciphertext->data, cipher_buf, actual_cipher_size);
+    ciphertext->size = actual_cipher_size;
+    gnutls_free(cipher_buf);
+
+    WGW_LOG("encrypted message successfully");
+    return 0;
+}
+
+static int wolfssl_pk_decrypt(void *_ctx, gnutls_privkey_t key,
+                             const gnutls_datum_t *ciphertext,
+                             gnutls_datum_t *plaintext)
+{
+    struct wolfssl_pk_ctx *ctx = _ctx;
+    int ret;
+
+    WGW_FUNC_ENTER();
+    (void)key;
+
+    if (!ctx || !ctx->initialized) {
+        WGW_LOG("PK context not initialized, using fallback");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!ciphertext || !ciphertext->data || ciphertext->size == 0 || !plaintext) {
+        WGW_LOG("Bad ciphertext data or plaintext");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Only support RSA for decryption */
+    if (ctx->algo != GNUTLS_PK_RSA) {
+        WGW_LOG("Only RSA is supported for decryption, algorithm is: %d", ctx->algo);
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    /* Get the maximum plaintext size - typically the key size */
+    word32 plain_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
+    byte *plain_buf = gnutls_malloc(plain_buf_len);
+    if (!plain_buf) {
+        WGW_LOG("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ret = wc_RsaSetRNG(&ctx->key.rsa, &ctx->rng);
+
+    /* Decrypt using RSA PKCS#1 v1.5 padding */
+    ret = wc_RsaPrivateDecrypt(
+            ciphertext->data, ciphertext->size, /* Data to decrypt */
+            plain_buf, plain_buf_len,           /* Output buffer and length */
+            &ctx->key.rsa                       /* RSA key */
+    );
+
+    if (ret < 0) {
+        WGW_LOG("RSA decryption failed with code %d", ret);
+        gnutls_free(plain_buf);
+        return GNUTLS_E_DECRYPTION_FAILED;
+    }
+
+    /* Actual size of the plaintext */
+    word32 actual_plain_size = ret;
+
+    /* Allocate space for the plaintext and copy it */
+    plaintext->data = gnutls_malloc(actual_plain_size);
+    if (!plaintext->data) {
+        gnutls_free(plain_buf);
+        WGW_LOG("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    WGW_LOG("RSA plaintext_size: %u", actual_plain_size);
+    XMEMCPY(plaintext->data, plain_buf, actual_plain_size);
+    plaintext->size = actual_plain_size;
+    gnutls_free(plain_buf);
+
+    WGW_LOG("decrypted message successfully");
+    return 0;
+}
+
 /* structure containing function pointers for the pk implementation */
 static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     /* the init function is not needed, since the init functions of gnutls
@@ -6141,6 +6288,8 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     .export_pubkey_backend = wolfssl_pk_export_pub,
     .sign_backend = wolfssl_pk_sign,
     .verify_backend = wolfssl_pk_verify,
+    .pubkey_encrypt_backend = wolfssl_pk_encrypt,
+    .privkey_decrypt_backend = wolfssl_pk_decrypt,
     .import_privkey_x509_backend = wolfssl_pk_import_privkey_x509,
     .import_pubkey_x509_backend = wolfssl_pk_import_pubkey_x509,
     .sign_hash_backend = wolfssl_pk_sign_hash,
