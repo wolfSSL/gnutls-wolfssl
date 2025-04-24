@@ -3735,18 +3735,20 @@ static const int wolfssl_pk_sign_supported[] = {
         [GNUTLS_SIGN_ECDSA_SECP521R1_SHA512] = 1,
         [GNUTLS_SIGN_EDDSA_ED25519] = 1,
         [GNUTLS_SIGN_EDDSA_ED448] = 1,
+        [GNUTLS_SIGN_RSA_PSS_RSAE_SHA256] = 1,
+        [GNUTLS_SIGN_RSA_PSS_RSAE_SHA384] = 1,
+        [GNUTLS_SIGN_RSA_PSS_RSAE_SHA512] = 1,
 };
 
 /* import a private key from raw X.509 data using trial-and-error approach */
 /* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
  * the trial-and-error approach */
 static int
-wolfssl_pk_import_privkey_x509(void **_ctx, const void *privkey,
+wolfssl_pk_import_privkey_x509(void **_ctx, gnutls_pk_algorithm_t **privkey_algo,
         const gnutls_datum_t *data, gnutls_x509_crt_fmt_t format)
 {
     WGW_LOG("wolfssl: wolfssl_pk_import_privkey_x509");
 
-    (void)privkey;
     struct wolfssl_pk_ctx *ctx;
     int ret = GNUTLS_E_INVALID_REQUEST; /* Default error if all imports fail */
     int key_found = 0;
@@ -3937,6 +3939,8 @@ wolfssl_pk_import_privkey_x509(void **_ctx, const void *privkey,
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
+    *privkey_algo = &ctx->algo;
+
     ctx->initialized = 1;
     *_ctx = ctx;
 
@@ -3986,13 +3990,12 @@ wolfssl_pk_copy(void **_dst, void *src, gnutls_pk_algorithm_t algo) {
 /* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
  * the trial-and-error approach */
 static int
-wolfssl_pk_import_pubkey_x509(void **_ctx, const void *pubkey,
+wolfssl_pk_import_pubkey_x509(void **_ctx, gnutls_pk_algorithm_t **pubkey_algo,
         gnutls_datum_t *data,
         unsigned int flags)
 {
     WGW_LOG("wolfssl: wolfssl_pk_import_pubkey_x509");
 
-    (void)pubkey;
     (void)flags;
     struct wolfssl_pk_ctx *ctx;
     int ret = GNUTLS_E_INVALID_REQUEST; /* Default error if all imports fail */
@@ -4230,6 +4233,8 @@ wolfssl_pk_import_pubkey_x509(void **_ctx, const void *pubkey,
         gnutls_free(ctx);
     }
 
+    *pubkey_algo = &ctx->algo;
+
     ctx->rng_initialized = 1;
     ctx->initialized = 1;
     *_ctx = ctx;
@@ -4269,9 +4274,12 @@ wolfssl_pk_sign_hash(void *_ctx, const void *signer,
     }
 
     hash_type = get_hash_type((gnutls_mac_algorithm_t)hash_algo);
-    if (ret < 0) {
+    if (hash_type < 0 && hash_algo != 0) {
         WGW_LOG("hash algo not supported: %d", hash_algo);
         return GNUTLS_E_INVALID_REQUEST;
+    } else if (hash_algo == 0) {
+        WGW_LOG("hash algo unknown, defaulting to sha256");
+        hash_type = WC_HASH_TYPE_SHA256;
     }
 
     /* check if any RSA-PSS flags/arguments were provided, and if so, update the algo */
@@ -5780,16 +5788,19 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
                 WGW_LOG("hash detected SHA512 (PKCS#1)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA256:
+            case GNUTLS_SIGN_RSA_PSS_RSAE_SHA256:
                 hash_type = WC_HASH_TYPE_SHA256;
                 hash = GNUTLS_DIG_SHA256;
                 WGW_LOG("hash detected SHA256 (PSS)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA384:
+            case GNUTLS_SIGN_RSA_PSS_RSAE_SHA384:
                 hash_type = WC_HASH_TYPE_SHA384;
                 hash = GNUTLS_DIG_SHA384;
                 WGW_LOG("hash detected SHA384 (PSS)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA512:
+            case GNUTLS_SIGN_RSA_PSS_RSAE_SHA512:
                 hash_type = WC_HASH_TYPE_SHA512;
                 hash = GNUTLS_DIG_SHA512;
                 WGW_LOG("hash detected SHA512 (PSS)");
@@ -5798,6 +5809,7 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
                 /* If no specific algorithm was provided but ctx->algo is RSA,
                  * default to SHA256 */
                 hash_type = WC_HASH_TYPE_SHA256;
+                hash = GNUTLS_DIG_SHA256;
                 WGW_LOG("defaulting to SHA256 for RSA, algo: %d", algo);
                 break;
         }
