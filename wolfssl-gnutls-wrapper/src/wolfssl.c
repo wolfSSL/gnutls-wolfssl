@@ -1646,6 +1646,9 @@ static int get_hash_type(gnutls_mac_algorithm_t algorithm)
         case GNUTLS_MAC_SHA512:
             WGW_LOG("using SHA512 for HMAC");
             return WC_SHA512;
+        case GNUTLS_MAC_MD5_SHA1:
+            WGW_LOG("using MD5_SHA1 for HMAC");
+            return WC_HASH_TYPE_MD5_SHA;
         default:
             return -1;
     }
@@ -4435,6 +4438,10 @@ wolfssl_pk_sign_hash(void *_ctx, const void *signer,
             case WC_HASH_TYPE_SHA512:
                 mgf = WC_MGF1SHA512;
                 WGW_LOG("using MGF1SHA512");
+                break;
+            case WC_HASH_TYPE_MD5_SHA:
+                mgf = WC_MGF1SHA1;
+                WGW_LOG("using MGF1SHA1 as fallback for MD5_SHA1");
                 break;
             default:
                 WGW_LOG("Unsupported hash algorithm: %d", hash_type);
