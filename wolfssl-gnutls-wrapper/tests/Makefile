@@ -1,11 +1,7 @@
-TESTS = test_sha256 test_aescbc test_aesgcm test_hmac test_ecdsa_sign_and_verify test_rsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_rsa_encrypt_and_decrypt test_eddsa_sign_and_verify
+TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt
 
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    INCLUDES = -I/opt/gnutls/include/ -I/opt/gnutls/include/gnutls/
-else
-    INCLUDES = -I/opt/gnutls/include/gnutls/
-endif
+INCLUDES = -I/opt/gnutls/include/ -I/opt/gnutls/include/gnutls/
 
 UNAME_S := $(shell uname -s)
 
@@ -27,34 +23,7 @@ LIBS = -lgnutls -ldl
 
 all: $(TESTS)
 
-test_sha256: test_sha256.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_aescbc: test_aescbc.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_aesgcm: test_aesgcm.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_hmac: test_hmac.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_ecdsa: test_ecdsa.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_ecdsa_sign_and_verify: test_ecdsa_sign_and_verify.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_eddsa_sign_and_verify: test_eddsa_sign_and_verify.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_ecdh_encrypt_and_decrypt: test_ecdh_encrypt_and_decrypt.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_rsa_sign_and_verify: test_rsa_sign_and_verify.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
-test_rsa_encrypt_and_decrypt: test_rsa_encrypt_and_decrypt.c
+%: %.c test_util.h
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 run-%:
@@ -83,6 +52,10 @@ run: $(TESTS)
 	else \
 		echo "\nAll tests passed! 🎉"; \
 	fi
+
+
+run_gnutls: $(TESTS)
+	GNUTLS_NO_PROVIDER=1 make run
 
 clean:
 	rm -f $(TESTS)

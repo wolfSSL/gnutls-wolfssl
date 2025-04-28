@@ -160,7 +160,7 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     gnutls_free(signature_hash.data);
     gnutls_pubkey_deinit(pubkey);
     gnutls_privkey_deinit(privkey);
-    
+
     return 0;
 }
 

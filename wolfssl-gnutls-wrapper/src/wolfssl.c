@@ -496,7 +496,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     }
 
 #ifdef WOLFSSL_AES_XTS
-    if (ctx->mode == XTS) {
+    if (ctx->mode == XTS && gnutls_fips140_mode_enabled()) {
         /* XTS has two AES keys that are no allowed to be the same. */
         if (XMEMCMP(key, key + exp_key_size / 2, exp_key_size / 2) == 0) {
             WGW_ERROR("XTS keys are the same");
@@ -2488,6 +2488,8 @@ static int wolfssl_gmac_hash(void *_ctx, const void *text, size_t textsize)
 
 /**
  * Output the gmac result.
+ *
+ * Doesn't support more than 32-bit length.
  *
  * @param [in, out] _ctx        GMAC context.
  * @param [out]     digest      Buffer to hold digest.
@@ -6646,9 +6648,11 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
     int ret;
 
     WGW_FUNC_ENTER();
+    WGW_LOG("outsize=%d", outsize);
 
     switch (mac) {
         case GNUTLS_MAC_MD5_SHA1:
+            WGW_LOG("MD5+SHA1");
             ret = wc_PRF_TLSv1((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, NULL, INVALID_DEVID);
             if (ret != 0) {
@@ -6657,6 +6661,7 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
             }
             break;
         case GNUTLS_MAC_SHA256:
+            WGW_LOG("SHA256");
             ret = wc_PRF_TLS((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, 1, sha256_mac, NULL,
                 INVALID_DEVID);
@@ -6666,6 +6671,7 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
             }
             break;
         case GNUTLS_MAC_SHA384:
+            WGW_LOG("SHA384");
             ret = wc_PRF_TLS((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, 1, sha384_mac, NULL,
                 INVALID_DEVID);
@@ -7104,12 +7110,15 @@ int _gnutls_wolfssl_init(void)
 
 /**
  * Module deinitialization
- *
- * TODO: close logging file descriptor if not stdout/stderr.
  */
 void _gnutls_wolfssl_deinit(void)
 {
     WGW_FUNC_ENTER();
+
+    if (loggingFd != stdout && loggingFd != stderr && loggingFd != XBADFILE) {
+        XFCLOSE(loggingFd);
+    }
+
     return;
 }
 
