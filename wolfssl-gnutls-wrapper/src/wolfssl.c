@@ -26,10 +26,14 @@
 #include <wolfssl/wolfcrypt/asn.h>
 #include <wolfssl/wolfcrypt/signature.h>
 #include <wolfssl/wolfcrypt/rsa.h>
+#include <wolfssl/wolfcrypt/dh.h>
 
 #include <stdarg.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#define MAX_DH_BITS       4096
+#define MAX_DH_Q_SIZE     256
 
 /**
  * Constructor for shared library.
@@ -3743,6 +3747,7 @@ struct wolfssl_pk_ctx {
         curve25519_key x25519;
         curve448_key x448;
         RsaKey rsa;
+        DhKey dh;
     } key;
     int initialized;
     /** The GnuTLS public key algorithm ID.  */
@@ -3750,6 +3755,8 @@ struct wolfssl_pk_ctx {
     WC_RNG rng;
     int rng_initialized;
 
+    byte priv_data[1024];
+    word32 priv_data_len;
     byte pub_data[1024];
     word32 pub_data_len;
 };
@@ -3764,6 +3771,7 @@ static const int wolfssl_pk_supported[] = {
         [GNUTLS_PK_ECDH_X448] = 1,
         [GNUTLS_PK_RSA] = 1,
         [GNUTLS_PK_RSA_PSS] = 1,
+        [GNUTLS_PK_DH] = 1,
 };
 
 static const int wolfssl_pk_sign_supported[] = {
@@ -5038,7 +5046,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             return GNUTLS_E_PK_GENERATION_ERROR;
         }
     } else if (algo == GNUTLS_PK_RSA ||
-               algo == GNUTLS_PK_RSA_PSS) {
+            algo == GNUTLS_PK_RSA_PSS) {
         WGW_LOG("RSA");
         /* Initialize RSA key */
         ret = wc_InitRsaKey(&ctx->key.rsa, NULL);
@@ -5066,7 +5074,90 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             gnutls_free(ctx);
             return GNUTLS_E_PK_GENERATION_ERROR;
         }
-    } else {
+    } else if (algo == GNUTLS_PK_DH) {
+        WGW_LOG("DH");
+
+        byte priv[MAX_DH_BITS/8];
+        byte pub[MAX_DH_BITS/8];
+        word32 privSz = sizeof(priv);
+        word32 pubSz = sizeof(pub);
+        const DhParams* params = NULL;
+
+        /* Initialize DH key */
+        ret = wc_InitDhKey(&ctx->key.dh);
+        if (ret != 0) {
+            WGW_LOG("wc_InitDhKey failed with code %d", ret);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_CRYPTO_INIT_FAILED;
+        }
+
+        /* Use predefined parameters based on bits size */
+        switch (bits) {
+            case 2048:
+#ifdef HAVE_FFDHE_2048
+                WGW_LOG("2048");
+                params = wc_Dh_ffdhe2048_Get();
+#endif
+                break;
+            case 3072:
+#ifdef HAVE_FFDHE_3072
+                WGW_LOG("3072");
+                params = wc_Dh_ffdhe3072_Get();
+#endif
+                break;
+            case 4096:
+#ifdef HAVE_FFDHE_4096
+                WGW_LOG("4096");
+                params = wc_Dh_ffdhe4096_Get();
+#endif
+                break;
+            default:
+                WGW_LOG("Unsupported DH key size: %d", bits);
+                wc_FreeDhKey(&ctx->key.dh);
+                wc_FreeRng(&ctx->rng);
+                gnutls_free(ctx);
+                return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        if (params == NULL) {
+            WGW_LOG("No parameters available for %d bits", bits);
+            wc_FreeDhKey(&ctx->key.dh);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Set the predefined parameters */
+        ret = wc_DhSetKey(&ctx->key.dh, params->p, params->p_len,
+                params->g, params->g_len);
+        if (ret != 0) {
+            WGW_LOG("Failed to set DH params: %d\n", ret);
+            wc_FreeDhKey(&ctx->key.dh);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Generate the key pair */
+        ret = wc_DhGenerateKeyPair(&ctx->key.dh, &ctx->rng,
+                priv, &privSz, pub, &pubSz);
+
+        if (ret != 0) {
+            WGW_LOG("DH key generation failed with code %d", ret);
+            wc_FreeDhKey(&ctx->key.dh);
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            return GNUTLS_E_PK_GENERATION_ERROR;
+        }
+
+        /* Saving DH keys for later use */
+        XMEMCPY(ctx->pub_data, pub, pubSz);
+        ctx->pub_data_len = pubSz;
+        XMEMCPY(ctx->priv_data, priv, privSz);
+        ctx->priv_data_len = privSz;
+    }
+    else {
         WGW_LOG("unsupported algorithm: %d", algo);
         wc_FreeRng(&ctx->rng);
         gnutls_free(ctx);
@@ -5291,6 +5382,11 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx, const void *p
 
         pub_ctx->pub_data_len = pub->size;
         XMEMCPY(pub_ctx->pub_data, pub->data, pub_ctx->pub_data_len);
+    } else if (priv_ctx->algo == GNUTLS_PK_DH) {
+        WGW_LOG("DH");
+
+        pub_ctx->pub_data_len = priv_ctx->pub_data_len;
+        XMEMCPY(pub_ctx->pub_data, priv_ctx->pub_data, pub_ctx->pub_data_len);
     } else {
         WGW_LOG("unsupported algorithm for exporting public key: %d", priv_ctx->algo);
         gnutls_free(pub_ctx);
@@ -5925,6 +6021,8 @@ static void wolfssl_pk_deinit(void *_ctx)
             wc_curve25519_free(&ctx->key.x25519);
         } else if (ctx->algo == GNUTLS_PK_ECDH_X448) {
             wc_curve448_free(&ctx->key.x448);
+        } else if (ctx->algo == GNUTLS_PK_DH) {
+            wc_FreeDhKey(&ctx->key.dh);
         }
 
         /* Free the RNG if initialized */
@@ -6173,7 +6271,32 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                 WGW_LOG("X448 shared secret derived successfully (size: %d bytes)", secret_size);
                 return 0;
             }
+        case GNUTLS_PK_DH:
+            {
+                static unsigned char shared_secret[MAX_DH_BITS/8];
+                word32 shared_secret_len = sizeof(shared_secret);
 
+                /* Generate shared secret */
+                ret = wc_DhAgree(&priv_ctx->key.dh,
+                        shared_secret, &shared_secret_len,
+                        priv_ctx->priv_data,
+                        priv_ctx->priv_data_len,
+                        pub->data, pub->size);
+
+                if (ret != 0) {
+                    WGW_LOG("DH shared secret generation failed with code %d", ret);
+                    gnutls_free(shared_secret);
+                    return GNUTLS_E_INVALID_REQUEST;
+                }
+
+                /* Set result data */
+                secret->data = shared_secret;
+                secret->size = shared_secret_len;
+
+                WGW_LOG("DH shared secret derived successfully (size: %d bytes)",
+                        secret->size);
+                return 0;
+            }
         default:
             WGW_LOG("PK algorithm not supported for key exchange: %d", priv_ctx->algo);
             return GNUTLS_E_INVALID_REQUEST;
@@ -6433,6 +6556,16 @@ static int wolfssl_pk_register(void)
               GNUTLS_PK_RSA, 80, &wolfssl_pk_struct, 0);
       ret = gnutls_crypto_single_pk_register(
               GNUTLS_PK_RSA_PSS, 80, &wolfssl_pk_struct, 0);
+      if (ret < 0) {
+          return ret;
+      }
+  }
+
+  /* Register DH */
+  if (wolfssl_pk_supported[GNUTLS_PK_DH]) {
+      WGW_LOG("registering DH");
+      ret = gnutls_crypto_single_pk_register(
+              GNUTLS_PK_DH, 80, &wolfssl_pk_struct, 0);
       if (ret < 0) {
           return ret;
       }

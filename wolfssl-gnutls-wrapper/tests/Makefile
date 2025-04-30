@@ -1,4 +1,4 @@
-TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt
+TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt test_dh_encrypt_and_decrypt
 
 UNAME_S := $(shell uname -s)
 INCLUDES = -I/opt/gnutls/include/ -I/opt/gnutls/include/gnutls/
@@ -24,6 +24,9 @@ LIBS = -lgnutls -ldl
 all: $(TESTS)
 
 %: %.c test_util.h
+	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
+
+test_dh_encrypt_and_decrypt: test_dh_encrypt_and_decrypt.c
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
 run-%:

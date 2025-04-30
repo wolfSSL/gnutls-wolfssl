@@ -6,6 +6,31 @@
 
 /* replicated definitions from GnuTLS internal headers */
 
+typedef enum {
+    GNUTLS_KEYGEN_SEED = 1,
+    GNUTLS_KEYGEN_DIGEST = 2,
+    GNUTLS_KEYGEN_SPKI = 3,
+    GNUTLS_KEYGEN_DH = 4
+} gnutls_keygen_types_t;
+
+typedef struct {
+    gnutls_keygen_types_t type;
+    unsigned char *data;
+    unsigned int size;
+} gnutls_keygen_data_st;
+
+typedef void *bigint_t;
+
+/* DH and RSA parameters types.
+*/
+typedef struct gnutls_dh_params_int {
+    /* [0] is the prime, [1] is the generator, [2] is Q if available.
+    */
+    bigint_t params[3];
+    int q_bits; /* length of q in bits. If zero then length is unknown.
+    */
+} dh_params_st;
+
 /* From crypto-backend.h */
 typedef struct {
     gnutls_cipher_init_func init;
