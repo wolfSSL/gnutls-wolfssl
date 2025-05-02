@@ -4882,7 +4882,7 @@ wolfssl_pk_verify_hash(void *_ctx, const void *key,
 
 /* generate a pk key pair */
 static int wolfssl_pk_generate(void **_ctx, const void *privkey,
-    gnutls_pk_algorithm_t algo, unsigned int bits)
+    gnutls_pk_algorithm_t algo, unsigned int bits, const void *p, const void *g, const void *q)
 {
     struct wolfssl_pk_ctx *ctx;
     int ret;
@@ -5112,6 +5112,8 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
                 params = wc_Dh_ffdhe4096_Get();
 #endif
                 break;
+            case 0:
+                break;
             default:
                 WGW_LOG("Unsupported DH key size: %d", bits);
                 wc_FreeDhKey(&ctx->key.dh);
@@ -5120,7 +5122,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
                 return GNUTLS_E_INVALID_REQUEST;
         }
 
-        if (params == NULL) {
+        if (params == NULL && bits != 0) {
             WGW_LOG("No parameters available for %d bits", bits);
             wc_FreeDhKey(&ctx->key.dh);
             wc_FreeRng(&ctx->rng);
@@ -5128,9 +5130,30 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             return GNUTLS_E_INVALID_REQUEST;
         }
 
-        /* Set the predefined parameters */
-        ret = wc_DhSetKey(&ctx->key.dh, params->p, params->p_len,
-                params->g, params->g_len);
+        if (bits == 0) {
+            /* Set the provided parameters */
+            const gnutls_datum_t *p_param = (const gnutls_datum_t *)p;
+            const gnutls_datum_t *g_param = (const gnutls_datum_t *)g;
+            const gnutls_datum_t *q_param = (const gnutls_datum_t *)q;
+
+            for (int i = 0; i < (int)p_param->size; i++)
+                WGW_LOG("p_param[%d] = %u", i, p_param->data[i]);
+
+            for (int i = 0; i < (int)q_param->size; i++)
+                WGW_LOG("q_param[%d] = %u", i, q_param->data[i]);
+
+            for (int i = 0; i < (int)g_param->size; i++)
+                WGW_LOG("g_param[%d] = %u", i, g_param->data[i]);
+
+            ret = wc_DhSetCheckKey(&ctx->key.dh, p_param->data, p_param->size,
+                    g_param->data, g_param->size, q_param->data, q_param->size,
+                    0, &ctx->rng);
+        } else {
+            /* Set the predefined parameters */
+            ret = wc_DhSetKey(&ctx->key.dh, params->p, params->p_len,
+                    params->g, params->g_len);
+        }
+
         if (ret != 0) {
             WGW_LOG("Failed to set DH params: %d\n", ret);
             wc_FreeDhKey(&ctx->key.dh);
