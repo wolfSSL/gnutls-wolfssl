@@ -1974,6 +1974,12 @@ struct wolfssl_cmac_ctx {
     int initialized;
     /** The GnuTLS cipher algorithm ID. */
     gnutls_mac_algorithm_t algorithm;
+    /** Cached key. */
+    unsigned char key[AES_256_KEY_SIZE];
+    /** Size of cached key. */
+    size_t key_size;
+    /** Setting of the key is required before hashing. */
+    int set_key:1;
 };
 
 /**
@@ -2077,6 +2083,10 @@ static int wolfssl_cmac_setkey(void *_ctx, const void *key, size_t keysize)
         return GNUTLS_E_HASH_FAILED;
     }
 
+    XMEMCPY(ctx->key, key, keysize);
+    ctx->key_size = keysize;
+    ctx->set_key = 0;
+
     WGW_LOG("cmac key set successfully");
     return 0;
 }
@@ -2102,6 +2112,18 @@ static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
     if (!ctx->initialized) {
         WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (ctx->set_key) {
+        /* Initialize and set the key */
+        ret = wc_InitCmac(&ctx->cmac_ctx, (const byte*)ctx->key,
+            (word32)ctx->key_size, WC_CMAC_AES, NULL);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_HASH_FAILED;
+        }
+        ctx->set_key = 0;
     }
 
     /* Can only do 32-bit sized updates at a time. */
@@ -2161,12 +2183,25 @@ static int wolfssl_cmac_output(void *_ctx, void *digest, size_t digestsize)
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
+    if (ctx->set_key) {
+        /* Initialize and set the key */
+        ret = wc_InitCmac(&ctx->cmac_ctx, (const byte*)ctx->key,
+            (word32)ctx->key_size, WC_CMAC_AES, NULL);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_HASH_FAILED;
+        }
+        ctx->set_key = 0;
+    }
+
     /* Finalize CMAC and get the result. */
     ret = wc_CmacFinal(&ctx->cmac_ctx, (byte*)digest, &digest_size);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_CmacFinal", ret);
         return GNUTLS_E_HASH_FAILED;
     }
+    ctx->set_key = 1;
 
     WGW_LOG("cmac output successful");
     return 0;
