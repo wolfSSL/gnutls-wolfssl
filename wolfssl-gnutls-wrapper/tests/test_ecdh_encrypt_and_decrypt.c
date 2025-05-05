@@ -33,7 +33,33 @@ void print_hex(const unsigned char *data, size_t len) {
     printf("\n");
 }
 
-int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
+/* Get key size for standard NIST curves */
+int get_curve_bits(const char *curve_name) {
+    if (strcmp(curve_name, "SECP256R1") == 0) {
+        return 256;
+    } else if (strcmp(curve_name, "SECP384R1") == 0) {
+        return 384;
+    } else if (strcmp(curve_name, "SECP521R1") == 0) {
+        return 521;
+    } else {
+        return 0; /* For X25519 and X448, size is fixed */
+    }
+}
+
+/* Convert curve name to GnuTLS curve ID */
+gnutls_ecc_curve_t get_curve_id(const char *curve_name) {
+    if (strcmp(curve_name, "SECP256R1") == 0) {
+        return GNUTLS_ECC_CURVE_SECP256R1;
+    } else if (strcmp(curve_name, "SECP384R1") == 0) {
+        return GNUTLS_ECC_CURVE_SECP384R1;
+    } else if (strcmp(curve_name, "SECP521R1") == 0) {
+        return GNUTLS_ECC_CURVE_SECP521R1;
+    } else {
+        return GNUTLS_ECC_CURVE_INVALID;
+    }
+}
+
+int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name) {
     int ret;
     gnutls_privkey_t alice_privkey, bob_privkey;
     gnutls_pubkey_t alice_pubkey, bob_pubkey;
@@ -42,8 +68,10 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
     const char *test_data = "Test data to be encrypted";
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
     unsigned char tag[16] = {0}; // 16 bytes authentication tag for GCM
+    int curve_bits = get_curve_bits(curve_name);
+    gnutls_ecc_curve_t curve_id = get_curve_id(curve_name);
 
-    printf("\n=== Testing EC encryption/decryption with %s (%d bits) ===\n", curve_name, bits);
+    printf("\n=== Testing ECDH encryption/decryption with %s ===\n", curve_name);
 
     /* Initialize keys */
     ret = gnutls_privkey_init(&alice_privkey);
@@ -76,26 +104,52 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
         return 1;
     }
 
-    /* Generate EC key pairs with the specified curve */
-    printf("Generating EC key pairs (%s)...\n", curve_name);
-    ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_ECDSA, bits, 0, NULL, 0);
-    if (ret != 0) {
-        printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+    /* Generate ECDH key pairs with the specified algorithm */
+    printf("Generating ECDH key pairs (%s)...\n", curve_name);
 
-    ret = gnutls_privkey_generate2(bob_privkey, GNUTLS_PK_ECDSA, bits, 0, NULL, 0);
-    if (ret != 0) {
-        printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
+    /* For NIST curves, use the specified bits and curve ID */
+    if (algo == GNUTLS_PK_EC && curve_bits > 0) {
+        /* For NIST curves, we need to specify the curve using gnutls_privkey_generate */
+        ret = gnutls_privkey_generate(alice_privkey, algo, curve_bits, 0);
+        if (ret != 0) {
+            printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        ret = gnutls_privkey_generate(bob_privkey, algo, curve_bits, 0);
+        if (ret != 0) {
+            printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+    } else {
+        /* For X25519 and X448, we don't need to specify bits as they're fixed for these curves */
+        ret = gnutls_privkey_generate2(alice_privkey, algo, 0, 0, NULL, 0);
+        if (ret != 0) {
+            printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        ret = gnutls_privkey_generate2(bob_privkey, algo, 0, 0, NULL, 0);
+        if (ret != 0) {
+            printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
     }
 
     /* Extract the public keys from the private keys */
@@ -392,7 +446,7 @@ int test_ec_encrypt_decrypt(unsigned int bits, const char *curve_name) {
 int main(void) {
     int ret;
 
-    printf("Testing GnuTLS's EC encryption/decryption with multiple curves...\n");
+    printf("Testing GnuTLS's ECDH encryption/decryption with various curves...\n");
 
     /* Initialize GnuTLS */
     ret = gnutls_global_init();
@@ -401,22 +455,36 @@ int main(void) {
         return 1;
     }
 
-    /* Test SECP256R1 (P-256) */
-    ret = test_ec_encrypt_decrypt(256, "SECP256R1");
+    /* Test X25519 */
+    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X25519, "X25519");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
     }
 
-    /* Test SECP384R1 (P-384) */
-    ret = test_ec_encrypt_decrypt(384, "SECP384R1");
+    /* Test X448 */
+    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X448, "X448");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
     }
 
-    /* Test SECP521R1 (P-521) */
-    ret = test_ec_encrypt_decrypt(521, "SECP521R1");
+    /* Test P-256 (SECP256R1) */
+    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP256R1");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Test P-384 (SECP384R1) */
+    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP384R1");
+    if (ret != 0) {
+        gnutls_global_deinit();
+        return 1;
+    }
+
+    /* Test P-521 (SECP521R1) */
+    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP521R1");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
@@ -425,6 +493,6 @@ int main(void) {
     /* Clean up global resources */
     gnutls_global_deinit();
 
-    printf("\nAll EC encryption/decryption tests completed!\n");
+    printf("\nAll ECDH encryption/decryption tests completed!\n");
     return 0;
 }
