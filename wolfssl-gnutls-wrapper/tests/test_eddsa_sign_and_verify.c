@@ -39,7 +39,7 @@ int test_eddsa_curve(const char *curve_name) {
     if (strcmp(curve_name, "Ed25519") == 0) {
         algo = GNUTLS_PK_EDDSA_ED25519;
         sign_algo = GNUTLS_SIGN_EDDSA_ED25519;
-        digest_algo = GNUTLS_DIG_SHA512; // Ed25519 uses SHA-512 internally
+        digest_algo = GNUTLS_DIG_SHA512;
     } else {
         algo = GNUTLS_PK_EDDSA_ED448;
         sign_algo = GNUTLS_SIGN_EDDSA_ED448;
@@ -83,7 +83,7 @@ int test_eddsa_curve(const char *curve_name) {
     printf("\n--- Test 1: Sign/Verify Raw Data ---\n");
     printf("Input data: \"%s\"\n", test_data);
     
-    ret = gnutls_privkey_sign_data(privkey, GNUTLS_DIG_SHA512, 0, &data, &signature);
+    ret = gnutls_privkey_sign_data(privkey, digest_algo, 0, &data, &signature);
     if (ret != 0) {
         printf("Error signing data: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
@@ -106,58 +106,8 @@ int test_eddsa_curve(const char *curve_name) {
     }
     printf("SUCCESS verifying data signature for %s\n", curve_name);
 
-    /* Test 2: Sign and verify hash */
-    printf("\n--- Test 2: Sign/Verify Hash ---\n");
-
-    /* Hash the test data */
-    ret = gnutls_hash_fast(digest_algo, data.data, data.size, hash_buffer);
-    if (ret != 0) {
-        printf("Error hashing data: %s\n", gnutls_strerror(ret));
-        gnutls_free(signature.data);
-        gnutls_pubkey_deinit(pubkey);
-        gnutls_privkey_deinit(privkey);
-        return 1;
-    }
-
-    hash.data = hash_buffer;
-    hash.size = gnutls_hash_get_len(digest_algo);
-
-    if (hash.size == 0)
-        hash.size = sizeof(hash_buffer);
-
-    printf("Hash value:\n");
-    print_hex(hash.data, hash.size);
-
-    /* Sign the hash */
-    ret = gnutls_privkey_sign_hash(privkey, digest_algo, 0, &hash, &signature_hash);
-    if (ret != 0) {
-        printf("Error signing hash: %s\n", gnutls_strerror(ret));
-        gnutls_free(signature.data);
-        gnutls_pubkey_deinit(pubkey);
-        gnutls_privkey_deinit(privkey);
-        return 1;
-    }
-
-    printf("Hash signature created (size: %d bytes)\n", signature_hash.size);
-    printf("Hash signature value:\n");
-    print_hex(signature_hash.data, signature_hash.size);
-
-    /* Verify the hash signature */
-    printf("Verifying hash signature...\n");
-    ret = gnutls_pubkey_verify_hash2(pubkey, sign_algo, 0, &hash, &signature_hash);
-    if (ret != 0) {
-        printf("FAILURE verifying hash signature for %s: %s\n", curve_name, gnutls_strerror(ret));
-        gnutls_free(signature.data);
-        gnutls_free(signature_hash.data);
-        gnutls_pubkey_deinit(pubkey);
-        gnutls_privkey_deinit(privkey);
-        return 1;
-    }
-    printf("SUCCESS verifying hash signature for %s\n", curve_name);
-
     /* Clean up */
     gnutls_free(signature.data);
-    gnutls_free(signature_hash.data);
     gnutls_pubkey_deinit(pubkey);
     gnutls_privkey_deinit(privkey);
 

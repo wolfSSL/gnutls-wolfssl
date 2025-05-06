@@ -11,9 +11,9 @@ const unsigned char aad_data[] = {
     0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef
 };
 
-const unsigned char iv_data[16] = {
+const unsigned char iv_data[12] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+    0x08, 0x09, 0x0a, 0x0b
 };
 
 /* HKDF parameters */
@@ -39,6 +39,8 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
     gnutls_pubkey_t alice_pubkey, bob_pubkey;
     gnutls_datum_t shared_key;
     gnutls_datum_t encrypted, decrypted;
+	gnutls_keygen_data_st keygen_data;
+    gnutls_dh_params_t dh_params;
     const char *test_data = "Test data to be encrypted";
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
     unsigned char tag[16] = {0}; // 16 bytes authentication tag for GCM
@@ -76,10 +78,31 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
         return 1;
     }
 
+    /* Generate DH parameters first */
+    ret = gnutls_dh_params_init(&dh_params);
+    if (ret != 0) {
+        printf("Error initializing params: %s\n", gnutls_strerror(ret));
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+    }
+
+    ret = gnutls_dh_params_generate2(dh_params, bits);
+    if (ret != 0) {
+        printf("Error generating params: %s\n", gnutls_strerror(ret));
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        gnutls_dh_params_deinit(dh_params);
+    }
+
     /* Generate DH key pairs */
     printf("Generating DH key pairs (%d bits)...\n", bits);
 
-    ret = gnutls_privkey_generate(alice_privkey, GNUTLS_PK_DH, bits, 0);
+    keygen_data.type = GNUTLS_KEYGEN_DH;
+    keygen_data.data = (unsigned char *)dh_params;
+
+    ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
     if (ret != 0) {
         printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(bob_pubkey);
@@ -89,7 +112,7 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
         return 1;
     }
 
-    ret = gnutls_privkey_generate(bob_privkey, GNUTLS_PK_DH, bits, 0);
+    ret = gnutls_privkey_generate2(bob_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
     if (ret != 0) {
         printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(bob_pubkey);

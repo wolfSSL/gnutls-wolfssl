@@ -3432,39 +3432,34 @@ static int wolfssl_shake_output(void *_ctx, void *digest, size_t digestsize)
 #ifdef WOLFSSL_SHAKE128
     if (ctx->algorithm == GNUTLS_DIG_SHAKE_128) {
         /* Take from cache if not any and not all used. */
-	if (ctx->used > 0 && ctx->used < WC_SHA3_128_BLOCK_SIZE) {
-            size = MIN(digestsize, WC_SHA3_128_BLOCK_SIZE);
+        if (ctx->used > 0 && ctx->used < WC_SHA3_128_BLOCK_SIZE) {
+            size = MIN(digestsize, ((size_t)WC_SHA3_128_BLOCK_SIZE - ctx->used));
             XMEMCPY(digest, ctx->block + ctx->used, size);
-            digest += size;
+            digest = (byte*)digest + size;
             digestsize -= size;
             ctx->used += size;
         }
 
         /* Generate more blocks if more output needed. */
         while (digestsize > 0) {
-            size = MIN(digestsize, WC_SHA3_128_BLOCK_SIZE);
-
-            /* Put straight into output if all bytes needed for output. */
-            if (size == WC_SHA3_128_BLOCK_SIZE) {
-                ret = wc_Shake128_SqueezeBlocks(&ctx->shake, (byte*)digest,
-                    size);
-            /* Put into cache and copy out needed bytes. */
-            } else {
-                ret = wc_Shake128_SqueezeBlocks(&ctx->shake, ctx->block,
-                    size);
-                if (ret == 0) {
-                    XMEMCPY(digest, ctx->block, size);
-                    ctx->used = size;
+            /* Generate a new block if we need one */
+            if (ctx->used == 0 || ctx->used >= WC_SHA3_128_BLOCK_SIZE) {
+                ret = wc_Shake128_SqueezeBlocks(&ctx->shake, ctx->block, 1);
+                if (ret != 0) {
+                    WGW_WOLFSSL_ERROR("wc_Shake128_SqueezeBlocks", ret);
+                    return GNUTLS_E_HASH_FAILED;
                 }
-            }
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_Shake128_SqueezeBlocks", ret);
-                return GNUTLS_E_HASH_FAILED;
+                ctx->used = 0;
             }
 
-            /* Skip over output generated. */
-            digest += size;
+            /* Copy out bytes from current block */
+            size = MIN(digestsize, (size_t)(WC_SHA3_128_BLOCK_SIZE - ctx->used));
+            XMEMCPY(digest, ctx->block + ctx->used, size);
+
+            /* Update pointers */
+            digest = (byte*)digest + size;
             digestsize -= size;
+            ctx->used += size;
         }
     }
 #endif
@@ -3472,38 +3467,33 @@ static int wolfssl_shake_output(void *_ctx, void *digest, size_t digestsize)
     if (ctx->algorithm == GNUTLS_DIG_SHAKE_256) {
         /* Take from cache if not any and not all used. */
         if (ctx->used > 0 && ctx->used < WC_SHA3_256_BLOCK_SIZE) {
-            size = MIN(digestsize, WC_SHA3_256_BLOCK_SIZE);
+            size = MIN(digestsize, (size_t)(WC_SHA3_256_BLOCK_SIZE - ctx->used));
             XMEMCPY(digest, ctx->block + ctx->used, size);
-            digest += size;
+            digest = (byte*)digest + size;
             digestsize -= size;
             ctx->used += size;
         }
 
         /* Generate more blocks if more output needed. */
         while (digestsize > 0) {
-            size = MIN(digestsize, WC_SHA3_256_BLOCK_SIZE);
-
-            /* Put straight into output if all bytes needed for output. */
-            if (size == WC_SHA3_256_BLOCK_SIZE) {
-                ret = wc_Shake256_SqueezeBlocks(&ctx->shake, (byte*)digest,
-                    size);
-            /* Put into cache and copy out needed bytes. */
-            } else {
-                ret = wc_Shake256_SqueezeBlocks(&ctx->shake, ctx->block,
-                    size);
-                if (ret == 0) {
-                    XMEMCPY(digest, ctx->block, size);
-                    ctx->used = size;
+            /* Generate a new block if we need one */
+            if (ctx->used == 0 || ctx->used >= WC_SHA3_256_BLOCK_SIZE) {
+                ret = wc_Shake256_SqueezeBlocks(&ctx->shake, ctx->block, 1);
+                if (ret != 0) {
+                    WGW_WOLFSSL_ERROR("wc_Shake256_SqueezeBlocks", ret);
+                    return GNUTLS_E_HASH_FAILED;
                 }
-            }
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_Shake256_SqueezeBlocks", ret);
-                return GNUTLS_E_HASH_FAILED;
+                ctx->used = 0;
             }
 
-            /* Skip over output generated. */
-            digest += size;
+            /* Copy out bytes from current block */
+            size = MIN(digestsize, (size_t)(WC_SHA3_256_BLOCK_SIZE - ctx->used));
+            XMEMCPY(digest, ctx->block + ctx->used, size);
+
+            /* Update pointers */
+            digest = (byte*)digest + size;
             digestsize -= size;
+            ctx->used += size;
         }
     }
 #endif
@@ -5655,6 +5645,10 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
             break;
         case GNUTLS_DIG_SHA512:
             hash_type = WC_HASH_TYPE_SHA512;
+            WGW_LOG("hash detected SHA512");
+            break;
+        case GNUTLS_DIG_SHAKE_256:
+            hash_type = WC_HASH_TYPE_SHAKE256;
             WGW_LOG("hash detected SHA512");
             break;
         default:

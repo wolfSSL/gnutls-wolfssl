@@ -40,6 +40,8 @@ int test_rnd_read(const char* filename, unsigned char* buf, size_t sz)
 
     sz = fread(buf, 1, sz, fp);
     fclose(fp);
+
+    return 0;
 }
 
 int test_rnd_fork_level(gnutls_rnd_level_t level)
