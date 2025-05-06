@@ -496,7 +496,7 @@ static int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     }
 
 #ifdef WOLFSSL_AES_XTS
-    if (ctx->mode == XTS) {
+    if (ctx->mode == XTS && gnutls_fips140_mode_enabled()) {
         /* XTS has two AES keys that are no allowed to be the same. */
         if (XMEMCMP(key, key + exp_key_size / 2, exp_key_size / 2) == 0) {
             WGW_ERROR("XTS keys are the same");
@@ -1974,6 +1974,12 @@ struct wolfssl_cmac_ctx {
     int initialized;
     /** The GnuTLS cipher algorithm ID. */
     gnutls_mac_algorithm_t algorithm;
+    /** Cached key. */
+    unsigned char key[AES_256_KEY_SIZE];
+    /** Size of cached key. */
+    size_t key_size;
+    /** Setting of the key is required before hashing. */
+    int set_key:1;
 };
 
 /**
@@ -2077,6 +2083,10 @@ static int wolfssl_cmac_setkey(void *_ctx, const void *key, size_t keysize)
         return GNUTLS_E_HASH_FAILED;
     }
 
+    XMEMCPY(ctx->key, key, keysize);
+    ctx->key_size = keysize;
+    ctx->set_key = 0;
+
     WGW_LOG("cmac key set successfully");
     return 0;
 }
@@ -2102,6 +2112,18 @@ static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
     if (!ctx->initialized) {
         WGW_ERROR("MAC context not initialized");
         return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (ctx->set_key) {
+        /* Initialize and set the key */
+        ret = wc_InitCmac(&ctx->cmac_ctx, (const byte*)ctx->key,
+            (word32)ctx->key_size, WC_CMAC_AES, NULL);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_HASH_FAILED;
+        }
+        ctx->set_key = 0;
     }
 
     /* Can only do 32-bit sized updates at a time. */
@@ -2161,12 +2183,25 @@ static int wolfssl_cmac_output(void *_ctx, void *digest, size_t digestsize)
         return GNUTLS_E_SHORT_MEMORY_BUFFER;
     }
 
+    if (ctx->set_key) {
+        /* Initialize and set the key */
+        ret = wc_InitCmac(&ctx->cmac_ctx, (const byte*)ctx->key,
+            (word32)ctx->key_size, WC_CMAC_AES, NULL);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_HASH_FAILED;
+        }
+        ctx->set_key = 0;
+    }
+
     /* Finalize CMAC and get the result. */
     ret = wc_CmacFinal(&ctx->cmac_ctx, (byte*)digest, &digest_size);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_CmacFinal", ret);
         return GNUTLS_E_HASH_FAILED;
     }
+    ctx->set_key = 1;
 
     WGW_LOG("cmac output successful");
     return 0;
@@ -2488,6 +2523,8 @@ static int wolfssl_gmac_hash(void *_ctx, const void *text, size_t textsize)
 
 /**
  * Output the gmac result.
+ *
+ * Doesn't support more than 32-bit length.
  *
  * @param [in, out] _ctx        GMAC context.
  * @param [out]     digest      Buffer to hold digest.
@@ -6646,9 +6683,11 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
     int ret;
 
     WGW_FUNC_ENTER();
+    WGW_LOG("outsize=%d", outsize);
 
     switch (mac) {
         case GNUTLS_MAC_MD5_SHA1:
+            WGW_LOG("MD5+SHA1");
             ret = wc_PRF_TLSv1((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, NULL, INVALID_DEVID);
             if (ret != 0) {
@@ -6657,6 +6696,7 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
             }
             break;
         case GNUTLS_MAC_SHA256:
+            WGW_LOG("SHA256");
             ret = wc_PRF_TLS((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, 1, sha256_mac, NULL,
                 INVALID_DEVID);
@@ -6666,6 +6706,7 @@ int wolfssl_tls_prf(gnutls_mac_algorithm_t mac, size_t master_size,
             }
             break;
         case GNUTLS_MAC_SHA384:
+            WGW_LOG("SHA384");
             ret = wc_PRF_TLS((byte*)out, outsize, master, master_size,
                 (byte*)label, label_size, seed, seed_size, 1, sha384_mac, NULL,
                 INVALID_DEVID);
@@ -7104,12 +7145,15 @@ int _gnutls_wolfssl_init(void)
 
 /**
  * Module deinitialization
- *
- * TODO: close logging file descriptor if not stdout/stderr.
  */
 void _gnutls_wolfssl_deinit(void)
 {
     WGW_FUNC_ENTER();
+
+    if (loggingFd != stdout && loggingFd != stderr && loggingFd != XBADFILE) {
+        XFCLOSE(loggingFd);
+    }
+
     return;
 }
 

@@ -36,10 +36,10 @@ cd ./wolfssl
 
 if [ "$OS" = "macos" ]; then
     echo "Configuring wolfSSL for macOS..."
-    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-keygen
+    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256
 else
     echo "Configuring wolfSSL for Linux..."
-    ./configure --prefix=/opt/wolfssl/ --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-keygen
+    ./configure --prefix=/opt/wolfssl/ --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256
 fi
 
 make
@@ -70,11 +70,11 @@ if [ "$OS" = "macos" ]; then
     GMP_LIBS="-L$(brew --prefix gmp)/lib -lgmp" \
     PKG_CONFIG_PATH="$(brew --prefix libev)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH" \
     CC=clang \
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication 
     make -j$(sysctl -n hw.ncpu)
 else
     echo "Configuring GnuTLS for Linux..."
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication CFLAGS=-DGNUTLS_WOLFSSL
     make -j9
 fi
 

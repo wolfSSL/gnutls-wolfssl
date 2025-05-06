@@ -29,5 +29,8 @@ install:
 	mkdir -p /opt/wolfssl-gnutls-wrapper/lib/
 	install -m 755 $(WRAPPER_TARGET) /opt/wolfssl-gnutls-wrapper/lib/
 
+test:
+	(cd tests; make run)
+
 clean:
 	rm -f $(WRAPPER_TARGET)

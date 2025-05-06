@@ -1,0 +1,6 @@
+wolfssl-gnutls-wrapper/tests/random
+wolfssl-gnutls-wrapper/tests/test_*
+!wolfssl-gnutls-wrapper/tests/test_*.*
+wolfssl-gnutls-wrapper/libgnutls-wolfssl-wrapper.*
+gnutls
+wolfssl
