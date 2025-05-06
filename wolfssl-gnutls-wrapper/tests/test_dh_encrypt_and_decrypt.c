@@ -17,7 +17,7 @@ const unsigned char iv_data[12] = {
 };
 
 /* HKDF parameters */
-const char hkdf_salt[] = "ECDH-Key-Derivation-Salt";
+const char hkdf_salt[] = "DH-Key-Derivation-Salt";
 const char hkdf_info[] = "AES-256-GCM-Encryption-Key";
 
 void print_hex(const unsigned char *data, size_t len) {
@@ -33,45 +33,19 @@ void print_hex(const unsigned char *data, size_t len) {
     printf("\n");
 }
 
-/* Get key size for standard NIST curves */
-int get_curve_bits(const char *curve_name) {
-    if (strcmp(curve_name, "SECP256R1") == 0) {
-        return 256;
-    } else if (strcmp(curve_name, "SECP384R1") == 0) {
-        return 384;
-    } else if (strcmp(curve_name, "SECP521R1") == 0) {
-        return 521;
-    } else {
-        return 0; /* For X25519 and X448, size is fixed */
-    }
-}
-
-/* Convert curve name to GnuTLS curve ID */
-gnutls_ecc_curve_t get_curve_id(const char *curve_name) {
-    if (strcmp(curve_name, "SECP256R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP256R1;
-    } else if (strcmp(curve_name, "SECP384R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP384R1;
-    } else if (strcmp(curve_name, "SECP521R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP521R1;
-    } else {
-        return GNUTLS_ECC_CURVE_INVALID;
-    }
-}
-
-int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name) {
+int test_dh_encrypt_decrypt(unsigned int bits) {
     int ret;
     gnutls_privkey_t alice_privkey, bob_privkey;
     gnutls_pubkey_t alice_pubkey, bob_pubkey;
     gnutls_datum_t shared_key;
     gnutls_datum_t encrypted, decrypted;
+	gnutls_keygen_data_st keygen_data;
+    gnutls_dh_params_t dh_params;
     const char *test_data = "Test data to be encrypted";
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
     unsigned char tag[16] = {0}; // 16 bytes authentication tag for GCM
-    int curve_bits = get_curve_bits(curve_name);
-    gnutls_ecc_curve_t curve_id = get_curve_id(curve_name);
 
-    printf("\n=== Testing ECDH encryption/decryption with %s ===\n", curve_name);
+    printf("\n=== Testing DH encryption/decryption with %d bits ===\n", bits);
 
     /* Initialize keys */
     ret = gnutls_privkey_init(&alice_privkey);
@@ -104,52 +78,48 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    /* Generate ECDH key pairs with the specified algorithm */
-    printf("Generating ECDH key pairs (%s)...\n", curve_name);
+    /* Generate DH parameters first */
+    ret = gnutls_dh_params_init(&dh_params);
+    if (ret != 0) {
+        printf("Error initializing params: %s\n", gnutls_strerror(ret));
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+    }
 
-    /* For NIST curves, use the specified bits and curve ID */
-    if (algo == GNUTLS_PK_EC && curve_bits > 0) {
-        /* For NIST curves, we need to specify the curve using gnutls_privkey_generate */
-        ret = gnutls_privkey_generate(alice_privkey, algo, curve_bits, 0);
-        if (ret != 0) {
-            printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
-            gnutls_pubkey_deinit(bob_pubkey);
-            gnutls_privkey_deinit(bob_privkey);
-            gnutls_pubkey_deinit(alice_pubkey);
-            gnutls_privkey_deinit(alice_privkey);
-            return 1;
-        }
+    ret = gnutls_dh_params_generate2(dh_params, bits);
+    if (ret != 0) {
+        printf("Error generating params: %s\n", gnutls_strerror(ret));
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        gnutls_dh_params_deinit(dh_params);
+    }
 
-        ret = gnutls_privkey_generate(bob_privkey, algo, curve_bits, 0);
-        if (ret != 0) {
-            printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
-            gnutls_pubkey_deinit(bob_pubkey);
-            gnutls_privkey_deinit(bob_privkey);
-            gnutls_pubkey_deinit(alice_pubkey);
-            gnutls_privkey_deinit(alice_privkey);
-            return 1;
-        }
-    } else {
-        /* For X25519 and X448, we don't need to specify bits as they're fixed for these curves */
-        ret = gnutls_privkey_generate2(alice_privkey, algo, 0, 0, NULL, 0);
-        if (ret != 0) {
-            printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
-            gnutls_pubkey_deinit(bob_pubkey);
-            gnutls_privkey_deinit(bob_privkey);
-            gnutls_pubkey_deinit(alice_pubkey);
-            gnutls_privkey_deinit(alice_privkey);
-            return 1;
-        }
+    /* Generate DH key pairs */
+    printf("Generating DH key pairs (%d bits)...\n", bits);
 
-        ret = gnutls_privkey_generate2(bob_privkey, algo, 0, 0, NULL, 0);
-        if (ret != 0) {
-            printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
-            gnutls_pubkey_deinit(bob_pubkey);
-            gnutls_privkey_deinit(bob_privkey);
-            gnutls_pubkey_deinit(alice_pubkey);
-            gnutls_privkey_deinit(alice_privkey);
-            return 1;
-        }
+    keygen_data.type = GNUTLS_KEYGEN_DH;
+    keygen_data.data = (unsigned char *)dh_params;
+
+    ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
+    if (ret != 0) {
+        printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
+    }
+
+    ret = gnutls_privkey_generate2(bob_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
+    if (ret != 0) {
+        printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
+        gnutls_pubkey_deinit(bob_pubkey);
+        gnutls_privkey_deinit(bob_privkey);
+        gnutls_pubkey_deinit(alice_pubkey);
+        gnutls_privkey_deinit(alice_privkey);
+        return 1;
     }
 
     /* Extract the public keys from the private keys */
@@ -173,8 +143,8 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    /* Perform ECDH key exchange for encryption key derivation */
-    printf("Performing ECDH key exchange...\n");
+    /* Perform DH key exchange for encryption key derivation */
+    printf("Performing DH key exchange...\n");
     ret = gnutls_privkey_derive_secret(alice_privkey, bob_pubkey, NULL, &shared_key, 0);
     if (ret != 0) {
         printf("Error deriving shared secret: %s\n", gnutls_strerror(ret));
@@ -190,8 +160,6 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     print_hex(shared_key.data, shared_key.size);
 
     /* Derive AES key using HKDF */
-
-    /* Step 1: HKDF-Extract to get pseudorandom key */
     unsigned char prk[32]; /* Size based on SHA-256 output */
     const gnutls_datum_t salt = { (unsigned char *)hkdf_salt, strlen(hkdf_salt) };
     const gnutls_datum_t key_datum = { shared_key.data, shared_key.size };
@@ -210,7 +178,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     printf("HKDF-Extract PRK:\n");
     print_hex(prk, sizeof(prk));
 
-    /* Step 2: HKDF-Expand to get final key */
+    /* HKDF-Expand to get final key */
     unsigned char key_material[32]; /* 256 bits for AES-256 */
     const gnutls_datum_t prk_datum = { prk, sizeof(prk) };
     const gnutls_datum_t info = { (unsigned char *)hkdf_info, strlen(hkdf_info) };
@@ -251,7 +219,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    /* Set the additional authenticated data (AAD) */
+    /* Set AAD */
     ret = gnutls_cipher_add_auth(encrypt_handle, aad_data, sizeof(aad_data));
     if (ret != 0) {
         printf("Error adding AAD for encryption: %s\n", gnutls_strerror(ret));
@@ -318,7 +286,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     print_hex(tag, sizeof(tag));
 
     /********** DECRYPTION **********/
-    /* Initialize cipher for decryption with same parameters */
+    /* Initialize cipher for decryption */
     gnutls_cipher_hd_t decrypt_handle;
     ret = gnutls_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
     if (ret != 0) {
@@ -332,7 +300,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    /* Set the same AAD for decryption */
+    /* Set AAD for decryption */
     ret = gnutls_cipher_add_auth(decrypt_handle, aad_data, sizeof(aad_data));
     if (ret != 0) {
         printf("Error adding AAD for decryption: %s\n", gnutls_strerror(ret));
@@ -346,7 +314,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    /* Set the authentication tag for verification */
+    /* Set authentication tag for verification */
     ret = gnutls_cipher_tag(decrypt_handle, tag, sizeof(tag));
     if (ret != 0) {
         printf("Error setting authentication tag for verification: %s\n", gnutls_strerror(ret));
@@ -416,9 +384,9 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
 
     /* Check if decryption was successful */
     if (decrypted.size == data.size && memcmp(decrypted.data, data.data, data.size) == 0) {
-        printf("SUCCESS for %s\n", curve_name);
+        printf("SUCCESS for %d bits\n", bits);
     } else {
-        printf("FAILURE for %s: Decrypted data does not match original\n", curve_name);
+        printf("FAILURE for %d bits: Decrypted data does not match original\n", bits);
         free(decrypted_str);
         gnutls_free(decrypted.data);
         gnutls_free(encrypted.data);
@@ -434,7 +402,6 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     free(decrypted_str);
     gnutls_free(decrypted.data);
     gnutls_free(encrypted.data);
-    gnutls_free(shared_key.data);
     gnutls_pubkey_deinit(bob_pubkey);
     gnutls_privkey_deinit(bob_privkey);
     gnutls_pubkey_deinit(alice_pubkey);
@@ -446,7 +413,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
 int main(void) {
     int ret;
 
-    printf("Testing GnuTLS's ECDH encryption/decryption with various curves...\n");
+    printf("Testing GnuTLS's DH encryption/decryption with various key sizes...\n");
 
     /* Initialize GnuTLS */
     ret = gnutls_global_init();
@@ -455,44 +422,19 @@ int main(void) {
         return 1;
     }
 
-    /* Test X25519 */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X25519, "X25519");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
-
-    /* Test X448 */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X448, "X448");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
-
-    /* Test P-256 (SECP256R1) */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP256R1");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
-
-    /* Test P-384 (SECP384R1) */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP384R1");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
-
-    /* Test P-521 (SECP521R1) */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_EC, "SECP521R1");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
+    /* Test with different DH key sizes */
+    unsigned int key_sizes[] = {2048, 3072, 4096};
+    for (size_t i = 0; i < sizeof(key_sizes)/sizeof(key_sizes[0]); i++) {
+        ret = test_dh_encrypt_decrypt(key_sizes[i]);
+        if (ret != 0) {
+            gnutls_global_deinit();
+            return 1;
+        }
     }
 
     /* Clean up global resources */
     gnutls_global_deinit();
 
-    printf("\nAll ECDH encryption/decryption tests completed!\n");
+    printf("\nAll DH encryption/decryption tests completed!\n");
     return 0;
 }

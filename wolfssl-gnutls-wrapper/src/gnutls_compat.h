@@ -6,6 +6,31 @@
 
 /* replicated definitions from GnuTLS internal headers */
 
+typedef enum {
+    GNUTLS_KEYGEN_SEED = 1,
+    GNUTLS_KEYGEN_DIGEST = 2,
+    GNUTLS_KEYGEN_SPKI = 3,
+    GNUTLS_KEYGEN_DH = 4
+} gnutls_keygen_types_t;
+
+typedef struct {
+    gnutls_keygen_types_t type;
+    unsigned char *data;
+    unsigned int size;
+} gnutls_keygen_data_st;
+
+typedef void *bigint_t;
+
+/* DH and RSA parameters types.
+*/
+typedef struct gnutls_dh_params_int {
+    /* [0] is the prime, [1] is the generator, [2] is Q if available.
+    */
+    bigint_t params[3];
+    int q_bits; /* length of q in bits. If zero then length is unknown.
+    */
+} dh_params_st;
+
 /* From crypto-backend.h */
 typedef struct {
     gnutls_cipher_init_func init;
@@ -358,6 +383,8 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_sign_hash_func sign_hash_backend;
     gnutls_pk_verify_hash_func verify_hash_backend;
     gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
+	gnutls_pk_privkey_export_dh_raw_func privkey_export_dh_raw_backend;
+	gnutls_pk_pubkey_export_dh_raw_func pubkey_export_dh_raw_backend;
 	gnutls_pk_copy_func copy_backend;
     gnutls_pk_deinit_func deinit_backend;
 	/* The params structure should contain the private or public key

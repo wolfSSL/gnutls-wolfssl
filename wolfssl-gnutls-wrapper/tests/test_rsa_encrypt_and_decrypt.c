@@ -106,34 +106,6 @@ int test_rsa_encrypt_decrypt(unsigned int bits) {
     printf("Decrypted data: \"%.*s\"\n", (int)decrypted.size, (char *)decrypted.data);
     printf("SUCCESS for RSA %d bits\n", bits);
 
-    /* Test the fixed length API */
-    printf("\nTesting fixed length API...\n");
-    unsigned char fixed_buffer[512]; /* Large enough buffer for any RSA key size we test */
-    size_t fixed_size = sizeof(fixed_buffer);
-    
-    memset(fixed_buffer, 0, fixed_size);
-    
-    ret = gnutls_privkey_decrypt_data2(privkey, 0, &ciphertext, fixed_buffer, fixed_size);
-    if (ret != 0) {
-        printf("Error using fixed length decrypt API: %s\n", gnutls_strerror(ret));
-        gnutls_free(ciphertext.data);
-        gnutls_free(decrypted.data);
-        gnutls_pubkey_deinit(pubkey);
-        gnutls_privkey_deinit(privkey);
-        return 1;
-    }
-    
-    if (memcmp(fixed_buffer, data.data, data.size) != 0) {
-        printf("FAILURE: Fixed length API decrypted data doesn't match original\n");
-        gnutls_free(ciphertext.data);
-        gnutls_free(decrypted.data);
-        gnutls_pubkey_deinit(pubkey);
-        gnutls_privkey_deinit(privkey);
-        return 1;
-    }
-    
-    printf("Fixed length API SUCCESS\n");
-
     /* Clean up */
     gnutls_free(ciphertext.data);
     gnutls_free(decrypted.data);

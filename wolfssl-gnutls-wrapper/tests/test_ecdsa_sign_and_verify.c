@@ -18,7 +18,7 @@ void print_hex(const unsigned char *data, size_t len) {
     printf("\n");
 }
 
-int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
+int test_ecdsa_curve(gnutls_ecc_curve_t curve, const char *curve_name) {
     int ret;
     gnutls_privkey_t privkey;
     gnutls_pubkey_t pubkey;
@@ -29,16 +29,23 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     gnutls_sign_algorithm_t sign_algo;
     unsigned char hash_buffer[64]; // Big enough for any hash we'll use
     gnutls_datum_t hash;
+    unsigned int bits;
 
-    if (bits == 256) {
+    // Select appropriate hash algorithm based on curve
+    if (curve == GNUTLS_ECC_CURVE_SECP256R1) {
         digest_algo = GNUTLS_DIG_SHA256;
         sign_algo = GNUTLS_SIGN_ECDSA_SHA256;
-    } else if (bits == 384) {
+        bits = 256;
+    } else if (curve == GNUTLS_ECC_CURVE_SECP384R1) {
         digest_algo = GNUTLS_DIG_SHA384;
         sign_algo = GNUTLS_SIGN_ECDSA_SHA384;
-    } else if (bits == 521) {
+        bits = 384;
+    } else if (curve == GNUTLS_ECC_CURVE_SECP521R1) {
         digest_algo = GNUTLS_DIG_SHA512;
         sign_algo = GNUTLS_SIGN_ECDSA_SHA512;
+        bits = 521;
+    } else {
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     memset(&signature, 0, sizeof(signature));
@@ -63,9 +70,11 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
 
     /* Generate an ECDSA key pair with the specified curve */
     printf("Generating ECDSA key pair (%s)...\n", curve_name);
-    ret = gnutls_privkey_generate2(privkey, GNUTLS_PK_ECDSA,
-                                  bits,
-                                  0, NULL, 0);
+    
+    /* Use GNUTLS_CURVE_TO_BITS macro to properly encode the curve */
+    ret = gnutls_privkey_generate(privkey, GNUTLS_PK_ECDSA, 
+                                  bits, 0);
+    
     if (ret != 0) {
         printf("Error generating private key: %s\n", gnutls_strerror(ret));
         gnutls_pubkey_deinit(pubkey);
@@ -145,7 +154,7 @@ int test_ecdsa_curve(unsigned int bits, const char *curve_name) {
     /* Verify the hash signature */
     printf("Verifying hash signature...\n");
     ret = gnutls_pubkey_verify_hash2(pubkey, sign_algo, 0, &hash, &signature_hash);
-    if (ret != 0) {
+    if (ret != 1) {
         printf("FAILURE verifying hash signature for %s: %s\n", curve_name, gnutls_strerror(ret));
         gnutls_free(signature.data);
         gnutls_free(signature_hash.data);
@@ -177,21 +186,21 @@ int main(void) {
     }
 
     /* Test SECP256R1 (P-256) */
-    ret = test_ecdsa_curve(256, "SECP256R1");
+    ret = test_ecdsa_curve(GNUTLS_ECC_CURVE_SECP256R1, "SECP256R1");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
     }
 
     /* Test SECP384R1 (P-384) */
-    ret = test_ecdsa_curve(384, "SECP384R1");
+    ret = test_ecdsa_curve(GNUTLS_ECC_CURVE_SECP384R1, "SECP384R1");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;
     }
 
     /* Test SECP521R1 (P-521) */
-    ret = test_ecdsa_curve(521, "SECP521R1");
+    ret = test_ecdsa_curve(GNUTLS_ECC_CURVE_SECP521R1, "SECP521R1");
     if (ret != 0) {
         gnutls_global_deinit();
         return 1;

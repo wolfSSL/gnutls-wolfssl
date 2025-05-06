@@ -146,7 +146,7 @@ int test_rsa_key_size(unsigned int bits) {
     /* Verify the hash signature */
     printf("Verifying hash signature...\n");
     ret = gnutls_pubkey_verify_hash2(pubkey, sign_algo, 0, &hash, &signature_hash);
-    if (ret != 0) {
+    if (ret != 1) {
         printf("FAILURE verifying hash signature for RSA %d bits: %s\n", bits, gnutls_strerror(ret));
         gnutls_free(signature.data);
         gnutls_free(signature_hash.data);
@@ -293,7 +293,7 @@ int test_rsa_pss_key_size(unsigned int bits) {
     /* Verify the hash signature */
     printf("Verifying hash signature...\n");
     ret = gnutls_pubkey_verify_hash2(pubkey, sign_algo, 0, &hash, &signature_hash);
-    if (ret != 0) {
+    if (ret != 1) {
         printf("FAILURE verifying hash signature for RSA-PSS %d bits: %s\n", bits, gnutls_strerror(ret));
         gnutls_free(signature.data);
         gnutls_free(signature_hash.data);
