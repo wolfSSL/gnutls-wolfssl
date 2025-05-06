@@ -70,11 +70,11 @@ if [ "$OS" = "macos" ]; then
     GMP_LIBS="-L$(brew --prefix gmp)/lib -lgmp" \
     PKG_CONFIG_PATH="$(brew --prefix libev)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH" \
     CC=clang \
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication 
     make -j$(sysctl -n hw.ncpu)
 else
     echo "Configuring GnuTLS for Linux..."
-    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost CFLAGS=-DGNUTLS_WOLFSSL
+    ./configure --prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication CFLAGS=-DGNUTLS_WOLFSSL
     make -j9
 fi
 
