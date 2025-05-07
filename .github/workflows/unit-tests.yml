@@ -1,0 +1,48 @@
+name: wolfssl-gnutls-wrapper Unit Tests
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request: {}
+  # This triggers on pull requests into any branch
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  make_check:
+    name: make check
+    timeout-minutes: 20
+
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        provider:
+          - ""
+          - "GNUTLS_NO_PROVIDER=1"
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run setup and tests
+        shell: bash
+        run: |
+          BUILD_RESULT=0
+          TEST_RESULT=0
+
+          ./setup.sh || BUILD_RESULT=$?
+
+          cd wolfssl-gnutls-wrapper
+          ${{ matrix.provider }} make test || TEST_RESULT=$?
+
+          if [ "$BUILD_RESULT" -ne 0 ] || [ "$TEST_RESULT" -ne 0 ]; then
+            echo "Build or test failed: BUILD_RESULT=$BUILD_RESULT, TEST_RESULT=$TEST_RESULT"
+            exit 1
+          fi
