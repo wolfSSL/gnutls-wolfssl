@@ -32,5 +32,8 @@ install:
 test:
 	(cd tests; make run)
 
+test_fips:
+	(cd tests; make run_fips)
+
 clean:
 	rm -f $(WRAPPER_TARGET)

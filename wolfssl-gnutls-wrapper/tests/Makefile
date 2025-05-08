@@ -26,9 +26,6 @@ all: $(TESTS)
 %: %.c test_util.h
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
-test_dh_encrypt_and_decrypt: test_dh_encrypt_and_decrypt.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
 run-%:
 	GNUTLS_DEBUG_LEVEL=9 ./$*
 
@@ -56,6 +53,8 @@ run: $(TESTS)
 		echo "\nAll tests passed! 🎉"; \
 	fi
 
+run_fips: $(TESTS)
+	GNUTLS_FORCE_FIPS_MODE=1 make run
 
 run_gnutls: $(TESTS)
 	GNUTLS_NO_PROVIDER=1 make run
