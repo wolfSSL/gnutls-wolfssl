@@ -58,7 +58,9 @@ run_fast:
 
 run_valgrind:
 	VALGRIND=valgrind  make run_fast
-	
+
+run_fips: $(TESTS)
+	GNUTLS_FORCE_FIPS_MODE=1 make run
 
 run_gnutls: $(TESTS)
 	GNUTLS_NO_PROVIDER=1 make run

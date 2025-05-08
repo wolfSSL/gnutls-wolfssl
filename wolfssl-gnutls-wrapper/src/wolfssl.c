@@ -1227,6 +1227,10 @@ static int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
             nonce, nonce_size, encr + plain_size, tag_size, auth, auth_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesCcmEncrypt", ret);
+#if defined(HAVE_FIPS)
+            if (ret == BAD_FUNC_ARG)
+                return GNUTLS_E_INVALID_REQUEST;
+#endif
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
     } else {
@@ -1300,8 +1304,12 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
         ret = wc_AesCcmDecrypt(&ctx->cipher.aes_ctx, plain, encr, encr_size,
             nonce, nonce_size, encr + encr_size, tag_size, auth, auth_size);
         if (ret != 0) {
-            WGW_WOLFSSL_ERROR("wc_AesCcmEncrypt", ret);
-            return GNUTLS_E_DECRYPTION_FAILED;
+#if defined(HAVE_FIPS)
+            WGW_WOLFSSL_ERROR("wc_AesCcmDecrypt", ret);
+            if (ret == BAD_FUNC_ARG)
+                return GNUTLS_E_INVALID_REQUEST;
+#endif
+            return GNUTLS_E_ENCRYPTION_FAILED;
         }
         return 0;
     } else {
@@ -1761,7 +1769,11 @@ static int wolfssl_hmac_setkey(void *_ctx, const void *key, size_t keysize)
         (word32)keysize);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HmacSetKey", ret);
-        return GNUTLS_E_HASH_FAILED;
+#if defined(HAVE_FIPS)
+        if (ret == HMAC_MIN_KEYLEN_E)
+            return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#endif
+            return GNUTLS_E_HASH_FAILED;
     }
 
     WGW_LOG("hmac key set successfully");
@@ -4201,6 +4213,10 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     /* Initialize RNG */
     ret = wc_InitRng(&ctx->rng);
     if (ret != 0) {
@@ -4832,6 +4848,10 @@ static int wolfssl_pk_import_pubkey_x509(void **_ctx,
         WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
+
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
 
     /* Initialize RNG */
     ret = wc_InitRng(&ctx->rng);
@@ -7555,6 +7575,9 @@ static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
 
     /* Initialize RNG */
     if (!ctx->rng_initialized) {
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
         ret = wc_InitRng(&ctx->rng);
         if (ret != 0) {
             WGW_ERROR("wc_InitRng failed with code %d", ret);
@@ -8451,6 +8474,9 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
 
         /* Restart the private random. */
         wc_FreeRng(&ctx->priv_rng);
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
         ret = wc_InitRng(&ctx->priv_rng);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -8495,6 +8521,9 @@ static void wolfssl_rnd_refresh(void *_ctx)
         wc_FreeRng(&ctx->priv_rng);
         wc_FreeRng(&ctx->pub_rng);
 
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
         /* Initialize private wolfSSL random for use again. */
         ret = wc_InitRng(&ctx->priv_rng);
         if (ret != 0) {
@@ -8504,6 +8533,9 @@ static void wolfssl_rnd_refresh(void *_ctx)
             ctx->initialized = 0;
         }
 
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
         /* Initialize public wolfSSL random for use again. */
         ret = wc_InitRng(&ctx->pub_rng);
         if (ret != 0) {
@@ -8790,9 +8822,12 @@ static int wolfssl_pbkdf2(gnutls_mac_algorithm_t mac, const void *key,
 
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_PBKDF2_ex", ret);
+#if defined(HAVE_FIPS)
+        if (ret == BAD_LENGTH_E)
+            return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#endif
         return GNUTLS_E_INTERNAL_ERROR;
     }
-
 
     return 0;
 }
@@ -8882,9 +8917,14 @@ static int wolfssl_tls13_update_secret(gnutls_mac_algorithm_t mac,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    PRIVATE_KEY_UNLOCK();
+
     /* Extract the key. */
     ret = wc_Tls13_HKDF_Extract_ex(secret, salt, salt_size, (byte*)key,
         key_size, hash_type, NULL, INVALID_DEVID);
+
+    PRIVATE_KEY_LOCK();
+
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_Tls13_HKDF_Extract_ex", ret);
         return GNUTLS_E_INTERNAL_ERROR;
@@ -8930,10 +8970,17 @@ static int wolfssl_tls13_expand_secret(gnutls_mac_algorithm_t mac,
     /* Get the secret size. */
     digest_size = wc_HmacSizeByType(hash_type);
 
+
+    PRIVATE_KEY_UNLOCK();
+
     /* Expand the key. */
     ret = wc_Tls13_HKDF_Expand_Label_ex(out, out_size, secret, digest_size,
         protocol, protocol_len, (byte*)label, label_size, msg, msg_size,
         hash_type, NULL, INVALID_DEVID);
+
+    PRIVATE_KEY_LOCK();
+
+
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_Tls13_HKDF_Expand_Label_ex", ret);
         return GNUTLS_E_INTERNAL_ERROR;
@@ -9075,6 +9122,8 @@ int _gnutls_wolfssl_init(void)
     if (wolfCrypt_GetStatus_fips() != 0) {
         WGW_LOG("FIPS mode initialization failed");
         return GNUTLS_E_INVALID_REQUEST;
+    } else {
+        WGW_LOG("FIPS mode enabled in wolfSSL");
     }
 
     /* Make sure that FIPS mode is enabled
@@ -9082,6 +9131,8 @@ int _gnutls_wolfssl_init(void)
     if (!gnutls_fips140_mode_enabled()) {
         WGW_LOG("FIPS mode not enabled in gnutls");
         return GNUTLS_E_INVALID_REQUEST;
+    } else {
+        WGW_LOG("FIPS mode enabled in GnuTLS");
     }
 #endif
 
