@@ -7236,7 +7236,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     int ret;
     pid_t curr_pid;
 
-    // WGW_FUNC_ENTER();
+    WGW_FUNC_ENTER();
 
     if (!ctx || !ctx->initialized) {
         WGW_ERROR("random context not initialized");
@@ -7263,15 +7263,27 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     if (curr_pid != ctx->pid) {
         WGW_LOG("Forked - reseed randoms");
         ctx->pid = curr_pid;
+
         /* Reseed the public random with the current process ID. */
+#if !defined(HAVE_FIPS)
         (void)wc_RNG_DRBG_Reseed(&ctx->pub_rng, (unsigned char*)&curr_pid,
             sizeof(curr_pid));
-
+#else
+		/* Re-initialize the public random with the current process ID as nonce. */
+		wc_FreeRng(&ctx->pub_rng);
+		ret = wc_InitRngNonce(&ctx->pub_rng, (unsigned char*)&curr_pid, sizeof(curr_pid));
+		if (ret != 0) {
+			WGW_WOLFSSL_ERROR("wc_InitRngNonce for pub_rng", ret);
+			return GNUTLS_E_RANDOM_FAILED;
+		}
+#endif
         /* Restart the private random. */
         wc_FreeRng(&ctx->priv_rng);
+
 #ifdef WC_RNG_SEED_CB
-    wc_SetSeed_Cb(wc_GenerateSeed);
+        wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
+
         ret = wc_InitRng(&ctx->priv_rng);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
