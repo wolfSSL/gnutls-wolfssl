@@ -44,7 +44,7 @@ if [ $FIPS_MODE -eq 1 ]; then
 	rm -rf wolfssl/ fips-v5-checkout/
 
 	echo "Cloning wolfSSL repository for FIPS-ready build..."
-	git clone git@github.com:wolfssl/wolfssl
+	git clone https://github.com/wolfssl/wolfssl.git
 	cd wolfssl
 
 	echo "Running FIPS-ready preparation..."
@@ -91,13 +91,14 @@ fi
 
 if [ ! -d "gnutls" ]; then
 	echo "Cloning GnuTLS repository..."
-	git clone git@github.com:wolfssl/gnutls.git
+	git clone https://github.com/wolfssl/gnutls.git
 	echo "Checking out to gnutls-wolfssl..."
 	cd ./gnutls
 	git fetch --all
 	git checkout -b gnutls-wolfssl origin/gnutls-wolfssl
 else
 	cd ./gnutls
+    make clean
 fi
 
 ./bootstrap

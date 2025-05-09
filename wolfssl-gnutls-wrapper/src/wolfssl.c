@@ -4472,6 +4472,7 @@ static int wolfssl_ecc_import_public(struct wolfssl_pk_ctx *ctx,
     return 0;
 }
 
+#if defined(HAVE_ED25519)
 static int wolfssl_ed25519_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
@@ -4508,7 +4509,9 @@ static int wolfssl_ed25519_import_public(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_ED448)
 static int wolfssl_ed448_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
@@ -4545,7 +4548,9 @@ static int wolfssl_ed448_import_public(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_x25519_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
@@ -4582,7 +4587,9 @@ static int wolfssl_x25519_import_public(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE448)
 static int wolfssl_x448_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
@@ -4619,6 +4626,7 @@ static int wolfssl_x448_import_public(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
 /* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
  * the trial-and-error approach */
@@ -4691,26 +4699,32 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
         ret = wolfssl_ecc_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+
+#if !defined(HAVE_FIPS)
     /* Try Ed25519 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_ed25519_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+
     /* Try Ed448 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_ed448_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+
     /* Try X25519 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_x25519_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+
     /* Try X448 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_x448_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+#endif
 
     if (!*key_found) {
         wc_FreeRng(&ctx->rng);
@@ -4746,6 +4760,10 @@ static int wolfssl_pk_import_pub(void **_ctx,
         WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
+
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
 
     /* Initialize RNG */
     ret = wc_InitRng(&ctx->rng);
@@ -6182,6 +6200,7 @@ static int wolfssl_ecc_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     return 0;
 }
 
+#if defined(HAVE_ED25519)
 static int wolfssl_ed25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
@@ -6217,7 +6236,9 @@ static int wolfssl_ed25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_ED448)
 static int wolfssl_ed448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
@@ -6253,7 +6274,9 @@ static int wolfssl_ed448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_x25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
@@ -6284,7 +6307,9 @@ static int wolfssl_x25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE448)
 static int wolfssl_x448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
@@ -6317,6 +6342,7 @@ static int wolfssl_x448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
 
     return 0;
 }
+#endif
 
 /* export pub from the key pair */
 static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
@@ -6367,25 +6393,44 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
             gnutls_free(pub_ctx);
             return ret;
         }
-    } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+    }
+#if defined(HAVE_ED25519)
+    else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
         ret = wolfssl_ed25519_export_pub(priv_ctx, pub, pub_ctx);
         if (ret != 0) {
             gnutls_free(pub_ctx);
             return ret;
         }
-    } else if (priv_ctx->algo == GNUTLS_PK_ECDH_X25519) {
+    }
+#endif
+#if defined(HAVE_ED448)
+    else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+        ret = wolfssl_ed448_export_pub(priv_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#endif
+#if defined(HAVE_CURVE25519)
+    else if (priv_ctx->algo == GNUTLS_PK_ECDH_X25519) {
         ret = wolfssl_x25519_export_pub(priv_ctx, pub, pub_ctx);
         if (ret != 0) {
             gnutls_free(pub_ctx);
             return ret;
         }
-    } else if (priv_ctx->algo == GNUTLS_PK_ECDH_X448) {
+    }
+#endif
+#if defined(HAVE_CURVE448)
+    else if (priv_ctx->algo == GNUTLS_PK_ECDH_X448) {
         ret = wolfssl_x448_export_pub(priv_ctx, pub, pub_ctx);
         if (ret != 0) {
             gnutls_free(pub_ctx);
             return ret;
         }
-    } else if (priv_ctx->algo == GNUTLS_PK_DH) {
+    }
+#endif
+    else if (priv_ctx->algo == GNUTLS_PK_DH) {
         WGW_LOG("DH");
 
         /* Export DH public key to pub_ctx->pub_data using wc_DhExportKeyPair */
@@ -7971,6 +8016,10 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     /* Initialize RNG */
     ret = wc_InitRng(&priv_ctx->rng);
     if (ret != 0) {
@@ -8100,6 +8149,10 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
         WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
+
+#ifdef WC_RNG_SEED_CB
+    wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
 
     /* Initialize RNG */
     ret = wc_InitRng(&pub_ctx->rng);
@@ -8498,7 +8551,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     int ret;
     pid_t curr_pid;
 
-    // WGW_FUNC_ENTER();
+    WGW_FUNC_ENTER();
 
     if (!ctx || !ctx->initialized) {
         WGW_ERROR("random context not initialized");
@@ -8525,15 +8578,27 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     if (curr_pid != ctx->pid) {
         WGW_LOG("Forked - reseed randoms");
         ctx->pid = curr_pid;
+
         /* Reseed the public random with the current process ID. */
+#if !defined(HAVE_FIPS)
         (void)wc_RNG_DRBG_Reseed(&ctx->pub_rng, (unsigned char*)&curr_pid,
             sizeof(curr_pid));
-
+#else
+		/* Re-initialize the public random with the current process ID as nonce. */
+		wc_FreeRng(&ctx->pub_rng);
+		ret = wc_InitRngNonce(&ctx->pub_rng, (unsigned char*)&curr_pid, sizeof(curr_pid));
+		if (ret != 0) {
+			WGW_WOLFSSL_ERROR("wc_InitRngNonce for pub_rng", ret);
+			return GNUTLS_E_RANDOM_FAILED;
+		}
+#endif
         /* Restart the private random. */
         wc_FreeRng(&ctx->priv_rng);
+
 #ifdef WC_RNG_SEED_CB
-    wc_SetSeed_Cb(wc_GenerateSeed);
+        wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
+
         ret = wc_InitRng(&ctx->priv_rng);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);

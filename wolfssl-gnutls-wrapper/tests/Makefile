@@ -68,7 +68,7 @@ run_gnutls: $(TESTS)
 run_fast_gnutls: $(TESTS)
 	GNUTLS_NO_PROVIDER=1 make run_fast
 
-run_fast_gnutls: $(TESTS)
+run_valgrind_gnutls: $(TESTS)
 	GNUTLS_NO_PROVIDER=1 make run_valgrind
 
 clean:
