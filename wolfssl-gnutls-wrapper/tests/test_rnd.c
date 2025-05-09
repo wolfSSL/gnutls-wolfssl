@@ -3,13 +3,13 @@
 
 #include "test_util.h"
 
-static int test_rnd_level(gnutls_rnd_level_t level)
+static int test_rnd_level(gnutls_rnd_level_t level, int iterations)
 {
     int ret;
     unsigned char buf[1024];
     int i;
 
-    for (i = 0; i < 0x8000; i++) {
+    for (i = 0; i < iterations; i++) {
         ret = gnutls_rnd(level, buf, sizeof(buf));
         if (ret != 0) {
             print_gnutls_error("getting random", ret);
@@ -20,16 +20,16 @@ static int test_rnd_level(gnutls_rnd_level_t level)
     return 0;
 }
 
-static int test_rnd()
+static int test_rnd(int iterations)
 {
     int ret;
 
-    ret = test_rnd_level(GNUTLS_RND_NONCE);
+    ret = test_rnd_level(GNUTLS_RND_NONCE, iterations);
     if (ret == 0) {
-        ret = test_rnd_level(GNUTLS_RND_RANDOM);
+        ret = test_rnd_level(GNUTLS_RND_RANDOM, iterations);
     }
     if (ret == 0) {
-        ret = test_rnd_level(GNUTLS_RND_KEY);
+        ret = test_rnd_level(GNUTLS_RND_KEY, iterations);
     }
 
     return ret;
@@ -58,9 +58,15 @@ static int test_rnd_large(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char* argv[])
 {
     int ret;
+    int iterations = 0x8000;
+
+    if (argc == 2 && strcmp(argv[1], "-fast") == 0) {
+        printf("Running tests fast\n");
+        iterations = 0x800;
+    }
 
     /* Initialize GnuTLS */
     if ((ret = gnutls_global_init()) < 0) {
@@ -68,10 +74,10 @@ int main(void)
         return 1;
     }
 
-    ret = test_rnd();
+    ret = test_rnd(iterations);
     if (ret == 0) {
         gnutls_rnd_refresh();
-        ret = test_rnd();
+        ret = test_rnd(iterations);
     }
     if (ret == 0) {
         ret = test_rnd_large();

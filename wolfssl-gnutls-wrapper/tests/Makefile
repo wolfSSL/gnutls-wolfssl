@@ -1,4 +1,4 @@
-TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt test_dh_encrypt_and_decrypt
+TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt test_dh_encrypt_and_decrypt test_pk_import_export test_long_hash
 
 UNAME_S := $(shell uname -s)
 INCLUDES = -I/opt/gnutls/include/ -I/opt/gnutls/include/gnutls/
@@ -26,9 +26,6 @@ all: $(TESTS)
 %: %.c test_util.h
 	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
 
-test_dh_encrypt_and_decrypt: test_dh_encrypt_and_decrypt.c
-	$(CC) -g -o $@ $< $(INCLUDES) $(LDFLAGS) $(LIBS)
-
 run-%:
 	GNUTLS_DEBUG_LEVEL=9 ./$*
 
@@ -36,7 +33,7 @@ run: $(TESTS)
 	@passed=0; failed=0; failed_tests=""; \
 	for test in $(TESTS); do \
 		echo "\n>> Running $$test..."; \
-		if GNUTLS_DEBUG_LEVEL=9 ./$$test; then \
+		if GNUTLS_DEBUG_LEVEL=9 $(VALGRIND) ./$$test $(CMD_LINE_ARG); then \
 			echo "\n✅ $$test PASSED"; \
 			passed=$$((passed+1)); \
 		else \
@@ -56,9 +53,21 @@ run: $(TESTS)
 		echo "\nAll tests passed! 🎉"; \
 	fi
 
+run_fast:
+	CMD_LINE_ARG="-fast" make run
+
+run_valgrind:
+	VALGRIND=valgrind  make run_fast
+	
 
 run_gnutls: $(TESTS)
 	GNUTLS_NO_PROVIDER=1 make run
+
+run_fast_gnutls: $(TESTS)
+	GNUTLS_NO_PROVIDER=1 make run_fast
+
+run_fast_gnutls: $(TESTS)
+	GNUTLS_NO_PROVIDER=1 make run_valgrind
 
 clean:
 	rm -f $(TESTS)
