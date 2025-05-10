@@ -370,7 +370,9 @@ typedef enum {
 
 /* Public key algorithms */
 typedef struct gnutls_crypto_pk {
+    gnutls_pk_get_bits_func get_bits;
     gnutls_pk_generate_func generate_backend;
+    gnutls_pk_import_pubkey_func import_pubkey_backend;
     gnutls_pk_export_pubkey_func export_pubkey_backend;
     gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
     gnutls_pk_pubkey_encrypt_func pubkey_encrypt_backend;

@@ -93,12 +93,17 @@ static int cmac_long(const unsigned char* buf, size_t buf_sz,
     return ret;
 }
 
-int main(void)
+int main(int argc, char* argv[])
 {
     int ret;
     unsigned char* buf;
     size_t buf_sz = 0x100000000;
     unsigned char output[32];
+
+    if (argc == 2 && strcmp(argv[1], "-fast") == 0) {
+        printf("Skipping as running fast tests\n");
+        return 0;
+    }
 
     /* Initialize GnuTLS */
     ret = gnutls_global_init();

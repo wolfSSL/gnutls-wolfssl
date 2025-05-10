@@ -26,6 +26,7 @@ int compare_sz(const char* op, const unsigned char* output, size_t sz,
     print_hex("Output", output, sz);
 
     if (sz != exp_sz) {
+        print_hex("Expected", expected, exp_sz);
         printf("FAILURE - %s result size does not match expected size: "
             "%ld != %ld\n", op, sz, exp_sz);
         return 1;
