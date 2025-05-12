@@ -385,9 +385,13 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_sign_hash_func sign_hash_backend;
     gnutls_pk_verify_hash_func verify_hash_backend;
     gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
-	gnutls_pk_privkey_export_dh_raw_func privkey_export_dh_raw_backend;
-	gnutls_pk_pubkey_export_dh_raw_func pubkey_export_dh_raw_backend;
-	gnutls_pk_copy_func copy_backend;
+    gnutls_pk_privkey_export_dh_raw_func privkey_export_dh_raw_backend;
+    gnutls_pk_pubkey_export_dh_raw_func pubkey_export_dh_raw_backend;
+    gnutls_pk_privkey_import_ecdh_raw_func privkey_import_ecdh_raw_backend;
+    gnutls_pk_pubkey_import_ecdh_raw_func pubkey_import_ecdh_raw_backend;
+    gnutls_pk_privkey_export_ecdh_raw_func privkey_export_ecdh_raw_backend;
+    gnutls_pk_pubkey_export_ecdh_raw_func pubkey_export_ecdh_raw_backend;
+    gnutls_pk_copy_func copy_backend;
     gnutls_pk_deinit_func deinit_backend;
 	/* The params structure should contain the private or public key
 	 * parameters, depending on the operation */
