@@ -4236,7 +4236,7 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
         gnutls_free(ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    ctx->rng.status = 10;
+    ctx->rng.status = 1;
     ctx->rng_initialized = 1;
 
     /* Only support PEM and DER formats */
@@ -4772,7 +4772,7 @@ static int wolfssl_pk_import_pub(void **_ctx,
         gnutls_free(ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    ctx->rng.status = 10;
+    ctx->rng.status = 1;
     ctx->rng_initialized = 1;
 
     ret = wolfssl_pk_import_public(ctx, data->data, data->size, &key_found);
@@ -4890,7 +4890,7 @@ static int wolfssl_pk_import_pubkey_x509(void **_ctx,
         gnutls_free(ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    ctx->rng.status = 10;
+    ctx->rng.status = 1;
     ctx->rng_initialized = 1;
 
     /* Check if data is empty, indicating potential raw DH key import */
@@ -6044,7 +6044,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         gnutls_free(ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    ctx->rng.status = 10;
+    ctx->rng.status = 1;
     ctx->rng_initialized = 1;
     ctx->algo = algo;
 
@@ -7682,7 +7682,7 @@ static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
             gnutls_free(ctx);
             return GNUTLS_E_RANDOM_FAILED;
         }
-        ctx->rng.status = 10;
+        ctx->rng.status = 1;
         ctx->rng_initialized = 1;
     }
 
@@ -8027,7 +8027,7 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
         gnutls_free(priv_ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    priv_ctx->rng.status = 10;
+    priv_ctx->rng.status = 1;
     priv_ctx->rng_initialized = 1;
     priv_ctx->algo = GNUTLS_PK_EC;
 
@@ -8161,7 +8161,7 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
         gnutls_free(pub_ctx);
         return GNUTLS_E_RANDOM_FAILED;
     }
-    pub_ctx->rng.status = 10;
+    pub_ctx->rng.status = 1;
     pub_ctx->rng_initialized = 1;
     pub_ctx->algo = GNUTLS_PK_EC;
 
@@ -8550,8 +8550,6 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
     WC_RNG* rng = NULL;
     int ret;
     pid_t curr_pid;
-
-    WGW_FUNC_ENTER();
 
     if (!ctx || !ctx->initialized) {
         WGW_ERROR("random context not initialized");
