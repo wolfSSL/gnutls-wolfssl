@@ -4105,7 +4105,6 @@ wolfssl_pk_import_privkey_x509(void **_ctx, gnutls_pk_algorithm_t **privkey_algo
 
 static int
 wolfssl_pk_copy(void **_dst, void *src, gnutls_pk_algorithm_t algo) {
-    WGW_FUNC_ENTER();
     struct wolfssl_pk_ctx *ctx_src;
     struct wolfssl_pk_ctx *ctx_dst;
 
@@ -5344,30 +5343,59 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
             return GNUTLS_E_CRYPTO_INIT_FAILED;
         }
 
-        /* Map GnuTLS curve to wolfSSL */
-        switch (bits) {
-            case 224: /* SECP224R1 */
-                WGW_LOG("SECP224R1");
-                curve_id = ECC_SECP224R1;
-                break;
-            case 256: /* SECP256R1 */
-                WGW_LOG("SECP256R1");
-                curve_id = ECC_SECP256R1;
-                break;
-            case 384: /* SECP384R1 */
-                WGW_LOG("SECP384R1");
-                curve_id = ECC_SECP384R1;
-                break;
-            case 521: /* SECP521R1 */
-                WGW_LOG("SECP521R1");
-                curve_id = ECC_SECP521R1;
-                break;
-            default:
-                WGW_ERROR("unsupported curve bits: %d", bits);
-                wc_ecc_free(&ctx->key.ecc);
-                wc_FreeRng(&ctx->rng);
-                gnutls_free(ctx);
-                return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+        if (GNUTLS_BITS_ARE_CURVE(bits) != 0) {
+            /* Map GnuTLS curve to wolfSSL */
+            switch (GNUTLS_BITS_TO_CURVE(bits)) {
+                case GNUTLS_ECC_CURVE_SECP224R1: /* SECP224R1 */
+                    WGW_LOG("SECP224R1");
+                    curve_id = ECC_SECP224R1;
+                    break;
+                case GNUTLS_ECC_CURVE_SECP256R1: /* SECP256R1 */
+                    WGW_LOG("SECP256R1");
+                    curve_id = ECC_SECP256R1;
+                    break;
+                case GNUTLS_ECC_CURVE_SECP384R1: /* SECP384R1 */
+                    WGW_LOG("SECP384R1");
+                    curve_id = ECC_SECP384R1;
+                    break;
+                case GNUTLS_ECC_CURVE_SECP521R1: /* SECP521R1 */
+                    WGW_LOG("SECP521R1");
+                    curve_id = ECC_SECP521R1;
+                    break;
+                default:
+                    WGW_ERROR("unsupported curve bits: %d", bits);
+                    wc_ecc_free(&ctx->key.ecc);
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                    return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+            }
+        }
+        else {
+            /* Map GnuTLS curve to wolfSSL */
+            switch (bits) {
+                case 224: /* SECP224R1 */
+                    WGW_LOG("SECP224R1");
+                    curve_id = ECC_SECP224R1;
+                    break;
+                case 256: /* SECP256R1 */
+                    WGW_LOG("SECP256R1");
+                    curve_id = ECC_SECP256R1;
+                    break;
+                case 384: /* SECP384R1 */
+                    WGW_LOG("SECP384R1");
+                    curve_id = ECC_SECP384R1;
+                    break;
+                case 521: /* SECP521R1 */
+                    WGW_LOG("SECP521R1");
+                    curve_id = ECC_SECP521R1;
+                    break;
+                default:
+                    WGW_ERROR("unsupported curve bits: %d", bits);
+                    wc_ecc_free(&ctx->key.ecc);
+                    wc_FreeRng(&ctx->rng);
+                    gnutls_free(ctx);
+                    return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+            }
         }
 
         curve_size = wc_ecc_get_curve_size_from_id(curve_id);
@@ -6665,6 +6693,13 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                     return GNUTLS_E_INVALID_REQUEST;
                 }
 
+                ret = wc_ecc_check_key(&peer_key);
+                if (ret != 0) {
+                    WGW_WOLFSSL_ERROR("wc_ecc_check_key", ret);
+                    wc_ecc_free(&peer_key);
+                    return GNUTLS_E_PK_INVALID_PUBKEY;
+                }
+
                 /* Determine how much space we need for the shared secret */
                 word32 secret_size = wc_ecc_size(&priv_ctx->key.ecc);
                 if (secret_size == 0) {
@@ -7200,6 +7235,351 @@ static int wolfssl_pk_export_pubkey_dh_raw(void *ctx, const void *y)
     return 0;
 }
 
+static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *x, const void*  y, const void *k)
+{
+    struct wolfssl_pk_ctx *priv_ctx;
+    gnutls_datum_t *x_datum = (gnutls_datum_t *)x;
+    gnutls_datum_t *y_datum = (gnutls_datum_t *)y;
+    gnutls_datum_t *k_datum = (gnutls_datum_t *)k;
+    unsigned char x_data[66];
+    unsigned char y_data[66];
+    unsigned char k_data[66];
+    int curve_id;
+    int ret;
+    int len;
+
+    WGW_FUNC_ENTER();
+
+    if (!ctx) {
+        WGW_ERROR("PK context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!k) {
+        WGW_ERROR("Private key datum parameter (k) is NULL");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    switch (curve) {
+        case GNUTLS_ECC_CURVE_SECP224R1: /* SECP224R1 */
+            WGW_LOG("SECP224R1");
+            curve_id = ECC_SECP224R1;
+            len = 24;
+            break;
+        case GNUTLS_ECC_CURVE_SECP256R1: /* SECP256R1 */
+            WGW_LOG("SECP256R1");
+            curve_id = ECC_SECP256R1;
+            len = 32;
+            break;
+        case GNUTLS_ECC_CURVE_SECP384R1: /* SECP384R1 */
+            WGW_LOG("SECP384R1");
+            curve_id = ECC_SECP384R1;
+            len = 48;
+            break;
+        case GNUTLS_ECC_CURVE_SECP521R1: /* SECP521R1 */
+            WGW_LOG("SECP521R1");
+            curve_id = ECC_SECP521R1;
+            len = 66;
+            break;
+        default:
+            WGW_ERROR("unsupported curve: %d", curve);
+            return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+    }
+
+    XMEMSET(x_data, 0, sizeof(x_data));
+    XMEMSET(y_data, 0, sizeof(y_data));
+    XMEMSET(k_data, 0, sizeof(k_data));
+    if (x) {
+        XMEMCPY(x_data + len - x_datum->size, x_datum->data, x_datum->size);
+    }
+    if (y) {
+        XMEMCPY(y_data + len - y_datum->size, y_datum->data, y_datum->size);
+    }
+    XMEMCPY(k_data + len - k_datum->size, k_datum->data, k_datum->size);
+
+    /* Allocate a new context */
+    priv_ctx = gnutls_calloc(1, sizeof(struct wolfssl_pk_ctx));
+    if (priv_ctx == NULL) {
+        WGW_ERROR("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* Initialize RNG */
+    ret = wc_InitRng(&priv_ctx->rng);
+    if (ret != 0) {
+        WGW_ERROR("wc_InitRng failed with code %d", ret);
+        gnutls_free(priv_ctx);
+        return GNUTLS_E_RANDOM_FAILED;
+    }
+    priv_ctx->rng.status = 10;
+    priv_ctx->rng_initialized = 1;
+    priv_ctx->algo = GNUTLS_PK_EC;
+
+    ret = wc_ecc_import_unsigned(&priv_ctx->key.ecc, x_data, y_data, k_data,
+        curve_id);
+    if (ret != 0) {
+        WGW_WOLFSSL_ERROR("wc_ecc_import_unsigned", ret);
+        wc_FreeRng(&priv_ctx->rng);
+        gnutls_free(priv_ctx);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    priv_ctx->initialized = 1;
+    *(struct wolfssl_pk_ctx **)ctx = priv_ctx;
+    return 0;
+}
+
+static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x, const void*  y)
+{
+    struct wolfssl_pk_ctx *pub_ctx;
+    gnutls_datum_t *x_datum = (gnutls_datum_t *)x;
+    gnutls_datum_t *y_datum = (gnutls_datum_t *)y;
+    unsigned char x_data[66];
+    unsigned char y_data[66];
+    int ret;
+    int curve_id;
+    int len;
+
+    WGW_FUNC_ENTER();
+
+    if (!ctx) {
+        WGW_ERROR("PK context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!x || !y) {
+        WGW_ERROR("Public key datum parameter (x or y) is NULL");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    switch (curve) {
+        case GNUTLS_ECC_CURVE_SECP224R1: /* SECP224R1 */
+            WGW_LOG("SECP224R1");
+            curve_id = ECC_SECP224R1;
+            len = 24;
+            break;
+        case GNUTLS_ECC_CURVE_SECP256R1: /* SECP256R1 */
+            WGW_LOG("SECP256R1");
+            curve_id = ECC_SECP256R1;
+            len = 32;
+            break;
+        case GNUTLS_ECC_CURVE_SECP384R1: /* SECP384R1 */
+            WGW_LOG("SECP384R1");
+            curve_id = ECC_SECP384R1;
+            len = 48;
+            break;
+        case GNUTLS_ECC_CURVE_SECP521R1: /* SECP521R1 */
+            WGW_LOG("SECP521R1");
+            curve_id = ECC_SECP521R1;
+            len = 66;
+            break;
+        default:
+            WGW_ERROR("unsupported curve: %d", curve);
+            return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
+    }
+
+    XMEMSET(x_data, 0, sizeof(x_data));
+    XMEMSET(y_data, 0, sizeof(y_data));
+    XMEMCPY(x_data + len - x_datum->size, x_datum->data, x_datum->size);
+    XMEMCPY(y_data + len - y_datum->size, y_datum->data, y_datum->size);
+
+    /* Allocate a new context */
+    pub_ctx = gnutls_calloc(1, sizeof(struct wolfssl_pk_ctx));
+    if (pub_ctx == NULL) {
+        WGW_ERROR("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    /* Initialize RNG */
+    ret = wc_InitRng(&pub_ctx->rng);
+    if (ret != 0) {
+        WGW_ERROR("wc_InitRng failed with code %d", ret);
+        gnutls_free(pub_ctx);
+        return GNUTLS_E_RANDOM_FAILED;
+    }
+    pub_ctx->rng.status = 10;
+    pub_ctx->rng_initialized = 1;
+    pub_ctx->algo = GNUTLS_PK_EC;
+
+    ret = wc_ecc_import_unsigned(&pub_ctx->key.ecc, x_data, y_data, NULL,
+        curve_id);
+    if (ret != IS_POINT_E && ret != 0) {
+        WGW_WOLFSSL_ERROR("wc_ecc_import_unsigned", ret);
+        wc_FreeRng(&pub_ctx->rng);
+        gnutls_free(pub_ctx);
+        if (ret == ECC_INF_E)
+            return GNUTLS_E_MPI_SCAN_FAILED;
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    pub_ctx->initialized = 1;
+    *(struct wolfssl_pk_ctx **)ctx = pub_ctx;
+    return 0;
+}
+
+/* export private key (and optionally public key) in raw bytes to the provided gnutls_datum_t */
+static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx, const void* x, const void *y, const void *k)
+{
+    struct wolfssl_pk_ctx *priv_ctx = ctx;
+    gnutls_datum_t *x_datum = (gnutls_datum_t *)x;
+    gnutls_datum_t *y_datum = (gnutls_datum_t *)y;
+    gnutls_datum_t *k_datum = (gnutls_datum_t *)k;
+    int ret;
+    byte x_buffer[66];
+    byte y_buffer[66];
+    byte k_buffer[66];
+    word32 x_size = sizeof(x_buffer);
+    word32 y_size = sizeof(y_buffer);
+    word32 k_size = sizeof(k_buffer);
+
+    WGW_FUNC_ENTER();
+
+    if (!priv_ctx || !priv_ctx->initialized) {
+        WGW_ERROR("PK context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!k_datum) {
+        WGW_ERROR("Private key datum parameter (k) is NULL");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (priv_ctx->algo != GNUTLS_PK_ECDHX &&
+            priv_ctx->algo != GNUTLS_PK_ECDSA) {
+        WGW_ERROR("Context algorithm is not ECDH/ECDSA (%d)", priv_ctx->algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Export private key and optionally public key using wc_ecc_export_private_raw */
+    if (x_datum || y_datum) {
+        ret = wc_ecc_export_private_raw(&priv_ctx->key.ecc, x_buffer, &x_size,
+            y_buffer, &y_size, k_buffer, &k_size);
+    } else {
+        ret = wc_ecc_export_private_only(&priv_ctx->key.ecc, k_buffer, &k_size);
+    }
+
+    if (ret != 0) {
+        WGW_ERROR("wc_ecc_export_private_raw failed: %d", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Allocate and copy private key */
+    k_datum->data = gnutls_malloc(k_size);
+    if (!k_datum->data) {
+        WGW_ERROR("Memory allocation failed for private key");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    XMEMCPY(k_datum->data, k_buffer, k_size);
+    k_datum->size = k_size;
+
+    /* If public key requested, allocate and copy it */
+    if (x_datum) {
+        x_datum->data = gnutls_malloc(x_size);
+        if (!x_datum->data) {
+            WGW_ERROR("Memory allocation failed for public key x");
+            gnutls_free(k_datum->data);
+            k_datum->data = NULL;
+            k_datum->size = 0;
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        XMEMCPY(x_datum->data, x_buffer, x_size);
+        x_datum->size = x_size;
+
+        WGW_LOG("ECDH x exported successfully (x size=%u)", x_datum->size);
+    }
+    if (y_datum) {
+        y_datum->data = gnutls_malloc(x_size);
+        if (!y_datum->data) {
+            WGW_ERROR("Memory allocation failed for public key y");
+            gnutls_free(k_datum->data);
+            k_datum->data = NULL;
+            k_datum->size = 0;
+            gnutls_free(x_datum->data);
+            x_datum->data = NULL;
+            x_datum->size = 0;
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        XMEMCPY(y_datum->data, y_buffer, y_size);
+        y_datum->size = y_size;
+
+        WGW_LOG("ECDH y exported successfully (x size=%u)", y_datum->size);
+    }
+
+    WGW_LOG("ECDH private key exported successfully (k size=%u)",
+        k_datum->size);
+    return 0;
+}
+
+/* export public key in raw bytes to the provided gnutls_datum_t */
+static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
+    const void *y)
+{
+    struct wolfssl_pk_ctx *pub_ctx = ctx;
+    gnutls_datum_t *x_datum = (gnutls_datum_t *)x;
+    gnutls_datum_t *y_datum = (gnutls_datum_t *)y;
+    int ret;
+    byte x_buffer[66];
+    byte y_buffer[66];
+    word32 x_size = sizeof(x_buffer);
+    word32 y_size = sizeof(y_buffer);
+
+    WGW_FUNC_ENTER();
+
+    if (!pub_ctx || !pub_ctx->initialized) {
+        WGW_ERROR("PK context not initialized");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!x_datum || !y_datum) {
+        WGW_ERROR("Public key datum parameter (x or y) is NULL");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Ensure the context is for ECDH algorithm */
+    if (pub_ctx->algo != GNUTLS_PK_ECDHX &&
+            pub_ctx->algo != GNUTLS_PK_ECDSA) {
+        WGW_ERROR("Context algorithm is not ECDH/ECDSA (%d)", pub_ctx->algo);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Export public key using wc_ecc_export_public_raw */
+    ret = wc_ecc_export_public_raw(&pub_ctx->key.ecc, x_buffer, &x_size,
+        y_buffer, &y_size);
+    if (ret != 0) {
+        WGW_ERROR("wc_ecc_export_public_raw failed: %d", ret);
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Allocate and copy public key x-ordinate */
+    x_datum->data = gnutls_malloc(x_size);
+    if (!x_datum->data) {
+        WGW_ERROR("Memory allocation failed for public key");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+    /* Allocate and copy public key y-ordinate */
+    y_datum->data = gnutls_malloc(y_size);
+    if (!x_datum->data) {
+        WGW_ERROR("Memory allocation failed for public key");
+        gnutls_free(x_datum->data);
+        x_datum->data = NULL;
+        x_datum->size = 0;
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    XMEMCPY(x_datum->data, x_buffer, x_size);
+    x_datum->size = x_size;
+    XMEMCPY(y_datum->data, y_buffer, y_size);
+    y_datum->size = y_size;
+
+    WGW_LOG("ECDH public key exported successfully (sizes=%u,,%u)",
+        x_datum->size, y_datum->size);
+
+    return 0;
+}
+
 /* structure containing function pointers for the pk implementation */
 static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     /* the init function is not needed, since the init functions of gnutls
@@ -7219,8 +7599,12 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     .sign_hash_backend = wolfssl_pk_sign_hash,
     .verify_hash_backend = wolfssl_pk_verify_hash,
     .derive_shared_secret_backend = wolfssl_pk_derive_shared_secret,
-	.privkey_export_dh_raw_backend = wolfssl_pk_export_privkey_dh_raw,
-	.pubkey_export_dh_raw_backend = wolfssl_pk_export_pubkey_dh_raw,
+    .privkey_export_dh_raw_backend = wolfssl_pk_export_privkey_dh_raw,
+    .pubkey_export_dh_raw_backend = wolfssl_pk_export_pubkey_dh_raw,
+    .privkey_import_ecdh_raw_backend = wolfssl_pk_import_privkey_ecdh_raw,
+    .pubkey_import_ecdh_raw_backend = wolfssl_pk_import_pubkey_ecdh_raw,
+    .privkey_export_ecdh_raw_backend = wolfssl_pk_export_privkey_ecdh_raw,
+    .pubkey_export_ecdh_raw_backend = wolfssl_pk_export_pubkey_ecdh_raw,
     .copy_backend = wolfssl_pk_copy,
     .deinit_backend = wolfssl_pk_deinit,
 };
