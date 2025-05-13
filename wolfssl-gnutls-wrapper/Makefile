@@ -31,6 +31,8 @@ install:
 
 test:
 	(cd tests; make run)
+test_fast:
+	(cd tests; make run_fast)
 
 clean:
 	rm -f $(WRAPPER_TARGET)
