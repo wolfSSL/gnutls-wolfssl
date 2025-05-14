@@ -4032,6 +4032,137 @@ static void wolfssl_pk_import_privkey_x509_x448(struct wolfssl_pk_ctx *ctx,
     }
 }
 
+int wolfssl_der_get_length(const unsigned char *der, word32 *idx, word32 size,
+   word32 *len)
+{
+    byte b;
+    word32 i = *idx;
+    word32 l;
+
+    if ((i + 1) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    b = der[i++];
+    if (b == 0x80)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (b  < 0x80) {
+        *len = b;
+        *idx = i;
+        return 0;
+    }
+
+    b &= 0x7f;
+    if ((i + b) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (b > sizeof(*len))
+        return GNUTLS_E_INVALID_REQUEST;
+
+    l = 0;
+    while (b--) {
+        l = (l << 8) | der[i++];
+    }
+    if ((i + l) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    *len = l;
+    *idx = i;
+    return 0;
+}
+
+int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
+    int *algId)
+{
+    word32 i = 0;
+    word32 len;
+    static const unsigned char derRsa[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01
+    };
+    static const unsigned char derRsaPss[] = {
+        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a
+    };
+    static const unsigned char derEcc[] = {
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
+    };
+    static const unsigned char derEd25519[] = {
+        0x2b, 0x65, 0x70
+    };
+    static const unsigned char derEd448[] = {
+        0x2b, 0x65, 0x71
+    };
+    static const unsigned char derX25519[] = {
+        0x2b, 0x65, 0x6e
+    };
+    static const unsigned char derX448[] = {
+        0x2b, 0x65, 0x6f
+    };
+
+    if ((i + 1) > keySize)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (keyData[i++] != 0x30)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    if ((i + 1) > keySize)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (keyData[i] == 0x30) {
+    } else {
+        if (keyData[i++] != 0x02)
+            return GNUTLS_E_INVALID_REQUEST;
+        if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+            return GNUTLS_E_INVALID_REQUEST;
+        /* Skip integer value. */
+        i += len;
+    }
+
+    if ((i + 1) > keySize)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (keyData[i] == 0x02) {
+        *algId = GNUTLS_PK_RSA;
+        return 0;
+    }
+    if (keyData[i] == 0x04) {
+        *algId = GNUTLS_PK_ECDSA;
+        return 0;
+    }
+    if (keyData[i++] != 0x30)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    if ((i + 1) > keySize)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (keyData[i++] != 0x06)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    if (len == (word32)sizeof(derRsa) && XMEMCMP(keyData + i, derRsa,
+            len) == 0) {
+        *algId = RSAk;
+    } else if (len == (word32)sizeof(derRsaPss) && XMEMCMP(keyData + i,
+            derRsaPss, len) == 0) {
+        *algId = RSAPSSk;
+    } else if (len == (word32)sizeof(derEcc) && XMEMCMP(keyData + i, derEcc,
+            len) == 0) {
+        *algId = ECDSAk;
+    } else if (len == (word32)sizeof(derEd25519) && XMEMCMP(keyData + i,
+            derEd25519, len) == 0) {
+        *algId = ED25519k;
+    } else if (len == (word32)sizeof(derEd448) && XMEMCMP(keyData + i, derEd448,
+            len) == 0) {
+        *algId = ED448k;
+    } else if (len == (word32)sizeof(derX25519) && XMEMCMP(keyData + i,
+            derX25519, len) == 0) {
+        *algId = X25519k;
+    } else if (len == (word32)sizeof(derX448) && XMEMCMP(keyData + i, derX448,
+            len) == 0) {
+        *algId = X448k;
+    }
+
+    return 0;
+}
+
 /* import a private key from raw X.509 data using trial-and-error approach */
 /* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
  * the trial-and-error approach */
@@ -4048,6 +4179,7 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
     int isDH = 0;
     const gnutls_datum_t *priv_datum = (const gnutls_datum_t *)x;
     const gnutls_datum_t *pub_datum = (const gnutls_datum_t *)y;
+    int algId = 0;
 
     WGW_FUNC_ENTER();
 
@@ -4102,7 +4234,8 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
         /* Convert PEM to DER if needed */
         if (format == GNUTLS_X509_FMT_PEM) {
             WGW_LOG("converting PEM to DER");
-            ret = wc_PemToDer(keyData, keySize, PRIVATEKEY_TYPE, &derBuf, NULL, NULL, NULL);
+            ret = wc_PemToDer(keyData, keySize, PRIVATEKEY_TYPE, &derBuf, NULL,
+                NULL, &algId);
             if (ret != 0 || derBuf == NULL) {
                 WGW_ERROR("PEM to DER conversion failed with code %d\n", ret);
                 wc_FreeRng(&ctx->rng);
@@ -4127,35 +4260,50 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
         }
     /* Try each key type until one works */
     } else {
-        if (!key_found) {
-            /* Try RSA */
-            wolfssl_pk_import_privkey_x509_rsa(ctx, keyData, keySize,
-                &key_found);
+        if (algId == 0) {
+            ret = wolfssl_get_alg_from_der(keyData, keySize, &algId);
         }
-        if (!key_found) {
-            /* Try ECDSA */
-            wolfssl_pk_import_privkey_x509_ecdsa(ctx, keyData, keySize,
-                &key_found);
-        }
-        if (!key_found) {
-            /* Try Ed25519 */
-            wolfssl_pk_import_privkey_x509_ed25519(ctx, keyData, keySize,
-                &key_found);
-        }
-        if (!key_found) {
-            /* Try Ed448 */
-            wolfssl_pk_import_privkey_x509_ed448(ctx, keyData, keySize,
-                &key_found);
-        }
-        if (!key_found) {
-            /* Try X25519 */
-            wolfssl_pk_import_privkey_x509_x25519(ctx, keyData, keySize,
-                &key_found);
-        }
-        if (!key_found) {
-            /* Try X448 */
-            wolfssl_pk_import_privkey_x509_x448(ctx, keyData, keySize,
-                &key_found);
+        if (ret == 0) {
+            switch (algId) {
+                case RSAk:
+                    WGW_LOG("RSA private key");
+                    wolfssl_pk_import_privkey_x509_rsa(ctx, keyData, keySize,
+                        &key_found);
+                    break;
+                case RSAPSSk:
+                    WGW_LOG("RSA-PSS private key");
+                    wolfssl_pk_import_privkey_x509_rsa(ctx, keyData, keySize,
+                        &key_found);
+                    ctx->algo = GNUTLS_PK_RSA_PSS;
+                    break;
+                case ECDSAk:
+                    WGW_LOG("ECDSA private key");
+                    wolfssl_pk_import_privkey_x509_ecdsa(ctx, keyData, keySize,
+                        &key_found);
+                    break;
+                case ED25519k:
+                    WGW_LOG("Ed25519 private key");
+                    wolfssl_pk_import_privkey_x509_ed25519(ctx, keyData,
+                        keySize, &key_found);
+                    break;
+                case ED448k:
+                    WGW_LOG("Ed448 private key");
+                    wolfssl_pk_import_privkey_x509_ed448(ctx, keyData, keySize,
+                        &key_found);
+                    break;
+                case X25519k:
+                    WGW_LOG("X25519 private key");
+                    wolfssl_pk_import_privkey_x509_x25519(ctx, keyData, keySize,
+                        &key_found);
+                    break;
+                case X448k:
+                    WGW_LOG("X448 private key");
+                    wolfssl_pk_import_privkey_x509_x448(ctx, keyData, keySize,
+                        &key_found);
+                    break;
+                default:
+                    ret = GNUTLS_E_ALGO_NOT_SUPPORTED;
+            }
         }
     }
 
@@ -4445,10 +4593,60 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
     int ret;
+    int algId = 0;
 
     WGW_FUNC_ENTER();
 
     *key_found = 0;
+
+    ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &algId);
+    if (ret != 0) {
+        wc_FreeRng(&ctx->rng);
+        gnutls_free(ctx);
+        WGW_ERROR("could not determine public key type from certificate");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    switch (algId) {
+        case RSAk:
+            WGW_LOG("RSA public key");
+            ret = wolfssl_rsa_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
+        case RSAPSSk:
+            WGW_LOG("RSA-PSS public key");
+            ret = wolfssl_rsa_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            ctx->algo = GNUTLS_PK_RSA_PSS;
+            break;
+        case ECDSAk:
+            WGW_LOG("ECDSA public key");
+            ret = wolfssl_ecc_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
+        case ED25519k:
+            WGW_LOG("Ed25519 public key");
+            ret = wolfssl_ed25519_import_public(ctx, publicKeyDer,
+                publicKeySize, key_found);
+            break;
+        case ED448k:
+            WGW_LOG("Ed448 public key");
+            ret = wolfssl_ed448_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
+        case X25519k:
+            WGW_LOG("X25519 public key");
+            ret = wolfssl_x25519_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
+        case X448k:
+            WGW_LOG("X448 public key");
+            ret = wolfssl_x448_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
+        default:
+            ret = GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
 
     /* Try RSA */
     if (!*key_found) {
@@ -5266,16 +5464,13 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
         }
     }
 
-    /* First try RSA-PSS verification */
-    if (pss) {
-        ret = verify_rsa_pss(hash_type, hash, signature, hash_gnutls,
-            &ctx->key.rsa, 0);
-    }
-
-    /* If RSA-PSS fails, fall back to PKCS#1 v1.5 */
-    if (!pss || ret < 0) {
+    if (!pss) {
         ret = verify_rsa_pkcs1(hash_type, hash, signature, &ctx->key.rsa, 1,
             hash_size);
+    }
+    if (pss || ret < 0) {
+        ret = verify_rsa_pss(hash_type, hash, signature, hash_gnutls,
+            &ctx->key.rsa, 0);
     }
 
     if (ret < 0) {
