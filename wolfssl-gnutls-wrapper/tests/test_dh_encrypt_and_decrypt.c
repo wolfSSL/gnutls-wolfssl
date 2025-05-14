@@ -87,316 +87,317 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
         gnutls_privkey_deinit(alice_privkey);
     }
 
-    ret = gnutls_dh_params_generate2(dh_params, bits);
-    if (ret != 0) {
-        printf("Error generating params: %s\n", gnutls_strerror(ret));
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        gnutls_dh_params_deinit(dh_params);
-    }
+        ret = gnutls_dh_params_generate2(dh_params, bits);
+        if (ret != 0) {
+            printf("Error generating params: %s\n", gnutls_strerror(ret));
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            gnutls_dh_params_deinit(dh_params);
+        }
 
-    /* Generate DH key pairs */
-    printf("Generating DH key pairs (%d bits)...\n", bits);
 
-    keygen_data.type = GNUTLS_KEYGEN_DH;
-    keygen_data.data = (unsigned char *)dh_params;
+        /* Generate DH key pairs */
+        printf("Generating DH key pairs (%d bits)...\n", bits);
 
-    ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
-    if (ret != 0) {
-        printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        keygen_data.type = GNUTLS_KEYGEN_DH;
+        keygen_data.data = (unsigned char *)dh_params;
 
-    ret = gnutls_privkey_generate2(bob_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
-    if (ret != 0) {
-        printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        ret = gnutls_privkey_generate2(alice_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
+        if (ret != 0) {
+            printf("Error generating Alice's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Extract the public keys from the private keys */
-    ret = gnutls_pubkey_import_privkey(alice_pubkey, alice_privkey, 0, 0);
-    if (ret != 0) {
-        printf("Error extracting Alice's public key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        ret = gnutls_privkey_generate2(bob_privkey, GNUTLS_PK_DH, bits, 0, &keygen_data, 1);
+        if (ret != 0) {
+            printf("Error generating Bob's private key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    ret = gnutls_pubkey_import_privkey(bob_pubkey, bob_privkey, 0, 0);
-    if (ret != 0) {
-        printf("Error extracting Bob's public key: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Extract the public keys from the private keys */
+        ret = gnutls_pubkey_import_privkey(alice_pubkey, alice_privkey, 0, 0);
+        if (ret != 0) {
+            printf("Error extracting Alice's public key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Perform DH key exchange for encryption key derivation */
-    printf("Performing DH key exchange...\n");
-    ret = gnutls_privkey_derive_secret(alice_privkey, bob_pubkey, NULL, &shared_key, 0);
-    if (ret != 0) {
-        printf("Error deriving shared secret: %s\n", gnutls_strerror(ret));
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        ret = gnutls_pubkey_import_privkey(bob_pubkey, bob_privkey, 0, 0);
+        if (ret != 0) {
+            printf("Error extracting Bob's public key: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    printf("Shared secret derived (size: %d bytes)\n", shared_key.size);
-    printf("Shared secret value:\n");
-    print_hex(shared_key.data, shared_key.size);
+        /* Perform DH key exchange for encryption key derivation */
+        printf("Performing DH key exchange...\n");
+        ret = gnutls_privkey_derive_secret(alice_privkey, bob_pubkey, NULL, &shared_key, 0);
+        if (ret != 0) {
+            printf("Error deriving shared secret: %s\n", gnutls_strerror(ret));
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Derive AES key using HKDF */
-    unsigned char prk[32]; /* Size based on SHA-256 output */
-    const gnutls_datum_t salt = { (unsigned char *)hkdf_salt, strlen(hkdf_salt) };
-    const gnutls_datum_t key_datum = { shared_key.data, shared_key.size };
+        printf("Shared secret derived (size: %d bytes)\n", shared_key.size);
+        printf("Shared secret value:\n");
+        print_hex(shared_key.data, shared_key.size);
 
-    ret = gnutls_hkdf_extract(GNUTLS_MAC_SHA256, &key_datum, &salt, prk);
-    if (ret < 0) {
-        printf("Error in HKDF-Extract: %s\n", gnutls_strerror(ret));
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Derive AES key using HKDF */
+        unsigned char prk[32]; /* Size based on SHA-256 output */
+        const gnutls_datum_t salt = { (unsigned char *)hkdf_salt, strlen(hkdf_salt) };
+        const gnutls_datum_t key_datum = { shared_key.data, shared_key.size };
 
-    printf("HKDF-Extract PRK:\n");
-    print_hex(prk, sizeof(prk));
+        ret = gnutls_hkdf_extract(GNUTLS_MAC_SHA256, &key_datum, &salt, prk);
+        if (ret < 0) {
+            printf("Error in HKDF-Extract: %s\n", gnutls_strerror(ret));
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* HKDF-Expand to get final key */
-    unsigned char key_material[32]; /* 256 bits for AES-256 */
-    const gnutls_datum_t prk_datum = { prk, sizeof(prk) };
-    const gnutls_datum_t info = { (unsigned char *)hkdf_info, strlen(hkdf_info) };
+        printf("HKDF-Extract PRK:\n");
+        print_hex(prk, sizeof(prk));
 
-    ret = gnutls_hkdf_expand(GNUTLS_MAC_SHA256, &prk_datum, &info, key_material, sizeof(key_material));
-    if (ret < 0) {
-        printf("Error in HKDF-Expand: %s\n", gnutls_strerror(ret));
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* HKDF-Expand to get final key */
+        unsigned char key_material[32]; /* 256 bits for AES-256 */
+        const gnutls_datum_t prk_datum = { prk, sizeof(prk) };
+        const gnutls_datum_t info = { (unsigned char *)hkdf_info, strlen(hkdf_info) };
 
-    printf("Derived AES key:\n");
-    print_hex(key_material, sizeof(key_material));
+        ret = gnutls_hkdf_expand(GNUTLS_MAC_SHA256, &prk_datum, &info, key_material, sizeof(key_material));
+        if (ret < 0) {
+            printf("Error in HKDF-Expand: %s\n", gnutls_strerror(ret));
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
+        printf("Derived AES key:\n");
+        print_hex(key_material, sizeof(key_material));
 
-    /* Create datum for IV */
-    gnutls_datum_t iv = {
-        .data = (unsigned char *)iv_data,
-        .size = sizeof(iv_data)
-    };
+        gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
 
-    /********** ENCRYPTION **********/
-    /* Initialize AES-GCM cipher for encryption */
-    gnutls_cipher_hd_t encrypt_handle;
-    ret = gnutls_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
-    if (ret != 0) {
-        printf("Error initializing cipher for encryption: %s\n", gnutls_strerror(ret));
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Create datum for IV */
+        gnutls_datum_t iv = {
+            .data = (unsigned char *)iv_data,
+            .size = sizeof(iv_data)
+        };
 
-    /* Set AAD */
-    ret = gnutls_cipher_add_auth(encrypt_handle, aad_data, sizeof(aad_data));
-    if (ret != 0) {
-        printf("Error adding AAD for encryption: %s\n", gnutls_strerror(ret));
+        /********** ENCRYPTION **********/
+        /* Initialize AES-GCM cipher for encryption */
+        gnutls_cipher_hd_t encrypt_handle;
+        ret = gnutls_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
+        if (ret != 0) {
+            printf("Error initializing cipher for encryption: %s\n", gnutls_strerror(ret));
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        /* Set AAD */
+        ret = gnutls_cipher_add_auth(encrypt_handle, aad_data, sizeof(aad_data));
+        if (ret != 0) {
+            printf("Error adding AAD for encryption: %s\n", gnutls_strerror(ret));
+            gnutls_cipher_deinit(encrypt_handle);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        /* Allocate memory for encrypted data */
+        encrypted.size = data.size;
+        encrypted.data = gnutls_malloc(encrypted.size);
+        if (encrypted.data == NULL) {
+            printf("Error allocating memory for encrypted data\n");
+            gnutls_cipher_deinit(encrypt_handle);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        /* Copy original data for in-place encryption */
+        memcpy(encrypted.data, data.data, data.size);
+
+        /* Encrypt the data in-place */
+        ret = gnutls_cipher_encrypt(encrypt_handle, encrypted.data, encrypted.size);
+        if (ret != 0) {
+            printf("Error encrypting data: %s\n", gnutls_strerror(ret));
+            gnutls_free(encrypted.data);
+            gnutls_cipher_deinit(encrypt_handle);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
+        /* Get authentication tag */
+        ret = gnutls_cipher_tag(encrypt_handle, tag, sizeof(tag));
+        if (ret != 0) {
+            printf("Error getting authentication tag: %s\n", gnutls_strerror(ret));
+            gnutls_free(encrypted.data);
+            gnutls_cipher_deinit(encrypt_handle);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+
         gnutls_cipher_deinit(encrypt_handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
 
-    /* Allocate memory for encrypted data */
-    encrypted.size = data.size;
-    encrypted.data = gnutls_malloc(encrypted.size);
-    if (encrypted.data == NULL) {
-        printf("Error allocating memory for encrypted data\n");
-        gnutls_cipher_deinit(encrypt_handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        printf("Data encrypted (size: %d bytes)\n", encrypted.size);
+        printf("Encrypted data:\n");
+        print_hex(encrypted.data, encrypted.size);
+        printf("Authentication tag:\n");
+        print_hex(tag, sizeof(tag));
 
-    /* Copy original data for in-place encryption */
-    memcpy(encrypted.data, data.data, data.size);
+        /********** DECRYPTION **********/
+        /* Initialize cipher for decryption */
+        gnutls_cipher_hd_t decrypt_handle;
+        ret = gnutls_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
+        if (ret != 0) {
+            printf("Error initializing cipher for decryption: %s\n", gnutls_strerror(ret));
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Encrypt the data in-place */
-    ret = gnutls_cipher_encrypt(encrypt_handle, encrypted.data, encrypted.size);
-    if (ret != 0) {
-        printf("Error encrypting data: %s\n", gnutls_strerror(ret));
-        gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(encrypt_handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Set AAD for decryption */
+        ret = gnutls_cipher_add_auth(decrypt_handle, aad_data, sizeof(aad_data));
+        if (ret != 0) {
+            printf("Error adding AAD for decryption: %s\n", gnutls_strerror(ret));
+            gnutls_cipher_deinit(decrypt_handle);
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Get authentication tag */
-    ret = gnutls_cipher_tag(encrypt_handle, tag, sizeof(tag));
-    if (ret != 0) {
-        printf("Error getting authentication tag: %s\n", gnutls_strerror(ret));
-        gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(encrypt_handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Set authentication tag for verification */
+        ret = gnutls_cipher_tag(decrypt_handle, tag, sizeof(tag));
+        if (ret != 0) {
+            printf("Error setting authentication tag for verification: %s\n", gnutls_strerror(ret));
+            gnutls_cipher_deinit(decrypt_handle);
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    gnutls_cipher_deinit(encrypt_handle);
+        /* Allocate memory for decrypted data */
+        decrypted.size = encrypted.size;
+        decrypted.data = gnutls_malloc(decrypted.size);
+        if (decrypted.data == NULL) {
+            printf("Error allocating memory for decrypted data\n");
+            gnutls_cipher_deinit(decrypt_handle);
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    printf("Data encrypted (size: %d bytes)\n", encrypted.size);
-    printf("Encrypted data:\n");
-    print_hex(encrypted.data, encrypted.size);
-    printf("Authentication tag:\n");
-    print_hex(tag, sizeof(tag));
+        /* Copy encrypted data for in-place decryption */
+        memcpy(decrypted.data, encrypted.data, encrypted.size);
 
-    /********** DECRYPTION **********/
-    /* Initialize cipher for decryption */
-    gnutls_cipher_hd_t decrypt_handle;
-    ret = gnutls_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_256_GCM, &aes_key, &iv);
-    if (ret != 0) {
-        printf("Error initializing cipher for decryption: %s\n", gnutls_strerror(ret));
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Decrypt the data in-place */
+        printf("Decrypting data...\n");
+        ret = gnutls_cipher_decrypt(decrypt_handle, decrypted.data, decrypted.size);
+        if (ret != 0) {
+            printf("Error decrypting data: %s\n", gnutls_strerror(ret));
+            gnutls_free(decrypted.data);
+            gnutls_free(encrypted.data);
+            gnutls_cipher_deinit(decrypt_handle);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
-    /* Set AAD for decryption */
-    ret = gnutls_cipher_add_auth(decrypt_handle, aad_data, sizeof(aad_data));
-    if (ret != 0) {
-        printf("Error adding AAD for decryption: %s\n", gnutls_strerror(ret));
         gnutls_cipher_deinit(decrypt_handle);
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
 
-    /* Set authentication tag for verification */
-    ret = gnutls_cipher_tag(decrypt_handle, tag, sizeof(tag));
-    if (ret != 0) {
-        printf("Error setting authentication tag for verification: %s\n", gnutls_strerror(ret));
-        gnutls_cipher_deinit(decrypt_handle);
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Convert to null-terminated string for printing */
+        char *decrypted_str = malloc(decrypted.size + 1);
+        if (decrypted_str == NULL) {
+            printf("Error allocating memory for decrypted string\n");
+            gnutls_free(decrypted.data);
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
+        memcpy(decrypted_str, decrypted.data, decrypted.size);
+        decrypted_str[decrypted.size] = '\0';
 
-    /* Allocate memory for decrypted data */
-    decrypted.size = encrypted.size;
-    decrypted.data = gnutls_malloc(decrypted.size);
-    if (decrypted.data == NULL) {
-        printf("Error allocating memory for decrypted data\n");
-        gnutls_cipher_deinit(decrypt_handle);
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        printf("Decrypted data: \"%s\"\n", decrypted_str);
 
-    /* Copy encrypted data for in-place decryption */
-    memcpy(decrypted.data, encrypted.data, encrypted.size);
-
-    /* Decrypt the data in-place */
-    printf("Decrypting data...\n");
-    ret = gnutls_cipher_decrypt(decrypt_handle, decrypted.data, decrypted.size);
-    if (ret != 0) {
-        printf("Error decrypting data: %s\n", gnutls_strerror(ret));
-        gnutls_free(decrypted.data);
-        gnutls_free(encrypted.data);
-        gnutls_cipher_deinit(decrypt_handle);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
-
-    gnutls_cipher_deinit(decrypt_handle);
-
-    /* Convert to null-terminated string for printing */
-    char *decrypted_str = malloc(decrypted.size + 1);
-    if (decrypted_str == NULL) {
-        printf("Error allocating memory for decrypted string\n");
-        gnutls_free(decrypted.data);
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
-    memcpy(decrypted_str, decrypted.data, decrypted.size);
-    decrypted_str[decrypted.size] = '\0';
-
-    printf("Decrypted data: \"%s\"\n", decrypted_str);
-
-    /* Check if decryption was successful */
-    if (decrypted.size == data.size && memcmp(decrypted.data, data.data, data.size) == 0) {
-        printf("SUCCESS for %d bits\n", bits);
-    } else {
-        printf("FAILURE for %d bits: Decrypted data does not match original\n", bits);
-        free(decrypted_str);
-        gnutls_free(decrypted.data);
-        gnutls_free(encrypted.data);
-        gnutls_free(shared_key.data);
-        gnutls_pubkey_deinit(bob_pubkey);
-        gnutls_privkey_deinit(bob_privkey);
-        gnutls_pubkey_deinit(alice_pubkey);
-        gnutls_privkey_deinit(alice_privkey);
-        return 1;
-    }
+        /* Check if decryption was successful */
+        if (decrypted.size == data.size && memcmp(decrypted.data, data.data, data.size) == 0) {
+            printf("SUCCESS for %d bits\n", bits);
+        } else {
+            printf("FAILURE for %d bits: Decrypted data does not match original\n", bits);
+            free(decrypted_str);
+            gnutls_free(decrypted.data);
+            gnutls_free(encrypted.data);
+            gnutls_free(shared_key.data);
+            gnutls_pubkey_deinit(bob_pubkey);
+            gnutls_privkey_deinit(bob_privkey);
+            gnutls_pubkey_deinit(alice_pubkey);
+            gnutls_privkey_deinit(alice_privkey);
+            return 1;
+        }
 
     /* Clean up */
     free(decrypted_str);
@@ -425,10 +426,12 @@ int main(void) {
     /* Test with different DH key sizes */
     unsigned int key_sizes[] = {2048, 3072, 4096};
     for (size_t i = 0; i < sizeof(key_sizes)/sizeof(key_sizes[0]); i++) {
-        ret = test_dh_encrypt_decrypt(key_sizes[i]);
-        if (ret != 0) {
-            gnutls_global_deinit();
-            return 1;
+        if (!(gnutls_fips140_mode_enabled() && key_sizes[i] > 3072)) {
+            ret = test_dh_encrypt_decrypt(key_sizes[i]);
+            if (ret != 0) {
+                gnutls_global_deinit();
+                return 1;
+            }
         }
     }
 

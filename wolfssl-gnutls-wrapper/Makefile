@@ -34,5 +34,8 @@ test:
 test_fast:
 	(cd tests; make run_fast)
 
+test_fips:
+	(cd tests; make run_fips)
+
 clean:
 	rm -f $(WRAPPER_TARGET)
