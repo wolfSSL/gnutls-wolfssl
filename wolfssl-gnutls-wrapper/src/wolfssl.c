@@ -36,6 +36,7 @@
 #define MAX_DH_BITS       4096
 #define MAX_DH_Q_SIZE     256
 
+
 /**
  * Constructor for shared library.
  *
@@ -3837,6 +3838,7 @@ struct wolfssl_pk_ctx {
     word32 priv_data_len;
     byte pub_data[1024];
     word32 pub_data_len;
+    int pub_key_der_encoded;
 };
 
 /* mapping of gnutls pk algorithms to wolfssl pk */
@@ -4235,18 +4237,26 @@ int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
     static const unsigned char derEcc[] = {
         0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
     };
+#if defined(HAVE_ED448)
     static const unsigned char derEd25519[] = {
         0x2b, 0x65, 0x70
     };
+#endif
+#if defined(HAVE_ED25519)
     static const unsigned char derEd448[] = {
         0x2b, 0x65, 0x71
     };
+#endif
+#if defined(HAVE_CURVE25519)
     static const unsigned char derX25519[] = {
         0x2b, 0x65, 0x6e
     };
+#endif
+#if defined(HAVE_CURVE448)
     static const unsigned char derX448[] = {
         0x2b, 0x65, 0x6f
     };
+#endif
 
     if ((i + 1) > keySize)
         return GNUTLS_E_INVALID_REQUEST;
@@ -4298,19 +4308,31 @@ int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
     } else if (len == (word32)sizeof(derEcc) && XMEMCMP(keyData + i, derEcc,
             len) == 0) {
         *algId = ECDSAk;
-    } else if (len == (word32)sizeof(derEd25519) && XMEMCMP(keyData + i,
+    }
+#if defined(HAVE_ED25519)
+    else if (len == (word32)sizeof(derEd25519) && XMEMCMP(keyData + i,
             derEd25519, len) == 0) {
         *algId = ED25519k;
-    } else if (len == (word32)sizeof(derEd448) && XMEMCMP(keyData + i, derEd448,
+    }
+#endif
+#if defined(HAVE_ED448)
+    else if (len == (word32)sizeof(derEd448) && XMEMCMP(keyData + i, derEd448,
             len) == 0) {
         *algId = ED448k;
-    } else if (len == (word32)sizeof(derX25519) && XMEMCMP(keyData + i,
+    }
+#endif
+#if defined(HAVE_CURVE25519)
+    else if (len == (word32)sizeof(derX25519) && XMEMCMP(keyData + i,
             derX25519, len) == 0) {
         *algId = X25519k;
-    } else if (len == (word32)sizeof(derX448) && XMEMCMP(keyData + i, derX448,
+    }
+#endif
+#if defined(HAVE_CURVE448)
+    else if (len == (word32)sizeof(derX448) && XMEMCMP(keyData + i, derX448,
             len) == 0) {
         *algId = X448k;
     }
+#endif
 
     return 0;
 }
@@ -4636,13 +4658,24 @@ static int wolfssl_ed25519_import_public(struct wolfssl_pk_ctx *ctx,
             word32 idx = 0;
             ret = wc_Ed25519PublicKeyDecode(publicKeyDer, &idx,
                 &ctx->key.ed25519, publicKeySize);
+            if (ret == 0) {
+                ctx->pub_key_der_encoded = 1;
+            }
         }
         if (ret == 0) {
             WGW_LOG("Ed25519 public key import succeeded");
-            ctx->pub_data_len = ED25519_PUB_KEY_SIZE;
-            ret = wc_ed25519_export_public(&ctx->key.ed25519, ctx->pub_data,
-                &ctx->pub_data_len);
-            if (ret != 0) {
+            if (ctx->pub_key_der_encoded) {
+                ret = wc_Ed25519PublicKeyToDer(&ctx->key.ed25519, ctx->pub_data,
+                        sizeof(ctx->pub_data), 1);
+                if (ret > 0) {
+                    ctx->pub_data_len = (word32)ret;
+                }
+            } else {
+                ctx->pub_data_len = ED25519_PUB_KEY_SIZE;
+                ret = wc_ed25519_export_public(&ctx->key.ed25519, ctx->pub_data,
+                        &ctx->pub_data_len);
+            }
+            if (ret < 0) {
                 WGW_WOLFSSL_ERROR("wc_ed25519_export_public", ret);
                 wc_ed25519_free(&ctx->key.ed25519);
                 gnutls_free(publicKeyDer);
@@ -4680,13 +4713,25 @@ static int wolfssl_ed448_import_public(struct wolfssl_pk_ctx *ctx,
             word32 idx = 0;
             ret = wc_Ed448PublicKeyDecode(publicKeyDer, &idx, &ctx->key.ed448,
                 publicKeySize);
+            if (ret == 0) {
+                ctx->pub_data_len = (word32)ret;
+                ctx->pub_key_der_encoded = 1;
+            }
         }
         if (ret == 0) {
             WGW_LOG("Ed448 public key import succeeded");
-            ctx->pub_data_len = ED448_PUB_KEY_SIZE;
-            ret = wc_ed448_export_public(&ctx->key.ed448, ctx->pub_data,
-                &ctx->pub_data_len);
-            if (ret != 0) {
+            if (ctx->pub_key_der_encoded) {
+                ret = wc_Ed448PublicKeyToDer(&ctx->key.ed448, ctx->pub_data,
+                        sizeof(ctx->pub_data), 1);
+                if (ret > 0) {
+                    ctx->pub_data_len = (word32)ret;
+                }
+            } else {
+                ctx->pub_data_len = ED448_PUB_KEY_SIZE;
+                ret = wc_ed448_export_public(&ctx->key.ed448, ctx->pub_data,
+                        &ctx->pub_data_len);
+            }
+            if (ret < 0) {
                 WGW_WOLFSSL_ERROR("wc_ed448_export_public", ret);
                 wc_ed448_free(&ctx->key.ed448);
                 gnutls_free(publicKeyDer);
@@ -6692,7 +6737,7 @@ static int wolfssl_ed25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
     int ret;
-    word32 pub_size = ED25519_PUB_KEY_SIZE;
+    word32 pub_size = 0;
 
     WGW_FUNC_ENTER();
 
@@ -6702,9 +6747,20 @@ static int wolfssl_ed25519_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     }
 
     /* Export Ed25519 public key directly to pub_ctx->pub_data */
-    ret = wc_ed25519_export_public(&priv_ctx->key.ed25519, pub_ctx->pub_data,
-        &pub_size);
-    if (ret != 0) {
+    if (!priv_ctx->pub_key_der_encoded) {
+        pub_size = ED25519_PUB_KEY_SIZE;
+        /* Export Ed25519 public key directly to pub_ctx->pub_data */
+        ret = wc_ed25519_export_public(&priv_ctx->key.ed25519, pub_ctx->pub_data,
+                &pub_size);
+    } else {
+        ret = wc_Ed25519PublicKeyToDer(&priv_ctx->key.ed25519, pub_ctx->pub_data,
+                sizeof(pub_ctx->pub_data), 1);
+        if (ret > 0) {
+            pub_size = (word32)ret;
+        }
+    }
+
+    if (ret < 0) {
         WGW_ERROR("Ed25519 public key export failed with code %d", ret);
         return GNUTLS_E_INVALID_REQUEST;
     }
@@ -6730,7 +6786,7 @@ static int wolfssl_ed448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
 {
     int ret;
-    word32 pub_size = ED448_PUB_KEY_SIZE;
+    word32 pub_size = 0;
 
     WGW_FUNC_ENTER();
 
@@ -6740,9 +6796,21 @@ static int wolfssl_ed448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     }
 
     /* Export Ed448 public key directly to pub_ctx->pub_data */
-    ret = wc_ed448_export_public(&priv_ctx->key.ed448, pub_ctx->pub_data,
-        &pub_size);
-    if (ret != 0) {
+    if (!priv_ctx->pub_key_der_encoded) {
+        WGW_LOG("not der encoded");
+        pub_size = ED448_PUB_KEY_SIZE;
+        /* Export Ed448 public key directly to pub_ctx->pub_data */
+        ret = wc_ed448_export_public(&priv_ctx->key.ed448, pub_ctx->pub_data,
+                &pub_size);
+    } else {
+        ret = wc_Ed448PublicKeyToDer(&priv_ctx->key.ed448, pub_ctx->pub_data,
+                sizeof(pub_ctx->pub_data), 1);
+        if (ret > 0) {
+            pub_size = (word32)ret;
+        }
+    }
+
+    if (ret < 0) {
         WGW_ERROR("Ed448 public key export failed with code %d", ret);
         return GNUTLS_E_INVALID_REQUEST;
     }
