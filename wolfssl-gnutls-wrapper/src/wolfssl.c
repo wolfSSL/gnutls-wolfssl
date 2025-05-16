@@ -4188,17 +4188,12 @@ int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
     static const unsigned char derEcc[] = {
         0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
     };
-#if defined(HAVE_ED25519)
     static const unsigned char derEd25519[] = {
         0x2b, 0x65, 0x70
     };
-#endif
-#if defined(HAVE_ED448)
     static const unsigned char derEd448[] = {
         0x2b, 0x65, 0x71
     };
-#endif
-#i
     static const unsigned char derX25519[] = {
         0x2b, 0x65, 0x6e
     };
@@ -4576,6 +4571,11 @@ static int wolfssl_ed25519_import_public(struct wolfssl_pk_ctx *ctx,
     if (ret == 0) {
         ret = wc_ed25519_import_public(publicKeyDer, publicKeySize,
             &ctx->key.ed25519);
+        if (ret == BAD_FUNC_ARG) {
+            word32 idx = 0;
+            ret = wc_Ed25519PublicKeyDecode(publicKeyDer, &idx,
+                &ctx->key.ed25519, publicKeySize);
+        }
         if (ret == 0) {
             WGW_LOG("Ed25519 public key import succeeded");
             ctx->pub_data_len = ED25519_PUB_KEY_SIZE;
@@ -4615,6 +4615,11 @@ static int wolfssl_ed448_import_public(struct wolfssl_pk_ctx *ctx,
     if (ret == 0) {
         ret = wc_ed448_import_public(publicKeyDer, publicKeySize,
             &ctx->key.ed448);
+        if (ret == BAD_FUNC_ARG) {
+            word32 idx = 0;
+            ret = wc_Ed448PublicKeyDecode(publicKeyDer, &idx, &ctx->key.ed448,
+                publicKeySize);
+        }
         if (ret == 0) {
             WGW_LOG("Ed448 public key import succeeded");
             ctx->pub_data_len = ED448_PUB_KEY_SIZE;
@@ -4652,13 +4657,18 @@ static int wolfssl_x25519_import_public(struct wolfssl_pk_ctx *ctx,
 
     ret = wc_curve25519_init(&ctx->key.x25519);
     if (ret == 0) {
-        ret = wc_curve25519_import_public(publicKeyDer, publicKeySize,
-            &ctx->key.x25519);
+        ret = wc_curve25519_import_public_ex(publicKeyDer, publicKeySize,
+            &ctx->key.x25519, EC25519_LITTLE_ENDIAN);
+        if (ret == BAD_FUNC_ARG) {
+            word32 idx = 0;
+            ret = wc_Curve25519PublicKeyDecode(publicKeyDer, &idx,
+                &ctx->key.x25519, publicKeySize);
+        }
         if (ret == 0) {
             WGW_LOG("x25519 public key import succeeded");
             ctx->pub_data_len = CURVE25519_PUB_KEY_SIZE;
-            ret = wc_curve25519_export_public(&ctx->key.x25519, ctx->pub_data,
-                &ctx->pub_data_len);
+            ret = wc_curve25519_export_public_ex(&ctx->key.x25519,
+                ctx->pub_data, &ctx->pub_data_len, EC25519_LITTLE_ENDIAN);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_curve25519_export_public", ret);
                 wc_curve25519_free(&ctx->key.x25519);
@@ -4691,13 +4701,18 @@ static int wolfssl_x448_import_public(struct wolfssl_pk_ctx *ctx,
 
     ret = wc_curve448_init(&ctx->key.x448);
     if (ret == 0) {
-        ret = wc_curve448_import_public(publicKeyDer, publicKeySize,
-            &ctx->key.x448);
+        ret = wc_curve448_import_public_ex(publicKeyDer, publicKeySize,
+            &ctx->key.x448, EC448_LITTLE_ENDIAN);
+        if (ret == BAD_FUNC_ARG) {
+            word32 idx = 0;
+            ret = wc_Curve448PublicKeyDecode(publicKeyDer, &idx, &ctx->key.x448,
+                publicKeySize);
+        }
         if (ret == 0) {
             WGW_LOG("x448 public key import succeeded");
             ctx->pub_data_len = CURVE448_PUB_KEY_SIZE;
-            ret = wc_curve448_export_public(&ctx->key.x448, ctx->pub_data,
-                &ctx->pub_data_len);
+            ret = wc_curve448_export_public_ex(&ctx->key.x448, ctx->pub_data,
+                &ctx->pub_data_len, EC448_LITTLE_ENDIAN);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_curve448_export_public", ret);
                 wc_curve448_free(&ctx->key.x448);
@@ -8305,6 +8320,56 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+#if !defined(HAVE_FIPS)
+    if (curve == GNUTLS_ECC_CURVE_ED25519 ||
+        curve == GNUTLS_ECC_CURVE_ED448 ||
+        curve == GNUTLS_ECC_CURVE_X25519 ||
+        curve == GNUTLS_ECC_CURVE_X448) {
+        /* Allocate a new context */
+        priv_ctx = gnutls_calloc(1, sizeof(struct wolfssl_pk_ctx));
+        if (priv_ctx == NULL) {
+            WGW_ERROR("Memory allocation failed");
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        /* Initialize RNG */
+        ret = wc_InitRng(&priv_ctx->rng);
+        if (ret != 0) {
+            WGW_ERROR("wc_InitRng failed with code %d", ret);
+            gnutls_free(priv_ctx);
+            return GNUTLS_E_RANDOM_FAILED;
+        }
+        priv_ctx->rng_initialized = 1;
+
+        if (curve == GNUTLS_ECC_CURVE_ED25519) {
+            WGW_LOG("Ed25519");
+            priv_ctx->algo = GNUTLS_PK_EDDSA_ED25519;
+            ret = wc_ed25519_import_private_only(k_datum->data, k_datum->size,
+                &priv_ctx->key.ed25519);
+        } else if (curve == GNUTLS_ECC_CURVE_ED448) {
+            WGW_LOG("Ed448");
+            priv_ctx->algo = GNUTLS_PK_EDDSA_ED448;
+            ret = wc_ed448_import_private_only(k_datum->data, k_datum->size,
+                &priv_ctx->key.ed448);
+        } else if (curve == GNUTLS_ECC_CURVE_X25519) {
+            WGW_LOG("Ed25519");
+            priv_ctx->algo = GNUTLS_PK_ECDH_X25519;
+            ret = wc_curve25519_import_private_ex(k_datum->data, k_datum->size,
+                &priv_ctx->key.x25519, EC25519_LITTLE_ENDIAN);
+        } else if (curve == GNUTLS_ECC_CURVE_X448) {
+            WGW_LOG("Ed448");
+            priv_ctx->algo = GNUTLS_PK_ECDH_X448;
+            ret = wc_curve448_import_private_ex(k_datum->data, k_datum->size,
+                &priv_ctx->key.x448, EC448_LITTLE_ENDIAN);
+        }
+        if (ret == 0) {
+            priv_ctx->initialized = 1;
+            *(struct wolfssl_pk_ctx **)ctx = priv_ctx;
+        }
+        return ret;
+    }
+#endif
+
     switch (curve) {
         case GNUTLS_ECC_CURVE_SECP224R1: /* SECP224R1 */
             WGW_LOG("SECP224R1");
@@ -8405,7 +8470,9 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
 
 #if !defined(HAVE_FIPS)
     if (curve == GNUTLS_ECC_CURVE_ED25519 ||
-        curve == GNUTLS_ECC_CURVE_ED448) {
+        curve == GNUTLS_ECC_CURVE_ED448 ||
+        curve == GNUTLS_ECC_CURVE_X25519 ||
+        curve == GNUTLS_ECC_CURVE_X448) {
         /* Allocate a new context */
         pub_ctx = gnutls_calloc(1, sizeof(struct wolfssl_pk_ctx));
         if (pub_ctx == NULL) {
@@ -8427,11 +8494,20 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
             pub_ctx->algo = GNUTLS_PK_EDDSA_ED25519;
             ret = wolfssl_ed25519_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
-        }
-        if (curve == GNUTLS_ECC_CURVE_ED448) {
+        } else if (curve == GNUTLS_ECC_CURVE_ED448) {
             WGW_LOG("Ed448");
             pub_ctx->algo = GNUTLS_PK_EDDSA_ED448;
             ret = wolfssl_ed448_import_public(pub_ctx, x_datum->data,
+                x_datum->size, &found);
+        } else if (curve == GNUTLS_ECC_CURVE_X25519) {
+            WGW_LOG("Ed25519");
+            pub_ctx->algo = GNUTLS_PK_ECDH_X25519;
+            ret = wolfssl_x25519_import_public(pub_ctx, x_datum->data,
+                x_datum->size, &found);
+        } else if (curve == GNUTLS_ECC_CURVE_X448) {
+            WGW_LOG("Ed448");
+            pub_ctx->algo = GNUTLS_PK_ECDH_X448;
+            ret = wolfssl_x448_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
         }
         if (ret == 0) {
