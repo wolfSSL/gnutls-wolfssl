@@ -109,7 +109,7 @@ if [ "$OS" = "macos" ]; then
     echo "Configuring GnuTLS for macOS..."
 
     # Base configuration options
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
 
     # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then
@@ -130,7 +130,7 @@ else
     echo "Configuring GnuTLS for Linux..."
 
     # Base configuration options
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
 
     # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then

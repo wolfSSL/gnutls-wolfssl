@@ -27,6 +27,7 @@
 #include <wolfssl/wolfcrypt/signature.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/dh.h>
+#include <wolfssl/wolfcrypt/logging.h>
 
 #include <stdarg.h>
 #include <sys/types.h>
@@ -1319,8 +1320,8 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
         ret = wc_AesCcmDecrypt(&ctx->cipher.aes_ctx, plain, encr, encr_size,
             nonce, nonce_size, encr + encr_size, tag_size, auth, auth_size);
         if (ret != 0) {
-#if defined(HAVE_FIPS)
             WGW_WOLFSSL_ERROR("wc_AesCcmDecrypt", ret);
+#if defined(HAVE_FIPS)
             if (ret == BAD_FUNC_ARG)
                 return GNUTLS_E_INVALID_REQUEST;
 #endif
@@ -3850,12 +3851,36 @@ static const int wolfssl_pk_supported[] = {
         [GNUTLS_PK_RSA_PSS] = 1,
         [GNUTLS_PK_DH] = 1,
 };
+/** Length of array of supported PK algorithms. */
+#define WOLFSSL_PK_SUPPORTED_LEN            \
+    (int)(sizeof(wolfssl_pk_supported) /    \
+          sizeof(wolfssl_pk_supported[0]))
+
+/**
+ * Check if PK algorithm is supported.
+ *
+ * @param [in] algorithm   GnuTLS PK algorithm ID.
+ * @return  1 when supported.
+ * @return  0 when not supported.
+ */
+static int is_pk_supported(int algorithm)
+{
+    return (algorithm >= 0 && algorithm < WOLFSSL_PK_SUPPORTED_LEN &&
+            wolfssl_pk_supported[algorithm] == 1);
+}
 
 static const int wolfssl_pk_sign_supported[] = {
         [GNUTLS_PK_UNKNOWN] = 1,
+        [GNUTLS_SIGN_RSA_MD5] = 1,
+        [GNUTLS_SIGN_RSA_SHA1] = 1,
+        [GNUTLS_SIGN_RSA_SHA224] = 1,
         [GNUTLS_SIGN_RSA_SHA256] = 1,
         [GNUTLS_SIGN_RSA_SHA384] = 1,
         [GNUTLS_SIGN_RSA_SHA512] = 1,
+        [GNUTLS_SIGN_RSA_SHA3_224] = 1,
+        [GNUTLS_SIGN_RSA_SHA3_256] = 1,
+        [GNUTLS_SIGN_RSA_SHA3_384] = 1,
+        [GNUTLS_SIGN_RSA_SHA3_512] = 1,
         [GNUTLS_SIGN_RSA_PSS_SHA256] = 1,
         [GNUTLS_SIGN_RSA_PSS_SHA384] = 1,
         [GNUTLS_SIGN_RSA_PSS_SHA512] = 1,
@@ -3865,13 +3890,35 @@ static const int wolfssl_pk_sign_supported[] = {
         [GNUTLS_SIGN_ECDSA_SECP384R1_SHA384] = 1,
         [GNUTLS_SIGN_ECDSA_SHA512] = 1,
         [GNUTLS_SIGN_ECDSA_SECP521R1_SHA512] = 1,
-        [GNUTLS_SIGN_EDDSA_ED25519] = 1,
         [GNUTLS_SIGN_ECDSA_SHA1] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA224] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA3_224] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA3_256] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA3_384] = 1,
+        [GNUTLS_SIGN_ECDSA_SHA3_512] = 1,
+        [GNUTLS_SIGN_EDDSA_ED25519] = 1,
         [GNUTLS_SIGN_EDDSA_ED448] = 1,
         [GNUTLS_SIGN_RSA_PSS_RSAE_SHA256] = 1,
         [GNUTLS_SIGN_RSA_PSS_RSAE_SHA384] = 1,
         [GNUTLS_SIGN_RSA_PSS_RSAE_SHA512] = 1,
 };
+/** Length of array of supported PK signature algorithms. */
+#define WOLFSSL_PK_SIGN_SUPPORTED_LEN           \
+    (int)(sizeof(wolfssl_pk_sign_supported) /   \
+          sizeof(wolfssl_pk_sign_supported[0]))
+
+/**
+ * Check if PK signature is supported.
+ *
+ * @param [in] algorithm   GnuTLS PK signature algorithm ID.
+ * @return  1 when supported.
+ * @return  0 when not supported.
+ */
+static int is_pk_sign_supported(int algorithm)
+{
+    return (algorithm >= 0 && algorithm < WOLFSSL_PK_SIGN_SUPPORTED_LEN &&
+            wolfssl_pk_sign_supported[algorithm] == 1);
+}
 
 static int wolfssl_pk_get_bits(void **_ctx, unsigned int* bits)
 {
@@ -4448,6 +4495,7 @@ static int wolfssl_pk_copy(void **_dst, void *src, gnutls_pk_algorithm_t algo)
 {
     struct wolfssl_pk_ctx *ctx_src;
     struct wolfssl_pk_ctx *ctx_dst;
+    int ret;
 
     WGW_FUNC_ENTER();
 
@@ -4484,6 +4532,19 @@ static int wolfssl_pk_copy(void **_dst, void *src, gnutls_pk_algorithm_t algo)
     memcpy(ctx_dst, ctx_src, sizeof(struct wolfssl_pk_ctx));
     WGW_LOG("copied context from x509 struct to priv key struct");
 
+    if (ctx_src->rng_initialized) {
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+        /* Initialize RNG */
+        ret = wc_InitRng(&ctx_dst->rng);
+        if (ret != 0) {
+            WGW_ERROR("wc_InitRng failed with code %d", ret);
+            return GNUTLS_E_RANDOM_FAILED;
+        }
+        ctx_dst->rng_initialized = 1;
+    }
+
     *_dst = ctx_dst;
     return 0;
 }
@@ -4503,7 +4564,7 @@ static int wolfssl_rsa_import_public(struct wolfssl_pk_ctx *ctx,
             publicKeySize);
         if (ret == 0) {
             WGW_LOG("RSA public key import succeeded");
-             if (publicKeySize <= sizeof(ctx->pub_data)) {
+            if (publicKeySize <= sizeof(ctx->pub_data)) {
                  XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
                  ctx->pub_data_len = publicKeySize;
                  WGW_LOG("RSA public key stored in context, size: %u",
@@ -4735,24 +4796,86 @@ static int wolfssl_x448_import_public(struct wolfssl_pk_ctx *ctx,
 }
 #endif
 
+static int wolfssl_dh_import_public(struct wolfssl_pk_ctx *ctx,
+    unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
+{
+    int ret;
+
+    WGW_FUNC_ENTER();
+
+    ret = wc_InitDhKey(&ctx->key.dh);
+    if (ret == 0) {
+        ret = wc_DhImportKeyPair(&ctx->key.dh, NULL, 0, publicKeyDer,
+            publicKeySize);
+        if (ret == 0) {
+            WGW_LOG("RSA public key import succeeded");
+            if (publicKeySize <= sizeof(ctx->pub_data)) {
+                 XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
+                 ctx->pub_data_len = publicKeySize;
+                 WGW_LOG("DH public key stored in context, size: %u",
+                     ctx->pub_data_len);
+            } else {
+                 WGW_LOG("DH public key size (%u) too large for buffer (%zu)",
+                     publicKeySize, sizeof(ctx->pub_data));
+            }
+
+            ctx->algo = GNUTLS_PK_DH;
+            *key_found = 1;
+        } else {
+            WGW_LOG("DH public key import failed with code %d", ret);
+            wc_FreeDhKey(&ctx->key.dh);
+        }
+    } else {
+        WGW_WOLFSSL_ERROR("wc_InitDhKey", ret);
+    }
+
+    return 0;
+}
+
+static int pk_algo_to_alg_id(gnutls_pk_algorithm_t algo)
+{
+    switch (algo) {
+        case GNUTLS_PK_RSA:
+            return RSAk;
+        case GNUTLS_PK_DH:
+            return DHk;
+        case GNUTLS_PK_ECDSA:
+            return ECDSAk;
+#if !defined(HAVE_FIPS)
+        case GNUTLS_PK_EDDSA_ED25519:
+            return ED25519k;
+        case GNUTLS_PK_EDDSA_ED448:
+            return ED448k;
+        case GNUTLS_PK_ECDH_X25519:
+            return X25519k;
+        case GNUTLS_PK_ECDH_X448:
+            return X448k;
+#endif
+        default:
+            return 0;
+    }
+}
+
 /* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
  * the trial-and-error approach */
 static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
     int ret;
-    int algId = 0;
+    int algId = pk_algo_to_alg_id(ctx->algo);
 
     WGW_FUNC_ENTER();
 
     *key_found = 0;
 
-    ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &algId);
-    if (ret != 0) {
-        wc_FreeRng(&ctx->rng);
-        gnutls_free(ctx);
-        WGW_ERROR("could not determine public key type from certificate");
-        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    if (algId == 0) {
+        ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &algId);
+        if (ret != 0) {
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            WGW_ERROR("could not determine public key type from certificate");
+            return GNUTLS_E_ALGO_NOT_SUPPORTED;
+        }
     }
 
     switch (algId) {
@@ -4794,6 +4917,11 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
                 key_found);
             break;
 #endif
+        case DHk:
+            WGW_LOG("DH public key");
+            ret = wolfssl_dh_import_public(ctx, publicKeyDer, publicKeySize,
+                key_found);
+            break;
         default:
             ret = GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
@@ -5737,6 +5865,24 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
 
     /* Determine hash algorithm and if using PSS */
     switch (algo) {
+        case GNUTLS_SIGN_RSA_MD5:
+            hash_type = WC_HASH_TYPE_MD5;
+            hash_gnutls = GNUTLS_DIG_MD5;
+            hash_size = 16;
+            WGW_LOG("hash detected MD5 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA1:
+            hash_type = WC_HASH_TYPE_SHA;
+            hash_gnutls = GNUTLS_DIG_SHA1;
+            hash_size = 20;
+            WGW_LOG("hash detected SHA1 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA224:
+            hash_type = WC_HASH_TYPE_SHA224;
+            hash_gnutls = GNUTLS_DIG_SHA224;
+            hash_size = 28;
+            WGW_LOG("hash detected SHA224 (PKCS#1)");
+            break;
         case GNUTLS_SIGN_RSA_SHA256:
             hash_type = WC_HASH_TYPE_SHA256;
             hash_gnutls = GNUTLS_DIG_SHA256;
@@ -5754,6 +5900,30 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
             hash_gnutls = GNUTLS_DIG_SHA512;
             hash_size = 64;
             WGW_LOG("hash detected SHA512 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA3_224:
+            hash_type = WC_HASH_TYPE_SHA3_224;
+            hash_gnutls = GNUTLS_DIG_SHA3_224;
+            hash_size = 28;
+            WGW_LOG("hash detected SHA3_224 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA3_256:
+            hash_type = WC_HASH_TYPE_SHA3_256;
+            hash_gnutls = GNUTLS_DIG_SHA3_256;
+            hash_size = 32;
+            WGW_LOG("hash detected SHA3_256 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA3_384:
+            hash_type = WC_HASH_TYPE_SHA3_384;
+            hash_gnutls = GNUTLS_DIG_SHA3_384;
+            hash_size = 48;
+            WGW_LOG("hash detected SHA3_384 (PKCS#1)");
+            break;
+        case GNUTLS_SIGN_RSA_SHA3_512:
+            hash_type = WC_HASH_TYPE_SHA3_512;
+            hash_gnutls = GNUTLS_DIG_SHA3_512;
+            hash_size = 64;
+            WGW_LOG("hash detected SHA3_512 (PKCS#1)");
             break;
         case GNUTLS_SIGN_RSA_PSS_SHA256:
         case GNUTLS_SIGN_RSA_PSS_RSAE_SHA256:
@@ -5851,15 +6021,18 @@ static int wolfssl_pk_verify_hash(void *_ctx, const void *key,
     }
 
     /* Handle based on signature algorithm */
-    if (algo == GNUTLS_SIGN_ECDSA_SHA256 ||
+    if (algo == GNUTLS_SIGN_ECDSA_SHA224 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA256 ||
             algo == GNUTLS_SIGN_ECDSA_SHA384 ||
             algo == GNUTLS_SIGN_ECDSA_SHA512 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_224 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_256 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_384 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_512 ||
             algo == GNUTLS_SIGN_ECDSA_SECP256R1_SHA256 ||
             algo == GNUTLS_SIGN_ECDSA_SECP384R1_SHA384 ||
             algo == GNUTLS_SIGN_ECDSA_SECP521R1_SHA512 ||
-#if defined(HAVE_FIPS)
             algo == GNUTLS_SIGN_ECDSA_SHA1 ||
-#endif
             ctx->algo == GNUTLS_PK_ECDSA
             ) {
 
@@ -5922,15 +6095,22 @@ static int wolfssl_pk_verify_hash(void *_ctx, const void *key,
         }
     }
 #endif
-    else if (algo == GNUTLS_SIGN_RSA_SHA256 ||
+    else if (algo == GNUTLS_SIGN_RSA_SHA224 ||
+               algo == GNUTLS_SIGN_RSA_SHA256 ||
                algo == GNUTLS_SIGN_RSA_SHA384 ||
                algo == GNUTLS_SIGN_RSA_SHA512 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_224 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_256 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_384 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_512 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA256 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA384 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA512 ||
                algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA256 ||
                algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA384 ||
                algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA512 ||
+               algo == GNUTLS_SIGN_RSA_MD5 ||
+               algo == GNUTLS_SIGN_RSA_SHA1 ||
                ctx->algo == GNUTLS_PK_RSA) {
         WGW_LOG("verifying with RSA");
         ret = wolfssl_pk_verify_hash_rsa(ctx, algo, hash, signature);
@@ -6659,6 +6839,7 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
     struct wolfssl_pk_ctx *pub_ctx;
     gnutls_datum_t *pub = (gnutls_datum_t *)pubkey;
     int ret;
+    int key_found = 0;
 
     WGW_FUNC_ENTER();
 
@@ -6769,6 +6950,11 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
 
     pub_ctx->initialized = 1;
     *_pub_ctx = pub_ctx;
+
+    ret = wolfssl_pk_import_public(pub_ctx, pub->data, pub->size, &key_found);
+    if (ret != 0) {
+        return ret;
+    }
 
     WGW_LOG("public key exported successfully");
     return 0;
@@ -7219,8 +7405,25 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    if ((int)algo != GNUTLS_E_NO_SIGN_ALGORITHM_SET && !is_pk_supported(algo) &&
+            !is_pk_sign_supported(algo)) {
+        WGW_ERROR("Algo not supported, algo: %d", algo);
+#if defined(HAVE_FIPS)
+        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#endif
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
     /* Map GnuTLS hash algorithm to WolfSSL hash type */
     switch (hash) {
+        case GNUTLS_DIG_MD5:
+            hash_type = WC_HASH_TYPE_MD5;
+            WGW_LOG("hash detected MD5");
+            break;
+        case GNUTLS_DIG_SHA1:
+            hash_type = WC_HASH_TYPE_SHA;
+            WGW_LOG("hash detected SHA1");
+            break;
         case GNUTLS_DIG_SHA256:
             hash_type = WC_HASH_TYPE_SHA256;
             WGW_LOG("hash detected SHA256");
@@ -7292,10 +7495,21 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         }
     } else if (ctx->algo == GNUTLS_PK_ECDSA) {
         WGW_LOG("signing with ECDSA");
+#if defined(WOLFSSL_ECDSA_DETERMINISTIC_K)
+        if ((flags & GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE) != 0) {
+            WGW_LOG("signing determinitically");
+            wc_ecc_set_deterministic_ex(&ctx->key.ecc, 1, hash_type);
+        }
+#endif
         ret = wolfssl_pk_sign_ecdsa(ctx, hash_type, msg_data, sig);
         if (ret != 0) {
             return ret;
         }
+#if defined(WOLFSSL_ECDSA_DETERMINISTIC_K)
+        if ((flags & GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE) != 0) {
+            wc_ecc_set_deterministic_ex(&ctx->key.ecc, 1, hash_type);
+        }
+#endif
     }
 #if !defined(HAVE_FIPS)
     else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
@@ -7324,7 +7538,8 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
 
 /* verify message */
 static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
-    gnutls_sign_algorithm_t algo, const void *data, const void *signature)
+    gnutls_sign_algorithm_t algo, const void *data, const void *signature,
+    unsigned int flags)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
@@ -7336,7 +7551,11 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
     WGW_FUNC_ENTER();
     WGW_LOG("algorithm %d", algo);
 
-    if (!wolfssl_pk_sign_supported[algo]) {
+    if (algo == GNUTLS_SIGN_RSA_MD5 &&
+            (flags & GNUTLS_VERIFY_ALLOW_BROKEN) == 0) {
+        return GNUTLS_E_INSUFFICIENT_SECURITY;
+    }
+    if (!is_pk_sign_supported(algo)) {
         WGW_ERROR("Algo not supported, algo: %d", algo);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
@@ -7371,6 +7590,10 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             algo == GNUTLS_SIGN_ECDSA_SECP384R1_SHA384 ||
             algo == GNUTLS_SIGN_ECDSA_SHA512||
             algo == GNUTLS_SIGN_ECDSA_SECP521R1_SHA512 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_224 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_256 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_384 ||
+            algo == GNUTLS_SIGN_ECDSA_SHA3_512||
             ctx->algo == GNUTLS_PK_ECDSA) {
         WGW_LOG("verifying with ECDSA");
 
@@ -7388,6 +7611,14 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
 
         enum wc_HashType hash_type;
         switch (algo) {
+            case GNUTLS_SIGN_ECDSA_SHA1:
+                hash_type = WC_HASH_TYPE_SHA;
+                WGW_LOG("hash detected SHA256");
+                break;
+            case GNUTLS_SIGN_ECDSA_SHA224:
+                hash_type = WC_HASH_TYPE_SHA224;
+                WGW_LOG("hash detected SHA224");
+                break;
             case GNUTLS_SIGN_ECDSA_SHA256:
             case GNUTLS_SIGN_ECDSA_SECP256R1_SHA256:
                 hash_type = WC_HASH_TYPE_SHA256;
@@ -7497,8 +7728,15 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
     }
 #endif
     else if (algo == GNUTLS_SIGN_RSA_SHA256 ||
+               algo == GNUTLS_SIGN_RSA_MD5 ||
+               algo == GNUTLS_SIGN_RSA_SHA1 ||
+               algo == GNUTLS_SIGN_RSA_SHA224 ||
                algo == GNUTLS_SIGN_RSA_SHA384 ||
                algo == GNUTLS_SIGN_RSA_SHA512 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_224 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_256 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_384 ||
+               algo == GNUTLS_SIGN_RSA_SHA3_512 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA256 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA384 ||
                algo == GNUTLS_SIGN_RSA_PSS_SHA512 ||
@@ -7513,6 +7751,21 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
 
         /* Determine hash algorithm and if using PSS */
         switch (algo) {
+            case GNUTLS_SIGN_RSA_MD5:
+                hash_type = WC_HASH_TYPE_MD5;
+                hash = GNUTLS_DIG_MD5;
+                WGW_LOG("hash detected SHA1 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA1:
+                hash_type = WC_HASH_TYPE_SHA;
+                hash = GNUTLS_DIG_SHA1;
+                WGW_LOG("hash detected SHA1 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA224:
+                hash_type = WC_HASH_TYPE_SHA224;
+                hash = GNUTLS_DIG_SHA224;
+                WGW_LOG("hash detected SHA224 (PKCS#1)");
+                break;
             case GNUTLS_SIGN_RSA_SHA256:
                 hash_type = WC_HASH_TYPE_SHA256;
                 hash = GNUTLS_DIG_SHA256;
@@ -7527,6 +7780,26 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
                 hash_type = WC_HASH_TYPE_SHA512;
                 hash = GNUTLS_DIG_SHA512;
                 WGW_LOG("hash detected SHA512 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA3_224:
+                hash_type = WC_HASH_TYPE_SHA3_224;
+                hash = GNUTLS_DIG_SHA3_224;
+                WGW_LOG("hash detected SHA3_224 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA3_256:
+                hash_type = WC_HASH_TYPE_SHA3_256;
+                hash = GNUTLS_DIG_SHA3_256;
+                WGW_LOG("hash detected SHA3_256 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA3_384:
+                hash_type = WC_HASH_TYPE_SHA3_384;
+                hash = GNUTLS_DIG_SHA3_384;
+                WGW_LOG("hash detected SHA3_384 (PKCS#1)");
+                break;
+            case GNUTLS_SIGN_RSA_SHA3_512:
+                hash_type = WC_HASH_TYPE_SHA3_512;
+                hash = GNUTLS_DIG_SHA3_512;
+                WGW_LOG("hash detected SHA3_512 (PKCS#1)");
                 break;
             case GNUTLS_SIGN_RSA_PSS_SHA256:
             case GNUTLS_SIGN_RSA_PSS_RSAE_SHA256:
@@ -8023,7 +8296,7 @@ static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
     /* Initialize RNG */
     if (!ctx->rng_initialized) {
 #ifdef WC_RNG_SEED_CB
-    wc_SetSeed_Cb(wc_GenerateSeed);
+        wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
         ret = wc_InitRng(&ctx->rng);
         if (ret != 0) {
@@ -9621,6 +9894,11 @@ int _gnutls_wolfssl_init(void)
                 loggingFd = fd;
             }
         }
+    }
+#endif
+#ifdef DEBUG_WOLFSSL
+    if (loggingEnabled) {
+        wolfSSL_Debugging_ON();
     }
 #endif
 

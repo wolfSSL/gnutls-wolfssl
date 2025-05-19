@@ -28,7 +28,7 @@ if [ "$OS" = "macos" ]; then
     echo "Configuring GnuTLS for macOS..."
     autoreconf -fvi
 
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
 
     if [ $FIPS_MODE -eq 1 ]; then
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
@@ -48,7 +48,7 @@ else
     echo "Configuring GnuTLS for Linux..."
     autoreconf -fvi
 
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --enable-srp-authentication"
 
     if [ $FIPS_MODE -eq 1 ]; then
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
