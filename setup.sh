@@ -139,6 +139,8 @@ else
 
     ./configure $CONFIG_OPTS 'CFLAGS=-DGNUTLS_WOLFSSL'
 
+    export GNUTLS_FORCE_FIPS_MODE=1
+
     make -j9
 fi
 

@@ -1,22 +1,18 @@
 name: wolfssl-gnutls-wrapper Unit Tests
-
 # START OF COMMON SECTION
 on:
   push:
     branches: [ 'master', 'main', 'release/**' ]
   pull_request: {}
   # This triggers on pull requests into any branch
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 # END OF COMMON SECTION
-
 jobs:
   make_check:
     name: make check
     timeout-minutes: 20
-
     strategy:
       matrix:
         os: [ ubuntu-latest, macos-latest ]
@@ -24,25 +20,81 @@ jobs:
           - ""
           - "GNUTLS_NO_PROVIDER=1"
       fail-fast: false
-
     runs-on: ${{ matrix.os }}
-
+# Main run (Linux and macos)
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Run setup and tests
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools and tests
         shell: bash
         run: |
           BUILD_RESULT=0
           TEST_RESULT=0
-
           ./setup.sh || BUILD_RESULT=$?
-
           cd wolfssl-gnutls-wrapper
           ${{ matrix.provider }} make test || TEST_RESULT=$?
-
           if [ "$BUILD_RESULT" -ne 0 ] || [ "$TEST_RESULT" -ne 0 ]; then
             echo "Build or test failed: BUILD_RESULT=$BUILD_RESULT, TEST_RESULT=$TEST_RESULT"
             exit 1
           fi
+
+# Valgrind run (linux only)
+  run_valgrind:
+    name: Run Valgrind Tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Valgrind and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind gnulib autopoint gperf gtk-doc-tools
+      - name: Run setup
+        run: ./setup.sh
+      - name: Run Valgrind tests
+        run: |
+          cd wolfssl-gnutls-wrapper/tests/
+          make run_valgrind
+
+# FIPS run (linux only)
+  run_fips:
+    name: Run FIPS Mode Tests
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Run setup
+        run: ./setup.sh fips
+      - name: Run FIPS tests
+        run: |
+          cd wolfssl-gnutls-wrapper/tests/
+          make run_fips
+
+# Valgrind run (gnutls - linux only)
+  run_valgrind_gnutls:
+    name: Run Valgrind with GNUTLS Tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+      - name: Run setup
+        run: ./setup.sh
+      - name: Run Valgrind with GNUTLS tests
+        run: |
+          cd wolfssl-gnutls-wrapper/tests/
+          make run_valgrind
