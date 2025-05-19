@@ -3,21 +3,9 @@
 #define MAX_PVP_SEED_SIZE 256
 #include <stdint.h>
 #include <gnutls/crypto.h>
+#include <gnutls/x509.h>
 
 /* replicated definitions from GnuTLS internal headers */
-
-typedef enum {
-    GNUTLS_KEYGEN_SEED = 1,
-    GNUTLS_KEYGEN_DIGEST = 2,
-    GNUTLS_KEYGEN_SPKI = 3,
-    GNUTLS_KEYGEN_DH = 4
-} gnutls_keygen_types_t;
-
-typedef struct {
-    gnutls_keygen_types_t type;
-    unsigned char *data;
-    unsigned int size;
-} gnutls_keygen_data_st;
 
 typedef void *bigint_t;
 
