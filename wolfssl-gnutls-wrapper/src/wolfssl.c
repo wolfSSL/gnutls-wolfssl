@@ -5660,6 +5660,13 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         hash_type = WC_HASH_TYPE_SHA256;
     }
 
+#if defined(HAVE_FIPS)
+    if (hash_type == WC_SHA) {
+        WGW_LOG("hash algo not supported for signing");
+        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+    }
+#endif
+
     /* check if any RSA-PSS flags/arguments were provided, and if so, update the
      * algo */
     if ((flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS) ||
@@ -6198,6 +6205,17 @@ static int wolfssl_pk_generate_rsa(struct wolfssl_pk_ctx *ctx,
 
     PRIVATE_KEY_UNLOCK();
 
+    WGW_LOG("bits: %d", bits);
+
+    /* missing check for 1024, 1024 is not allowed */
+    if (bits == 1024) {
+        WGW_ERROR("Bits size not valid");
+#if defined(HAVE_FIPS)
+        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#endif
+        return GNUTLS_E_PK_GENERATION_ERROR;
+    }
+
     /* Generate RSA key */
     ret = wc_MakeRsaKey(&ctx->key.rsa, bits, WC_RSA_EXPONENT, &ctx->rng);
 
@@ -6277,6 +6295,8 @@ static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
     int ret;
     int curve_id;
     int curve_size;
+
+    WGW_FUNC_ENTER();
 
     /* Initialize ECC key */
     ret = wc_ecc_init(&ctx->key.ecc);
@@ -7702,11 +7722,6 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
                 hash_type = WC_HASH_TYPE_SHA512;
                 WGW_LOG("hash detected SHA512");
                 break;
-#if defined(HAVE_FIPS)
-           case GNUTLS_SIGN_ECDSA_SHA1:
-                hash_type = WC_HASH_TYPE_SHA;
-                break;
-#endif
             default:
                 WGW_ERROR("Unsupported algorithm: %d", algo);
                 return GNUTLS_E_INVALID_REQUEST;
