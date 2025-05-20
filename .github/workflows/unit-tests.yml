@@ -29,12 +29,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools and tests
-        shell: bash
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-toolss
+      - name: run tests
         run: |
           BUILD_RESULT=0
           TEST_RESULT=0
