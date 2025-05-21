@@ -4882,6 +4882,8 @@ static int pk_algo_to_alg_id(gnutls_pk_algorithm_t algo)
     switch (algo) {
         case GNUTLS_PK_RSA:
             return RSAk;
+        case GNUTLS_PK_RSA_PSS:
+            return RSAPSSk;
         case GNUTLS_PK_DH:
             return DHk;
         case GNUTLS_PK_ECDSA:
@@ -7192,6 +7194,16 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
 
     WGW_LOG("using RSA-PSS padding");
 
+    if (algo == GNUTLS_SIGN_RSA_MD5 || algo == GNUTLS_SIGN_RSA_SHA1 ||
+            algo == GNUTLS_SIGN_RSA_SHA224 || algo == GNUTLS_SIGN_RSA_SHA256 ||
+            algo == GNUTLS_SIGN_RSA_SHA384 || algo == GNUTLS_SIGN_RSA_SHA512 ||
+            algo == GNUTLS_SIGN_RSA_SHA3_224 ||
+            algo == GNUTLS_SIGN_RSA_SHA3_256 ||
+            algo == GNUTLS_SIGN_RSA_SHA3_384 ||
+            algo == GNUTLS_SIGN_RSA_SHA3_512) {
+        return GNUTLS_E_CONSTRAINT_ERROR;
+    }
+
     if (!sig_buf) {
         WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
@@ -8351,17 +8363,24 @@ static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
     }
 
     /* Only support RSA for encryption */
+    if (ctx->algo == GNUTLS_PK_RSA_PSS) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
     if (ctx->algo != GNUTLS_PK_RSA) {
-        WGW_ERROR("Only RSA is supported for encryption, algorithm is: %d", ctx->algo);
+        WGW_ERROR("Only RSA is supported for encryption, algorithm is: %d",
+            ctx->algo);
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
     /* Import the public key if needed */
     if (mp_iszero(&ctx->key.rsa.n) || mp_iszero(&ctx->key.rsa.e)) {
+        word32 idx = 0;
+
         WGW_LOG("public key is not set, importing now");
 
         /* Import the public key from DER */
-        ret = wc_RsaPublicKeyDecode(ctx->pub_data, &(word32){0}, &ctx->key.rsa, ctx->pub_data_len);
+        ret = wc_RsaPublicKeyDecode(ctx->pub_data, &idx, &ctx->key.rsa,
+            ctx->pub_data_len);
         if (ret != 0) {
             WGW_ERROR("RSA public key import failed with code %d", ret);
             return GNUTLS_E_INVALID_REQUEST;
