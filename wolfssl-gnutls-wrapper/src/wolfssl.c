@@ -7182,7 +7182,7 @@ static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
 
 static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     gnutls_digest_algorithm_t hash, enum wc_HashType hash_type,
-    const gnutls_datum_t *msg_data, gnutls_datum_t *sig)
+    const gnutls_datum_t *msg_data, gnutls_datum_t *sig, gnutls_sign_algorithm_t algo)
 {
     int ret;
     /* Get the maximum signature size - typically the key size */
@@ -7589,7 +7589,7 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
         }
     } else if (ctx->algo == GNUTLS_PK_RSA_PSS) {
         WGW_LOG("signing with RSA-PSS");
-        ret = wolfssl_pk_sign_rsa_pss(ctx, hash, hash_type, msg_data, sig);
+        ret = wolfssl_pk_sign_rsa_pss(ctx, hash, hash_type, msg_data, sig, algo);
         if (ret != 0) {
             return ret;
         }
