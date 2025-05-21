@@ -3831,6 +3831,7 @@ struct wolfssl_pk_ctx {
     /** The GnuTLS public key algorithm ID.  */
     gnutls_pk_algorithm_t algo;
     gnutls_ecc_curve_t curve;
+    gnutls_x509_spki_st spki;
     WC_RNG rng;
     int rng_initialized;
 
@@ -3857,6 +3858,43 @@ static const int wolfssl_pk_supported[] = {
 #define WOLFSSL_PK_SUPPORTED_LEN            \
     (int)(sizeof(wolfssl_pk_supported) /    \
           sizeof(wolfssl_pk_supported[0]))
+
+static int wolfssl_der_get_length(const unsigned char *der, word32 *idx,
+   word32 size, word32 *len)
+{
+    byte b;
+    word32 i = *idx;
+    word32 l;
+
+    if ((i + 1) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    b = der[i++];
+    if (b == 0x80)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (b  < 0x80) {
+        *len = b;
+        *idx = i;
+        return 0;
+    }
+
+    b &= 0x7f;
+    if ((i + b) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+    if (b > sizeof(*len))
+        return GNUTLS_E_INVALID_REQUEST;
+
+    l = 0;
+    while (b--) {
+        l = (l << 8) | der[i++];
+    }
+    if ((i + l) > size)
+        return GNUTLS_E_INVALID_REQUEST;
+
+    *len = l;
+    *idx = i;
+    return 0;
+}
 
 /**
  * Check if PK algorithm is supported.
@@ -3922,7 +3960,7 @@ static int is_pk_sign_supported(int algorithm)
             wolfssl_pk_sign_supported[algorithm] == 1);
 }
 
-static int wolfssl_pk_get_bits(void **_ctx, unsigned int* bits)
+static int wolfssl_pk_get_bits(void *_ctx, unsigned int* bits)
 {
     struct wolfssl_pk_ctx *ctx = (struct wolfssl_pk_ctx *)_ctx;
 
@@ -3930,7 +3968,7 @@ static int wolfssl_pk_get_bits(void **_ctx, unsigned int* bits)
         case GNUTLS_PK_RSA:
         case GNUTLS_PK_RSA_PSS:
         case GNUTLS_PK_RSA_OAEP:
-            *bits = wc_RsaEncryptSize(&ctx->key.rsa);
+            *bits = wc_RsaEncryptSize(&ctx->key.rsa) * 8;
             break;
         case GNUTLS_PK_DH:
             {
@@ -3955,10 +3993,41 @@ static int wolfssl_pk_get_bits(void **_ctx, unsigned int* bits)
             break;
         default:
 #if defined(HAVE_FIPS)
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#endif
+            return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#else
             return GNUTLS_E_ALGO_NOT_SUPPORTED;
+#endif
     }
+
+    return 0;
+}
+
+static int wolfssl_pk_get_spki(void *_ctx, void *spki)
+{
+    struct wolfssl_pk_ctx *ctx = (struct wolfssl_pk_ctx *)_ctx;
+
+    /* Validate input parameters */
+    if (!_ctx || !spki) {
+        WGW_ERROR("invalid pointer");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    XMEMCPY(spki, &ctx->spki, sizeof(gnutls_x509_spki_st));
+
+    return 0;
+}
+
+static int wolfssl_pk_set_spki(void *_ctx, void *spki)
+{
+    struct wolfssl_pk_ctx *ctx = (struct wolfssl_pk_ctx *)_ctx;
+
+    /* Validate input parameters */
+    if (!_ctx || !spki) {
+        WGW_ERROR("invalid context pointer");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    XMEMCPY(&ctx->spki, spki, sizeof(gnutls_x509_spki_st));
 
     return 0;
 }
@@ -4025,6 +4094,16 @@ static int wolfssl_pk_import_privkey_x509_dh(struct wolfssl_pk_ctx *ctx,
     return 0;
 }
 
+static gnutls_digest_algorithm_t rsa_hash_from_bits(int bits)
+{
+    if (bits <= 2048) {
+        return GNUTLS_DIG_SHA256;
+    } else if (bits <= 3072) {
+        return GNUTLS_DIG_SHA384;
+    }
+    return GNUTLS_DIG_SHA512;
+}
+
 static void wolfssl_pk_import_privkey_x509_rsa(struct wolfssl_pk_ctx *ctx,
     byte* keyData, word32 keySize, int *key_found)
 {
@@ -4032,6 +4111,231 @@ static void wolfssl_pk_import_privkey_x509_rsa(struct wolfssl_pk_ctx *ctx,
     word32 idx = 0;
 
     WGW_LOG("trying RSA private key import");
+    ret = wc_InitRsaKey(&ctx->key.rsa, NULL);
+    if (ret == 0) {
+        ret = wc_RsaPrivateKeyDecode(keyData, &idx, &ctx->key.rsa, keySize);
+        if (ret == 0) {
+            WGW_LOG("RSA private key import succeeded");
+            ctx->algo = GNUTLS_PK_RSA;
+            *key_found = 1;
+        } else {
+            WGW_LOG("wc_RsaPrivateKeyDecodeu: %d", ret);
+            wc_FreeRsaKey(&ctx->key.rsa);
+        }
+    } else {
+        WGW_WOLFSSL_ERROR("wc_InitRsaKey", ret);
+    }
+}
+
+/** SHA-256 Algorithm ID DER encoding in PSS parameters. */
+static const byte sha256AlgId[] = {
+    0xa0, 0x0d, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01
+};
+/** SHA-256 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte sha256AlgIdNull[] = {
+    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00
+};
+/** SHA-384 Algorithm ID DER encoding in PSS parameters. */
+static const byte sha384AlgId[] = {
+    0xa0, 0x0d, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02
+};
+/** SHA-384 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte sha384AlgIdNull[] = {
+    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
+    0x00
+};
+/** SHA-512 Algorithm ID DER encoding in PSS parameters. */
+static const byte sha512AlgId[] = {
+    0xa0, 0x0d, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03
+};
+/** SHA-512 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte sha512AlgIdNull[] = {
+    0xa0, 0x0f, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+    0x00
+};
+
+/** MGF1 SHA-256 Algorithm ID DER encoding in PSS parameters. */
+static const byte mgf1Sha256AlgId[] = {
+    0xa1, 0x1a, 0x30, 0x18, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x01
+};
+/** MGF1 SHA-256 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte mgf1Sha256AlgIdNull[] = {
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x01, 0x05, 0x00
+};
+/** MGF1 SHA-384 Algorithm ID DER encoding in PSS parameters. */
+static const byte mgf1Sha384AlgId[] = {
+    0xa1, 0x1a, 0x30, 0x18, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x02
+};
+/** MGF1 SHA-384 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte mgf1Sha384AlgIdNull[] = {
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x02, 0x05, 0x00
+};
+/** MGF1 SHA-512 Algorithm ID DER encoding in PSS parameters. */
+static const byte mgf1Sha512AlgId[] = {
+    0xa1, 0x1a, 0x30, 0x18, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x03
+};
+/** MGF1 SHA-512 Algorithm ID with NULL DER encoding in PSS parameters. */
+static const byte mgf1Sha512AlgIdNull[] = {
+    0xa1, 0x1c, 0x30, 0x1a, 0x06, 0x09, 0x2a, 0x86,
+    0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x08, 0x30,
+    0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65,
+    0x03, 0x04, 0x02, 0x03, 0x05, 0x00
+};
+
+static void wolfssl_pk_import_privkey_x509_rsa_pss(struct wolfssl_pk_ctx *ctx,
+    byte* keyData, word32 keySize, int *key_found)
+{
+    int ret;
+    word32 idx = 0;
+    word32 i = 0;
+    word32 len;
+
+    WGW_LOG("trying RSA private key import");
+
+    if ((i + 1) > keySize)
+        return;
+    if (keyData[i++] != 0x30)
+        return;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return;
+
+    if ((i + 1) > keySize)
+        return;
+    if (keyData[i++] != 0x02)
+        return;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return;
+    /* Skip integer value. */
+    i += len;
+
+    if ((i + 1) > keySize)
+        return;
+    if (keyData[i++] != 0x30)
+        return;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return;
+
+    if ((i + 1) > keySize)
+        return;
+    if (keyData[i++] != 0x06)
+        return;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return;
+    /* Skip OBJECT ID value. */
+    i += len;
+
+    if ((i + 1) > keySize)
+        return;
+    if (keyData[i++] != 0x30)
+        return;
+    if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+        return;
+
+    if ((i + 1) < keySize && keyData[i] == 0xa0) {
+        if (XMEMCMP(keyData + i, sha256AlgId, sizeof(sha256AlgId)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA256;
+            i += sizeof(sha256AlgId);
+        } else if (XMEMCMP(keyData + i, sha384AlgId,
+                           sizeof(sha384AlgId)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA384;
+            i += sizeof(sha256AlgId);
+        } else if (XMEMCMP(keyData + i, sha512AlgId,
+                           sizeof(sha512AlgId)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA512;
+            i += sizeof(sha256AlgId);
+        } else if (XMEMCMP(keyData + i, sha256AlgIdNull,
+                           sizeof(sha256AlgIdNull)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA256;
+            i += sizeof(sha256AlgIdNull);
+        } else if (XMEMCMP(keyData + i, sha384AlgIdNull,
+                           sizeof(sha384AlgIdNull)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA384;
+            i += sizeof(sha256AlgIdNull);
+        } else if (XMEMCMP(keyData + i, sha512AlgIdNull,
+                           sizeof(sha512AlgIdNull)) == 0) {
+            ctx->spki.rsa_pss_dig = GNUTLS_DIG_SHA512;
+            i += sizeof(sha256AlgIdNull);
+        } else {
+            return;
+        }
+    }
+
+    if ((i + 1) < keySize && keyData[i] == 0xa1) {
+        if (XMEMCMP(keyData + i, mgf1Sha256AlgId,
+                    sizeof(mgf1Sha256AlgId)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA256)
+                return;
+            i += sizeof(mgf1Sha256AlgId);
+        } else if (XMEMCMP(keyData + i, mgf1Sha384AlgId,
+                           sizeof(mgf1Sha384AlgId)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA384)
+                return;
+            i += sizeof(mgf1Sha256AlgId);
+        } else if (XMEMCMP(keyData + i, mgf1Sha512AlgId,
+                           sizeof(mgf1Sha512AlgId)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA512)
+                return;
+            i += sizeof(mgf1Sha256AlgId);
+        } else if (XMEMCMP(keyData + i, mgf1Sha256AlgIdNull,
+                           sizeof(mgf1Sha256AlgIdNull)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA256)
+                return;
+            i += sizeof(mgf1Sha256AlgIdNull);
+        } else if (XMEMCMP(keyData + i, mgf1Sha384AlgIdNull,
+                           sizeof(mgf1Sha384AlgIdNull)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA384)
+                return;
+            i += sizeof(mgf1Sha256AlgIdNull);
+        } else if (XMEMCMP(keyData + i, mgf1Sha512AlgIdNull,
+                           sizeof(mgf1Sha512AlgIdNull)) == 0) {
+            if (ctx->spki.rsa_pss_dig != GNUTLS_DIG_SHA512)
+                return;
+            i += sizeof(mgf1Sha256AlgIdNull);
+        } else {
+            return;
+        }
+    }
+
+    if ((i + 1) < keySize && keyData[i] == 0xa2) {
+        i++;
+        if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+            return;
+
+        if ((i + 1) > keySize)
+            return;
+        if (keyData[i++] != 0x02)
+            return;
+        if (wolfssl_der_get_length(keyData, &i, keySize, &len) < 0)
+            return;
+        ctx->spki.salt_size = 0;
+        while (len-- > 0) {
+             ctx->spki.salt_size <<= 8;
+             ctx->spki.salt_size += keyData[i++];
+        }
+    }
+
     ret = wc_InitRsaKey(&ctx->key.rsa, NULL);
     if (ret == 0) {
         ret = wc_RsaPrivateKeyDecode(keyData, &idx, &ctx->key.rsa, keySize);
@@ -4090,6 +4394,7 @@ static void wolfssl_pk_import_privkey_x509_ecdsa(struct wolfssl_pk_ctx *ctx,
 }
 
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
 static void wolfssl_pk_import_privkey_x509_ed25519(struct wolfssl_pk_ctx *ctx,
     byte* keyData, word32 keySize, int *key_found)
 {
@@ -4113,7 +4418,9 @@ static void wolfssl_pk_import_privkey_x509_ed25519(struct wolfssl_pk_ctx *ctx,
         WGW_WOLFSSL_ERROR("wc_ed25519_init", ret);
     }
 }
+#endif
 
+#if defined(HAVE_ED448)
 static void wolfssl_pk_import_privkey_x509_ed448(struct wolfssl_pk_ctx *ctx,
     byte* keyData, word32 keySize, int *key_found)
 {
@@ -4136,7 +4443,9 @@ static void wolfssl_pk_import_privkey_x509_ed448(struct wolfssl_pk_ctx *ctx,
         WGW_WOLFSSL_ERROR("wc_ed448_init", ret);
     }
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static void wolfssl_pk_import_privkey_x509_x25519(struct wolfssl_pk_ctx *ctx,
     byte* keyData, word32 keySize, int *key_found)
 {
@@ -4160,7 +4469,9 @@ static void wolfssl_pk_import_privkey_x509_x25519(struct wolfssl_pk_ctx *ctx,
         WGW_WOLFSSL_ERROR("wc_curve25519_init", ret);
     }
 }
+#endif
 
+#if defined(HAVE_CURVE448)
 static void wolfssl_pk_import_privkey_x509_x448(struct wolfssl_pk_ctx *ctx,
     byte* keyData, word32 keySize, int *key_found)
 {
@@ -4185,46 +4496,10 @@ static void wolfssl_pk_import_privkey_x509_x448(struct wolfssl_pk_ctx *ctx,
     }
 }
 #endif
-
-int wolfssl_der_get_length(const unsigned char *der, word32 *idx, word32 size,
-   word32 *len)
-{
-    byte b;
-    word32 i = *idx;
-    word32 l;
-
-    if ((i + 1) > size)
-        return GNUTLS_E_INVALID_REQUEST;
-
-    b = der[i++];
-    if (b == 0x80)
-        return GNUTLS_E_INVALID_REQUEST;
-    if (b  < 0x80) {
-        *len = b;
-        *idx = i;
-        return 0;
-    }
-
-    b &= 0x7f;
-    if ((i + b) > size)
-        return GNUTLS_E_INVALID_REQUEST;
-    if (b > sizeof(*len))
-        return GNUTLS_E_INVALID_REQUEST;
-
-    l = 0;
-    while (b--) {
-        l = (l << 8) | der[i++];
-    }
-    if ((i + l) > size)
-        return GNUTLS_E_INVALID_REQUEST;
-
-    *len = l;
-    *idx = i;
-    return 0;
-}
+#endif
 
 int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
-    int *algId)
+    int *algId, word32 *params)
 {
     word32 i = 0;
     word32 len;
@@ -4305,6 +4580,7 @@ int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
     } else if (len == (word32)sizeof(derRsaPss) && XMEMCMP(keyData + i,
             derRsaPss, len) == 0) {
         *algId = RSAPSSk;
+        *params = i + len;
     } else if (len == (word32)sizeof(derEcc) && XMEMCMP(keyData + i, derEcc,
             len) == 0) {
         *algId = ECDSAk;
@@ -4385,7 +4661,7 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
     ctx->rng_initialized = 1;
 
     /* Only support PEM and DER formats */
-    if (format != GNUTLS_X509_FMT_PEM && format != GNUTLS_X509_FMT_DER) {
+    if (format != GNUTLS_X509_FMT_DER) {
         WGW_ERROR("unsupported format for private key import");
         wc_FreeRng(&ctx->rng);
         gnutls_free(ctx);
@@ -4408,26 +4684,6 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
     } else {
         keyData = data->data;
         keySize = data->size;
-
-        /* Convert PEM to DER if needed */
-        if (format == GNUTLS_X509_FMT_PEM) {
-            WGW_LOG("converting PEM to DER");
-            ret = wc_PemToDer(keyData, keySize, PRIVATEKEY_TYPE, &derBuf, NULL,
-                NULL, &algId);
-            if (ret != 0 || derBuf == NULL) {
-                WGW_ERROR("PEM to DER conversion failed with code %d\n", ret);
-                wc_FreeRng(&ctx->rng);
-                gnutls_free(ctx);
-                return GNUTLS_E_ASN1_DER_ERROR;
-            }
-            WGW_LOG("wc_PemToder ret: %d", ret);
-            WGW_LOG("derBuf length: %d", derBuf->length);
-            /* Update key data and size to use DER data */
-            keyData = derBuf->buffer;
-            keySize = derBuf->length;
-        }
-
-        WGW_LOG("Converted correctly from PEM to der");
     }
 
     if (isDH) {
@@ -4437,10 +4693,10 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
             return ret;
         }
     } else {
-        /* Try each key type until one works */
-        if (algId == 0) {
-            ret = wolfssl_get_alg_from_der(keyData, keySize, &algId);
-        }
+	word32 params = 0;
+
+        /* Figure out the algorithm from the DER. */
+        ret = wolfssl_get_alg_from_der(keyData, keySize, &algId, &params);
         if (ret == 0) {
             switch (algId) {
                 case RSAk:
@@ -4450,9 +4706,10 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
                     break;
                 case RSAPSSk:
                     WGW_LOG("RSA-PSS private key");
-                    wolfssl_pk_import_privkey_x509_rsa(ctx, keyData, keySize,
-                        &key_found);
+                    wolfssl_pk_import_privkey_x509_rsa_pss(ctx, keyData,
+                        keySize, &key_found);
                     ctx->algo = GNUTLS_PK_RSA_PSS;
+                    ctx->spki.pk = GNUTLS_PK_RSA_PSS;
                     break;
                 case ECDSAk:
                     WGW_LOG("ECDSA private key");
@@ -4460,26 +4717,34 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
                         &key_found);
                     break;
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
                 case ED25519k:
                     WGW_LOG("Ed25519 private key");
                     wolfssl_pk_import_privkey_x509_ed25519(ctx, keyData,
                         keySize, &key_found);
                     break;
+#endif
+#if defined(HAVE_ED448)
                 case ED448k:
                     WGW_LOG("Ed448 private key");
                     wolfssl_pk_import_privkey_x509_ed448(ctx, keyData, keySize,
                         &key_found);
                     break;
+#endif
+#if defined(HAVE_CURVE25519)
                 case X25519k:
                     WGW_LOG("X25519 private key");
                     wolfssl_pk_import_privkey_x509_x25519(ctx, keyData, keySize,
                         &key_found);
                     break;
+#endif
+#if defined(HAVE_CURVE448)
                 case X448k:
                     WGW_LOG("X448 private key");
                     wolfssl_pk_import_privkey_x509_x448(ctx, keyData, keySize,
                         &key_found);
                     break;
+#endif
 #endif
                 default:
                     ret = GNUTLS_E_ALGO_NOT_SUPPORTED;
@@ -4889,17 +5154,25 @@ static int pk_algo_to_alg_id(gnutls_pk_algorithm_t algo)
         case GNUTLS_PK_ECDSA:
             return ECDSAk;
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
         case GNUTLS_PK_EDDSA_ED25519:
             return ED25519k;
+#endif
+#if defined(HAVE_ED448)
         case GNUTLS_PK_EDDSA_ED448:
             return ED448k;
+#endif
+#if defined(HAVE_CURVE25519)
         case GNUTLS_PK_ECDH_X25519:
             return X25519k;
+#endif
+#if defined(HAVE_CURVE448)
         case GNUTLS_PK_ECDH_X448:
             return X448k;
 #endif
+#endif
         default:
-            return 0;
+            return ANONk;
     }
 }
 
@@ -4910,19 +5183,34 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
 {
     int ret;
     int algId = pk_algo_to_alg_id(ctx->algo);
+    int derAlgId = ANONk;
+    word32 params = 0;
 
     WGW_FUNC_ENTER();
 
     *key_found = 0;
 
-    if (algId == 0) {
-        ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &algId);
-        if (ret != 0) {
-            wc_FreeRng(&ctx->rng);
-            gnutls_free(ctx);
-            WGW_ERROR("could not determine public key type from certificate");
-            return GNUTLS_E_ALGO_NOT_SUPPORTED;
-        }
+    ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &derAlgId,
+        &params);
+    if (ret != 0 && algId == ANONk) {
+        wc_FreeRng(&ctx->rng);
+        gnutls_free(ctx);
+        WGW_ERROR("could not determine public key type from certificate");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+    if (algId == ANONk) {
+        algId = derAlgId;
+    }
+    else if ((derAlgId == RSAPSSk && algId == RSAk) || 
+             (derAlgId == RSAk && algId == RSAPSSk)) {
+        ; /* Keep algId */
+    }
+    else if (derAlgId != ANONk && derAlgId != algId) {
+        wc_FreeRng(&ctx->rng);
+        gnutls_free(ctx);
+        WGW_ERROR("algorithm found (%d) doesn't match context algorithm (%d)",
+            derAlgId, algId);
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
     switch (algId) {
@@ -4943,26 +5231,34 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
                 key_found);
             break;
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
         case ED25519k:
             WGW_LOG("Ed25519 public key");
             ret = wolfssl_ed25519_import_public(ctx, publicKeyDer,
                 publicKeySize, key_found);
             break;
+#endif
+#if defined(HAVE_ED448)
         case ED448k:
             WGW_LOG("Ed448 public key");
             ret = wolfssl_ed448_import_public(ctx, publicKeyDer, publicKeySize,
                 key_found);
             break;
+#endif
+#if defined(HAVE_CURVE25519)
         case X25519k:
             WGW_LOG("X25519 public key");
             ret = wolfssl_x25519_import_public(ctx, publicKeyDer, publicKeySize,
                 key_found);
             break;
+#endif
+#if defined(HAVE_CURVE448)
         case X448k:
             WGW_LOG("X448 public key");
             ret = wolfssl_x448_import_public(ctx, publicKeyDer, publicKeySize,
                 key_found);
             break;
+#endif
 #endif
         case DHk:
             WGW_LOG("DH public key");
@@ -4985,29 +5281,37 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
     }
 
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
     /* Try Ed25519 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_ed25519_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+#endif
 
+#if defined(HAVE_ED448)
     /* Try Ed448 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_ed448_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+#endif
 
+#if defined(HAVE_CURVE25519)
     /* Try X25519 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_x25519_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+#endif
 
+#if defined(HAVE_CURVE448)
     /* Try X448 */
     if (!*key_found && ret == 0) {
         ret = wolfssl_x448_import_public(ctx, publicKeyDer, publicKeySize,
             key_found);
     }
+#endif
 #endif
 
     if (!*key_found) {
@@ -5546,6 +5850,7 @@ static int wolfssl_pk_sign_hash_ecdsa(struct wolfssl_pk_ctx *ctx,
 }
 
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
 static int wolfssl_pk_sign_hash_ed25519(struct wolfssl_pk_ctx *ctx,
     const gnutls_datum_t *hash_data, gnutls_datum_t *signature)
 {
@@ -5575,7 +5880,9 @@ static int wolfssl_pk_sign_hash_ed25519(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_ED448)
 static int wolfssl_pk_sign_hash_ed448(struct wolfssl_pk_ctx *ctx,
     const gnutls_datum_t *hash_data, gnutls_datum_t *signature)
 {
@@ -5606,6 +5913,7 @@ static int wolfssl_pk_sign_hash_ed448(struct wolfssl_pk_ctx *ctx,
     return 0;
 }
 #endif
+#endif
 
 /* checks if the bits meet the minum requirements in FIPS mode */
 #if defined(HAVE_FIPS)
@@ -5628,12 +5936,17 @@ static int wolfssl_check_rsa_bits(int bits, int operation) {
 /* sign a hash with a private key */
 static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
     gnutls_digest_algorithm_t hash_algo, const gnutls_datum_t *hash_data,
-    gnutls_datum_t *signature, unsigned int flags, gnutls_sign_algorithm_t algo)
+    gnutls_datum_t *signature, unsigned int flags, gnutls_sign_algorithm_t algo,
+    void *params)
 {
-    (void)signer;
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret = 0;
     int hash_type;
+    gnutls_pk_algorithm_t pk_algo;
+    gnutls_x509_spki_st *spki = (gnutls_x509_spki_st *)params;
+
+    (void)signer;
+    (void)spki;
 
     WGW_FUNC_ENTER();
     WGW_LOG("hash algorithm %d", hash_algo);
@@ -5669,6 +5982,7 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
     }
 #endif
 
+    pk_algo = ctx->algo;
     /* check if any RSA-PSS flags/arguments were provided, and if so, update the
      * algo */
     if ((flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS) ||
@@ -5679,10 +5993,10 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA384 ||
         algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA512) {
         WGW_LOG("setting to rsa-pss");
-        ctx->algo = GNUTLS_PK_RSA_PSS;
+        pk_algo = GNUTLS_PK_RSA_PSS;
     }
 
-    if (ctx->algo == GNUTLS_PK_RSA) {
+    if (pk_algo == GNUTLS_PK_RSA) {
 #if defined(HAVE_FIPS)
         int bits = (wc_RsaEncryptSize(&ctx->key.rsa) * 8);
         WGW_LOG("bits: %d", bits);
@@ -5696,22 +6010,25 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_RSA_PSS) {
-#if defined(HAVE_FIPS)
+    } else if (pk_algo == GNUTLS_PK_RSA_PSS) {
         int bits = (wc_RsaEncryptSize(&ctx->key.rsa) * 8);
         WGW_LOG("bits: %d", bits);
+#if defined(HAVE_FIPS)
         /* we check if the bits meet the minimum requirement */
         if (!wolfssl_check_rsa_bits(bits, SIGN_OP)) {
             WGW_LOG("unusual bits size: %d", bits);
             return GNUTLS_FIPS140_OP_NOT_APPROVED;
         }
 #endif
+        if (hash_algo != rsa_hash_from_bits(bits)) {
+            return GNUTLS_E_CONSTRAINT_ERROR;
+        }
         ret = wolfssl_pk_sign_hash_rsa_pss(ctx, hash_type, hash_data,
             signature);
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_ECDSA) {
+    } else if (pk_algo == GNUTLS_PK_ECDSA) {
 #if defined(HAVE_FIPS)
         if (!is_hash_type_fips(hash_type, SIGN_OP)) {
             WGW_LOG("hash type not approved for signing");
@@ -5723,22 +6040,24 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         if (ret != 0) {
             return ret;
         }
-    }
 #if !defined(HAVE_FIPS)
-    else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+#if defined(HAVE_ED25519)
+    } else if (pk_algo == GNUTLS_PK_EDDSA_ED25519) {
         ret = wolfssl_pk_sign_hash_ed25519(ctx, hash_data, signature);
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+#endif
+#if defined(HAVE_ED448)
+    } else if (pk_algo == GNUTLS_PK_EDDSA_ED448) {
         ret = wolfssl_pk_sign_hash_ed448(ctx, hash_data, signature);
         if (ret != 0) {
             return ret;
         }
-    }
 #endif
-    else {
-        WGW_ERROR("unsupported algorithm for hash signing: %d\n", ctx->algo);
+#endif
+    } else {
+        WGW_ERROR("unsupported algorithm for hash signing: %d\n", algo);
         return GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -5758,8 +6077,8 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
  * @return GNUTLS status code (0 on success)
  */
 static int verify_rsa_pss(int hash_type, const gnutls_datum_t *msg_data,
-    const gnutls_datum_t *sig, gnutls_digest_algorithm_t hash, RsaKey *rsa_key,
-    int hash_flag)
+    const gnutls_datum_t *sig, gnutls_digest_algorithm_t hash, int salt_size,
+    RsaKey *rsa_key, int hash_flag)
 {
     int ret;
     int mgf = 0;
@@ -5776,6 +6095,7 @@ static int verify_rsa_pss(int hash_type, const gnutls_datum_t *msg_data,
     }
 
     WGW_LOG("hash_len: %d", hash_len);
+    WGW_LOG("salt_size: %d", salt_size);
 
     if (hash_flag) {
         /* Allocate memory for the digest */
@@ -5809,8 +6129,8 @@ static int verify_rsa_pss(int hash_type, const gnutls_datum_t *msg_data,
     }
 
     /* Verify using RSA-PSS */
-    ret = wc_RsaPSS_Verify(sig->data, sig->size, verify_buf, RSA_PSS_SIG_SIZE,
-        hash_type, mgf, rsa_key);
+    ret = wc_RsaPSS_Verify_ex(sig->data, sig->size, verify_buf,
+        RSA_PSS_SIG_SIZE, hash_type, mgf, salt_size, rsa_key);
     if (ret <= 0) {
         WGW_ERROR("RSA-PSS verify failed");
         if (computed_digest) gnutls_free(computed_digest);
@@ -5819,8 +6139,8 @@ static int verify_rsa_pss(int hash_type, const gnutls_datum_t *msg_data,
     }
 
     /* Verify using RSA-PSS */
-    ret = wc_RsaPSS_VerifyCheck(sig->data, sig->size, verify_buf,
-        RSA_PSS_SIG_SIZE, digest, hash_len, hash_type, mgf, rsa_key);
+    ret = wc_RsaPSS_CheckPadding_ex(digest, hash_len, verify_buf, ret,
+        hash_type, salt_size, wc_RsaEncryptSize(rsa_key) * 8);
 
     /* Free resources */
     if (computed_digest)
@@ -5916,6 +6236,15 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
     gnutls_digest_algorithm_t hash_gnutls;
     int hash_size;
     int pss = 0;
+#ifdef WOLFSSL_PSS_SALT_LEN_DISCOVER
+    int salt_size = RSA_PSS_SALT_LEN_DISCOVER;
+#else
+    int salt_size = RSA_PSS_SALT_LEN_DEFAULT;
+#endif
+
+    if (ctx->algo == GNUTLS_PK_RSA_PSS && ctx->spki.salt_size != 0) {
+        salt_size = ctx->spki.salt_size;
+    }
 
     /* Determine hash algorithm and if using PSS */
     switch (algo) {
@@ -6034,7 +6363,7 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
             hash_size);
     }
     if (pss || ret < 0) {
-        ret = verify_rsa_pss(hash_type, hash, signature, hash_gnutls,
+        ret = verify_rsa_pss(hash_type, hash, signature, hash_gnutls, salt_size,
             &ctx->key.rsa, 0);
     }
 
@@ -6052,13 +6381,15 @@ static int wolfssl_pk_verify_hash_rsa(struct wolfssl_pk_ctx *ctx,
 /* verify a hash signature with a public key */
 static int wolfssl_pk_verify_hash(void *_ctx, const void *key,
     gnutls_sign_algorithm_t algo, const gnutls_datum_t *hash,
-    const gnutls_datum_t *signature)
+    const gnutls_datum_t *signature, void *params)
 {
-    (void)key;
-
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
     int verify_result = 0;
+    gnutls_x509_spki_st *spki = (gnutls_x509_spki_st *)params;
+
+    (void)key;
+    (void)spki;
 
     WGW_FUNC_ENTER();
     WGW_LOG("algorithm %d", algo);
@@ -6339,6 +6670,7 @@ static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
 }
 
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
 static int wolfssl_pk_generate_ed25519(struct wolfssl_pk_ctx *ctx)
 {
     int ret;
@@ -6364,7 +6696,9 @@ static int wolfssl_pk_generate_ed25519(struct wolfssl_pk_ctx *ctx)
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_ED448)
 static int wolfssl_pk_generate_ed448(struct wolfssl_pk_ctx *ctx)
 {
     int ret;
@@ -6390,7 +6724,9 @@ static int wolfssl_pk_generate_ed448(struct wolfssl_pk_ctx *ctx)
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_pk_generate_x25519(struct wolfssl_pk_ctx *ctx)
 {
     int ret;
@@ -6417,7 +6753,9 @@ static int wolfssl_pk_generate_x25519(struct wolfssl_pk_ctx *ctx)
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE448)
 static int wolfssl_pk_generate_x448(struct wolfssl_pk_ctx *ctx)
 {
     int ret;
@@ -6443,6 +6781,7 @@ static int wolfssl_pk_generate_x448(struct wolfssl_pk_ctx *ctx)
 
    return 0;
 }
+#endif
 #endif
 
 static int wolfssl_pk_generate_dh(struct wolfssl_pk_ctx *ctx,
@@ -6618,35 +6957,41 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         if (ret != 0) {
             return ret;
         }
-    }
 #if !defined(HAVE_FIPS)
-    else if (algo == GNUTLS_PK_EDDSA_ED25519) {
+#if defined(HAVE_ED25519)
+    } else if (algo == GNUTLS_PK_EDDSA_ED25519) {
         WGW_LOG("ED25519");
         ret = wolfssl_pk_generate_ed25519(ctx);
         if (ret != 0) {
             return ret;
         }
+#endif
+#if defined(HAVE_ED448)
     } else if (algo == GNUTLS_PK_EDDSA_ED448) {
         WGW_LOG("ED448");
         ret = wolfssl_pk_generate_ed448(ctx);
         if (ret != 0) {
             return ret;
         }
+#endif
+#if defined(HAVE_CURVE25519)
     } else if (algo == GNUTLS_PK_ECDH_X25519) {
         WGW_LOG("X25519");
         ret = wolfssl_pk_generate_x25519(ctx);
         if (ret != 0) {
             return ret;
         }
+#endif
+#if defined(HAVE_CURVE448)
     } else if (algo == GNUTLS_PK_ECDH_X448) {
         WGW_LOG("X448");
         ret = wolfssl_pk_generate_x448(ctx);
         if (ret != 0) {
             return ret;
         }
-    }
 #endif
-    else if (algo == GNUTLS_PK_DH) {
+#endif
+    } else if (algo == GNUTLS_PK_DH) {
         WGW_LOG("DH");
         ret = wolfssl_pk_generate_dh(ctx, bits, p, g, q);
         if (ret != 0) {
@@ -7182,7 +7527,8 @@ static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
 
 static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     gnutls_digest_algorithm_t hash, enum wc_HashType hash_type,
-    const gnutls_datum_t *msg_data, gnutls_datum_t *sig, gnutls_sign_algorithm_t algo)
+    const gnutls_datum_t *msg_data, gnutls_datum_t *sig,
+    gnutls_sign_algorithm_t algo)
 {
     int ret;
     /* Get the maximum signature size - typically the key size */
@@ -7191,6 +7537,7 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     int mgf = 0;
     int hash_len = 0;
     byte *sig_buf = gnutls_malloc(sig_buf_len);
+    int salt_size = RSA_PSS_SALT_LEN_DEFAULT;
 
     WGW_LOG("using RSA-PSS padding");
 
@@ -7203,6 +7550,17 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
             algo == GNUTLS_SIGN_RSA_SHA3_512) {
         return GNUTLS_E_CONSTRAINT_ERROR;
     }
+
+    if (ctx->spki.salt_size != 0) {
+        salt_size = ctx->spki.salt_size;
+    }
+    if (ctx->algo == GNUTLS_PK_RSA_PSS) {
+        WGW_LOG("key pk algorithm is GNUTLS_PK_RSA_PSS");
+    }
+    else {
+        WGW_LOG("key pk algorithm is GNUTLS_PK_RSA");
+    }
+    WGW_LOG("salt_size = %d", salt_size);
 
     if (!sig_buf) {
         WGW_ERROR("Memory allocation failed");
@@ -7239,8 +7597,8 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
         return GNUTLS_E_PK_SIGN_FAILED;
     }
 
-    ret = wc_RsaPSS_Sign(digest, hash_len, sig_buf, sig_buf_len, hash_type, mgf,
-        &ctx->key.rsa, &ctx->rng);
+    ret = wc_RsaPSS_Sign_ex(digest, hash_len, sig_buf, sig_buf_len, hash_type,
+        mgf, salt_size, &ctx->key.rsa, &ctx->rng);
     if (ret < 0) {
         WGW_ERROR("RSA-PSS signing failed with code %d", ret);
         gnutls_free(sig_buf);
@@ -7309,6 +7667,7 @@ static int wolfssl_pk_sign_ecdsa(struct wolfssl_pk_ctx *ctx,
 }
 
 #if !defined(HAVE_FIPS)
+#if defined(HAVE_ED25519)
 static int wolfssl_pk_sign_ed25519(struct wolfssl_pk_ctx *ctx,
     const void *privkey, const gnutls_datum_t *msg_data, gnutls_datum_t *sig)
 {
@@ -7391,7 +7750,9 @@ static int wolfssl_pk_sign_ed25519(struct wolfssl_pk_ctx *ctx,
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_ED448)
 static int wolfssl_pk_sign_ed448(struct wolfssl_pk_ctx *ctx,
     const void *privkey, const gnutls_datum_t *msg_data, gnutls_datum_t *sig)
 {
@@ -7476,21 +7837,25 @@ static int wolfssl_pk_sign_ed448(struct wolfssl_pk_ctx *ctx,
     return ret;
 }
 #endif
+#endif
 
 /* sign message */
 static int wolfssl_pk_sign(void *_ctx, const void *privkey,
     gnutls_digest_algorithm_t hash, const void *data, const void *signature,
-    unsigned int flags, gnutls_sign_algorithm_t algo)
+    unsigned int flags, gnutls_sign_algorithm_t algo, void* params)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
     enum wc_HashType hash_type;
     const gnutls_datum_t *msg_data = (const gnutls_datum_t *)data;
     gnutls_datum_t *sig = (gnutls_datum_t *)signature;
+    gnutls_pk_algorithm_t pk_algo;
+    gnutls_x509_spki_st *spki = (gnutls_x509_spki_st *)params;
 
 #if !defined(HAVE_ED25519) || !defined(HAVE_ED448)
     (void)privkey;
 #endif
+    (void)spki;
 
     WGW_FUNC_ENTER();
     WGW_LOG("hash %d", hash);
@@ -7569,6 +7934,7 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
             return GNUTLS_E_INVALID_REQUEST;
     }
 
+    pk_algo = ctx->algo;
     /* check if any RSA-PSS flags/arguments were provided, and if so, update the
      * algo */
     if ((flags & GNUTLS_PRIVKEY_SIGN_FLAG_RSA_PSS) ||
@@ -7578,22 +7944,32 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
             algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA256 ||
             algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA384 ||
             algo == GNUTLS_SIGN_RSA_PSS_RSAE_SHA512) {
-        ctx->algo = GNUTLS_PK_RSA_PSS;
+        pk_algo = GNUTLS_PK_RSA_PSS;
     }
 
-    if (ctx->algo == GNUTLS_PK_RSA) {
+    if (pk_algo == GNUTLS_PK_RSA) {
         WGW_LOG("signing with RSA");
         ret = wolfssl_pk_sign_rsa(ctx, hash_type, msg_data, sig);
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_RSA_PSS) {
+    } else if (pk_algo == GNUTLS_PK_RSA_PSS) {
+        int bits;
+
         WGW_LOG("signing with RSA-PSS");
-        ret = wolfssl_pk_sign_rsa_pss(ctx, hash, hash_type, msg_data, sig, algo);
+        bits = (wc_RsaEncryptSize(&ctx->key.rsa) * 8);
+        WGW_LOG("bits: %d", bits);
+        if (ctx->algo == GNUTLS_PK_RSA_PSS) {
+            if (hash != rsa_hash_from_bits(bits)) {
+                return GNUTLS_E_CONSTRAINT_ERROR;
+            }
+        }
+        ret = wolfssl_pk_sign_rsa_pss(ctx, hash, hash_type, msg_data, sig,
+            algo);
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_ECDSA) {
+    } else if (pk_algo == GNUTLS_PK_ECDSA) {
         WGW_LOG("signing with ECDSA");
 #if defined(WOLFSSL_ECDSA_DETERMINISTIC_K)
         if ((flags & GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE) != 0) {
@@ -7610,24 +7986,26 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
             wc_ecc_set_deterministic_ex(&ctx->key.ecc, 1, hash_type);
         }
 #endif
-    }
 #if !defined(HAVE_FIPS)
-    else if (ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+#if defined(HAVE_ED25519)
+    } else if (pk_algo == GNUTLS_PK_EDDSA_ED25519) {
         WGW_LOG("signing with EDDSA ed25519");
         ret = wolfssl_pk_sign_ed25519(ctx, privkey, msg_data, sig);
         if (ret != 0) {
             return ret;
         }
-    } else if (ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+#endif
+#if defined(HAVE_ED448)
+    } else if (pk_algo == GNUTLS_PK_EDDSA_ED448) {
         WGW_LOG("signing with EDDSA ed448");
         ret = wolfssl_pk_sign_ed448(ctx, privkey, msg_data, sig);
         if (ret != 0) {
             return ret;
         }
-    }
 #endif
-    else {
-        WGW_ERROR("unsupported algorithm for signing: %d", ctx->algo);
+#endif
+    } else {
+        WGW_ERROR("unsupported algorithm for signing: %d", pk_algo);
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
@@ -7639,14 +8017,16 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
 /* verify message */
 static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
     gnutls_sign_algorithm_t algo, const void *data, const void *signature,
-    unsigned int flags)
+    unsigned int flags, void *params)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
+    gnutls_x509_spki_st *spki = (gnutls_x509_spki_st *)params;
 
 #if !defined(HAVE_ED25519) || !defined(HAVE_ED448)
     (void)pubkey;
 #endif
+    (void)spki;
 
     WGW_FUNC_ENTER();
     WGW_LOG("algorithm %d", algo);
@@ -7843,6 +8223,15 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
         enum wc_HashType hash_type;
         gnutls_digest_algorithm_t hash;
         int pss = 0;
+    #ifdef WOLFSSL_PSS_SALT_LEN_DISCOVER
+        int salt_size = RSA_PSS_SALT_LEN_DISCOVER;
+    #else
+        int salt_size = RSA_PSS_SALT_LEN_DEFAULT;
+    #endif
+
+        if (ctx->spki.salt_size != 0) {
+            salt_size = ctx->spki.salt_size;
+        }
 
         /* Determine hash algorithm and if using PSS */
         switch (algo) {
@@ -7900,6 +8289,9 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             case GNUTLS_SIGN_RSA_PSS_RSAE_SHA256:
                 hash_type = WC_HASH_TYPE_SHA256;
                 hash = GNUTLS_DIG_SHA256;
+                if ((flags & GNUTLS_VERIFY_RSA_PSS_FIXED_SALT_LENGTH) != 0) {
+                    salt_size = WC_SHA256_DIGEST_SIZE;
+                }
                 pss = 1;
                 WGW_LOG("hash detected SHA256 (PSS)");
                 break;
@@ -7907,6 +8299,9 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             case GNUTLS_SIGN_RSA_PSS_RSAE_SHA384:
                 hash_type = WC_HASH_TYPE_SHA384;
                 hash = GNUTLS_DIG_SHA384;
+                if ((flags & GNUTLS_VERIFY_RSA_PSS_FIXED_SALT_LENGTH) != 0) {
+                    salt_size = WC_SHA384_DIGEST_SIZE;
+                }
                 pss = 1;
                 WGW_LOG("hash detected SHA384 (PSS)");
                 break;
@@ -7914,6 +8309,9 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
             case GNUTLS_SIGN_RSA_PSS_RSAE_SHA512:
                 hash_type = WC_HASH_TYPE_SHA512;
                 hash = GNUTLS_DIG_SHA512;
+                if ((flags & GNUTLS_VERIFY_RSA_PSS_FIXED_SALT_LENGTH) != 0) {
+                    salt_size = WC_SHA512_DIGEST_SIZE;
+                }
                 pss = 1;
                 WGW_LOG("hash detected SHA512 (PSS)");
                 break;
@@ -7928,11 +8326,12 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
 
         /* Import the public key if needed */
         if (mp_iszero(&ctx->key.rsa.n) || mp_iszero(&ctx->key.rsa.e)) {
+            word32 idx = 0;
             WGW_LOG("public key is not set, importing now");
 
             /* Import the public key from DER */
-            ret = wc_RsaPublicKeyDecode(ctx->pub_data, &(word32){0},
-                &ctx->key.rsa, ctx->pub_data_len);
+            ret = wc_RsaPublicKeyDecode(ctx->pub_data, &idx, &ctx->key.rsa,
+                ctx->pub_data_len);
             if (ret != 0) {
                 WGW_ERROR("RSA public key import failed with code %d", ret);
 #if defined(HAVE_FIPS)
@@ -7944,8 +8343,8 @@ static int wolfssl_pk_verify(void *_ctx, const void *pubkey,
 
         if (pss) {
             /* First try RSA-PSS verification */
-            ret = verify_rsa_pss(hash_type, msg_data, sig, hash, &ctx->key.rsa,
-                1);
+            ret = verify_rsa_pss(hash_type, msg_data, sig, hash, salt_size,
+                &ctx->key.rsa, 1);
         }
 
         /* If RSA-PSS fails, fall back to PKCS#1 v1.5 */
@@ -8716,27 +9115,38 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
         }
         priv_ctx->rng_initialized = 1;
 
+#if defined(HAVE_ED25519)
         if (curve == GNUTLS_ECC_CURVE_ED25519) {
             WGW_LOG("Ed25519");
             priv_ctx->algo = GNUTLS_PK_EDDSA_ED25519;
             ret = wc_ed25519_import_private_only(k_datum->data, k_datum->size,
                 &priv_ctx->key.ed25519);
-        } else if (curve == GNUTLS_ECC_CURVE_ED448) {
+        } else
+#endif
+#if defined(HAVE_ED448)
+        if (curve == GNUTLS_ECC_CURVE_ED448) {
             WGW_LOG("Ed448");
             priv_ctx->algo = GNUTLS_PK_EDDSA_ED448;
             ret = wc_ed448_import_private_only(k_datum->data, k_datum->size,
                 &priv_ctx->key.ed448);
-        } else if (curve == GNUTLS_ECC_CURVE_X25519) {
+        }
+#endif
+#if defined(HAVE_CURVE25519)
+        if (curve == GNUTLS_ECC_CURVE_X25519) {
             WGW_LOG("Ed25519");
             priv_ctx->algo = GNUTLS_PK_ECDH_X25519;
             ret = wc_curve25519_import_private_ex(k_datum->data, k_datum->size,
                 &priv_ctx->key.x25519, EC25519_LITTLE_ENDIAN);
-        } else if (curve == GNUTLS_ECC_CURVE_X448) {
+        }
+#endif
+#if defined(HAVE_CURVE448)
+        if (curve == GNUTLS_ECC_CURVE_X448) {
             WGW_LOG("Ed448");
             priv_ctx->algo = GNUTLS_PK_ECDH_X448;
             ret = wc_curve448_import_private_ex(k_datum->data, k_datum->size,
                 &priv_ctx->key.x448, EC448_LITTLE_ENDIAN);
         }
+#endif
         if (ret == 0) {
             priv_ctx->initialized = 1;
             *(struct wolfssl_pk_ctx **)ctx = priv_ctx;
@@ -8864,27 +9274,38 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
         }
         pub_ctx->rng_initialized = 1;
 
+#if defined(HAVE_ED25519)
         if (curve == GNUTLS_ECC_CURVE_ED25519) {
             WGW_LOG("Ed25519");
             pub_ctx->algo = GNUTLS_PK_EDDSA_ED25519;
             ret = wolfssl_ed25519_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
-        } else if (curve == GNUTLS_ECC_CURVE_ED448) {
+        }
+#endif
+#if defined(HAVE_ED448)
+        if (curve == GNUTLS_ECC_CURVE_ED448) {
             WGW_LOG("Ed448");
             pub_ctx->algo = GNUTLS_PK_EDDSA_ED448;
             ret = wolfssl_ed448_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
-        } else if (curve == GNUTLS_ECC_CURVE_X25519) {
+        }
+#endif
+#if defined(HAVE_CURVE25519)
+        if (curve == GNUTLS_ECC_CURVE_X25519) {
             WGW_LOG("Ed25519");
             pub_ctx->algo = GNUTLS_PK_ECDH_X25519;
             ret = wolfssl_x25519_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
-        } else if (curve == GNUTLS_ECC_CURVE_X448) {
+        }
+#endif
+#if defined(HAVE_CURVE448)
+        if (curve == GNUTLS_ECC_CURVE_X448) {
             WGW_LOG("Ed448");
             pub_ctx->algo = GNUTLS_PK_ECDH_X448;
             ret = wolfssl_x448_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
         }
+#endif
         if (ret == 0) {
             pub_ctx->initialized = 1;
             *(struct wolfssl_pk_ctx **)ctx = pub_ctx;
@@ -9136,6 +9557,8 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
      * so we do the init and the generate of the key pair directly in the
      * wolfssl_pk_generate function. */
     .get_bits = wolfssl_pk_get_bits,
+    .get_spki = wolfssl_pk_get_spki,
+    .set_spki = wolfssl_pk_set_spki,
     .generate_backend = wolfssl_pk_generate,
     .import_pubkey_backend = wolfssl_pk_import_pub,
     .export_pubkey_backend = wolfssl_pk_export_pub,
