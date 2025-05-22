@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+if [ "$WOLFSSL_INSTALL" = "" ]; then
+    WOLFSSL_INSTALL=/opt/wolfssl
+fi
+if [ "$GNUTLS_INSTALL" = "" ]; then
+    GNUTLS_INSTALL=/opt/gnutls
+fi
+
 # Check if FIPS mode is enabled via command line argument
 FIPS_MODE=0
 if [ "$1" = "fips" ]; then
@@ -58,7 +65,7 @@ if [ $FIPS_MODE -eq 1 ]; then
 
     cd fips-v5-checkout
 
-    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER' --enable-fips=v5
+    ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER' --enable-fips=v5
 
     make
 
@@ -82,7 +89,7 @@ else
     cd ./wolfssl
     ./autogen.sh
 
-    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER'
+    ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER'
 
     make
     sudo make install
@@ -109,7 +116,7 @@ if [ "$OS" = "macos" ]; then
     echo "Configuring GnuTLS for macOS..."
 
     # Base configuration options
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
 
     # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then
@@ -130,7 +137,7 @@ else
     echo "Configuring GnuTLS for Linux..."
 
     # Base configuration options
-    CONFIG_OPTS="--prefix=/opt/gnutls/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
+    CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
 
     # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then
