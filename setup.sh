@@ -58,7 +58,7 @@ if [ $FIPS_MODE -eq 1 ]; then
 
     cd fips-v5-checkout
 
-    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA' --enable-fips=v5
+    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER' --enable-fips=v5
 
     make
 
@@ -82,7 +82,7 @@ else
     cd ./wolfssl
     ./autogen.sh
 
-    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA'
+    ./configure --prefix=/opt/wolfssl/ CC=clang --enable-cmac --enable-ed25519 --enable-ed448 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER'
 
     make
     sudo make install
