@@ -5561,6 +5561,18 @@ static int wolfssl_pk_verify_privkey_params(void *_ctx)
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret = 0;
 
+    WGW_FUNC_ENTER();
+
+    if (!ctx || !ctx->initialized) {
+        WGW_LOG("ctx not initialized");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!wolfssl_pk_supported[ctx->algo]) {
+        WGW_LOG("algorithm not supported");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
     switch (ctx->algo) {
         case GNUTLS_PK_RSA:
         case GNUTLS_PK_RSA_PSS:
