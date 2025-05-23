@@ -1,0 +1,128 @@
+name: wget Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        wget_ref: [ 'master', 'v1.21.3', 'v1.24.5' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install wget dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y autoconf-archive libhttp-daemon-perl
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build wget at ${{ matrix.wget_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: mirror/wget
+          ref: ${{ matrix.wget_ref }}
+          path: wget
+
+      - name: Configure wget
+        working-directory: wget
+        # Default gnulib repository is:
+        #   https://git.savannah.gnu.org/git/gnulib
+        # This has not been working lately:
+        #   The requested URL returned error: 502.
+        # Manually checkout gnulib from GitHub
+        run: |
+          git clone https://github.com/coreutils/gnulib gnulib
+          ./bootstrap
+          autoreconf -fi
+          ./configure --with-ssl=gnutls --with-libgnutls-prefix=/opt/gnutls
+
+      - name: Make wget
+        working-directory: wget
+        run: |
+          make -j $(nproc)
+
+      # Get python 3.11 for old versions of wget
+      - name: Install pyenv dependencies
+        if: matrix.wget_ref == 'v1.21.3'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
+            libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
+            libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+            libffi-dev liblzma-dev
+
+      - name: Install pyenv
+        if: matrix.wget_ref == 'v1.21.3'
+        run: |
+          curl https://pyenv.run | bash
+
+      - name: Test wget
+        working-directory: wget
+        run: |
+          # If Python 3.11 needed, reinitialize pyenv
+          if [ "${{ matrix.wget_ref }}" = "v1.21.3" ]; then
+            export PYENV_ROOT="$HOME/.pyenv"
+            export PATH="$PYENV_ROOT/bin:$PATH"
+            eval "$(pyenv init --path)"
+            eval "$(pyenv virtualenv-init -)"
+            pyenv install 3.11.9
+            pyenv global 3.11.9
+            python --version
+          fi
+          make check
+          find . -name '*.log' | xargs grep wgw
