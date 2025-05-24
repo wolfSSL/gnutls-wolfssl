@@ -364,7 +364,8 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_generate_func generate_backend;
     gnutls_pk_import_pubkey_func import_pubkey_backend;
     gnutls_pk_export_pubkey_func export_pubkey_backend;
-    gnutls_pk_export_privkey_func export_privkey_backend;
+    gnutls_pk_export_privkey_x509_func export_privkey_x509_backend;
+    gnutls_pk_export_pubkey_x509_func export_pubkey_x509_backend;
     gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
     gnutls_pk_verify_privkey_params_func verify_privkey_params_backend;
     gnutls_pk_verify_pubkey_params_func verify_pubkey_params_backend;

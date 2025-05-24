@@ -5561,6 +5561,18 @@ static int wolfssl_pk_verify_privkey_params(void *_ctx)
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret = 0;
 
+    WGW_FUNC_ENTER();
+
+    if (!ctx || !ctx->initialized) {
+        WGW_LOG("ctx not initialized");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!wolfssl_pk_supported[ctx->algo]) {
+        WGW_LOG("algorithm not supported");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
     switch (ctx->algo) {
         case GNUTLS_PK_RSA:
         case GNUTLS_PK_RSA_PSS:
@@ -7447,8 +7459,64 @@ static int wolfssl_ecc_export_priv(struct wolfssl_pk_ctx *priv_ctx,
     return 0;
 }
 
-static int wolfssl_pk_export_priv(void *_priv_ctx, const void *privkey)
+#if defined(HAVE_ED25519)
+static int wolfssl_ed25519_export_priv(struct wolfssl_pk_ctx *priv_ctx,
+    gnutls_datum_t *priv)
 {
+    int ret;
+
+    ret = wc_Ed25519KeyToDer(&priv_ctx->key.ed25519, NULL, 0);
+    if (ret < 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    priv->data = gnutls_malloc(ret);
+    if (!priv->data) {
+        WGW_ERROR("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ret = wc_Ed25519PrivateKeyToDer(&priv_ctx->key.ed25519, priv->data, ret);
+    if (ret < 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    priv->size = ret;
+
+    return 0;
+}
+#endif
+
+#if defined(HAVE_ED448)
+static int wolfssl_ed448_export_priv(struct wolfssl_pk_ctx *priv_ctx,
+    gnutls_datum_t *priv)
+{
+    int ret;
+
+    ret = wc_Ed448KeyToDer(&priv_ctx->key.ed448, NULL, 0);
+    if (ret < 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    priv->data = gnutls_malloc(ret);
+    if (!priv->data) {
+        WGW_ERROR("Memory allocation failed");
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
+    ret = wc_Ed448PrivateKeyToDer(&priv_ctx->key.ed448, priv->data, ret);
+    if (ret < 0) {
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    priv->size = ret;
+
+    return 0;
+}
+#endif
+
+/* Exports the private key in der format and stores it in the datum */
+static int wolfssl_pk_export_privkey_x509(void *_priv_ctx, const void *privkey) {
     struct wolfssl_pk_ctx *priv_ctx = _priv_ctx;
     gnutls_datum_t *priv = (gnutls_datum_t *)privkey;
     int ret;
@@ -7462,12 +7530,26 @@ static int wolfssl_pk_export_priv(void *_priv_ctx, const void *privkey)
 
     if (priv_ctx->algo == GNUTLS_PK_RSA ||
                priv_ctx->algo == GNUTLS_PK_RSA_PSS) {
+        WGW_LOG("RSA");
         ret = wolfssl_rsa_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
     } else if (priv_ctx->algo == GNUTLS_PK_ECDSA) {
+        WGW_LOG("ECC");
         ret = wolfssl_ecc_export_priv(priv_ctx, priv);
+        if (ret != 0) {
+            return ret;
+        }
+    } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+        WGW_LOG("ED25519");
+        ret = wolfssl_ed25519_export_priv(priv_ctx, priv);
+        if (ret != 0) {
+            return ret;
+        }
+    } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+        WGW_LOG("ED448");
+        ret = wolfssl_ed448_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
@@ -7479,6 +7561,110 @@ static int wolfssl_pk_export_priv(void *_priv_ctx, const void *privkey)
 
     return 0;
 }
+
+/* Exports the pubkey key in der format and stores it in the datum */
+static int wolfssl_pk_export_pubkey_x509(void *_pub_ctx, const void *pubkey) {
+    struct wolfssl_pk_ctx *pub_ctx = _pub_ctx;
+    gnutls_datum_t *pub = (gnutls_datum_t *)pubkey;
+    int ret;
+
+    WGW_FUNC_ENTER();
+
+    /* Check if pubkey parameter is provided */
+    if (!pubkey) {
+        WGW_ERROR("pubkey parameter is NULL");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (!pub_ctx || !pub_ctx->initialized) {
+        WGW_ERROR("invalid context pointer");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (pub_ctx->algo == GNUTLS_PK_RSA ||
+            pub_ctx->algo == GNUTLS_PK_RSA_PSS) {
+        ret = wolfssl_rsa_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    } else if (pub_ctx->algo == GNUTLS_PK_ECDSA) {
+        ret = wolfssl_ecc_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#if defined(HAVE_ED25519)
+    else if (pub_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
+        ret = wolfssl_ed25519_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#endif
+#if defined(HAVE_ED448)
+    else if (pub_ctx->algo == GNUTLS_PK_EDDSA_ED448) {
+        ret = wolfssl_ed448_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#endif
+#if defined(HAVE_CURVE25519)
+    else if (pub_ctx->algo == GNUTLS_PK_ECDH_X25519) {
+        ret = wolfssl_x25519_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#endif
+#if defined(HAVE_CURVE448)
+    else if (pub_ctx->algo == GNUTLS_PK_ECDH_X448) {
+        ret = wolfssl_x448_export_pub(pub_ctx, pub, pub_ctx);
+        if (ret != 0) {
+            gnutls_free(pub_ctx);
+            return ret;
+        }
+    }
+#endif
+    else if (pub_ctx->algo == GNUTLS_PK_DH) {
+        WGW_LOG("DH");
+
+        /* Export DH public key to pub_ctx->pub_data using wc_DhExportKeyPair */
+        pub_ctx->pub_data_len = sizeof(pub_ctx->pub_data);
+        ret = wc_DhExportKeyPair(&pub_ctx->key.dh, NULL, NULL,
+                pub_ctx->pub_data, &pub_ctx->pub_data_len);
+        if (ret != 0) {
+            WGW_ERROR("DH public key export failed with code %d", ret);
+            gnutls_free(pub_ctx);
+            return GNUTLS_E_INVALID_REQUEST;
+        }
+
+        /* Allocate and copy public key to the external pubkey datum */
+        pub->data = gnutls_malloc(pub_ctx->pub_data_len);
+        if (!pub->data) {
+            WGW_ERROR("Memory allocation failed");
+            gnutls_free(pub_ctx);
+            return GNUTLS_E_MEMORY_ERROR;
+        }
+
+        XMEMCPY(pub->data, pub_ctx->pub_data, pub_ctx->pub_data_len);
+        pub->size = pub_ctx->pub_data_len;
+    } else {
+        WGW_ERROR("unsupported algorithm for exporting public key: %d",
+            pub_ctx->algo);
+        gnutls_free(pub_ctx);
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    WGW_LOG("public key exported successfully");
+    return 0;
+}
+
 
 static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
     enum wc_HashType hash_type, const gnutls_datum_t *msg_data,
@@ -9133,7 +9319,7 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
 #endif
 #if defined(HAVE_CURVE25519)
         if (curve == GNUTLS_ECC_CURVE_X25519) {
-            WGW_LOG("Ed25519");
+            WGW_LOG("X25519");
             priv_ctx->algo = GNUTLS_PK_ECDH_X25519;
             ret = wc_curve25519_import_private_ex(k_datum->data, k_datum->size,
                 &priv_ctx->key.x25519, EC25519_LITTLE_ENDIAN);
@@ -9141,7 +9327,7 @@ static int wolfssl_pk_import_privkey_ecdh_raw(void *ctx, int curve, const void *
 #endif
 #if defined(HAVE_CURVE448)
         if (curve == GNUTLS_ECC_CURVE_X448) {
-            WGW_LOG("Ed448");
+            WGW_LOG("X448");
             priv_ctx->algo = GNUTLS_PK_ECDH_X448;
             ret = wc_curve448_import_private_ex(k_datum->data, k_datum->size,
                 &priv_ctx->key.x448, EC448_LITTLE_ENDIAN);
@@ -9292,7 +9478,7 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
 #endif
 #if defined(HAVE_CURVE25519)
         if (curve == GNUTLS_ECC_CURVE_X25519) {
-            WGW_LOG("Ed25519");
+            WGW_LOG("X25519");
             pub_ctx->algo = GNUTLS_PK_ECDH_X25519;
             ret = wolfssl_x25519_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
@@ -9300,7 +9486,7 @@ static int wolfssl_pk_import_pubkey_ecdh_raw(void *ctx, int curve, const void *x
 #endif
 #if defined(HAVE_CURVE448)
         if (curve == GNUTLS_ECC_CURVE_X448) {
-            WGW_LOG("Ed448");
+            WGW_LOG("X448");
             pub_ctx->algo = GNUTLS_PK_ECDH_X448;
             ret = wolfssl_x448_import_public(pub_ctx, x_datum->data,
                 x_datum->size, &found);
@@ -9562,7 +9748,8 @@ static const gnutls_crypto_pk_st wolfssl_pk_struct = {
     .generate_backend = wolfssl_pk_generate,
     .import_pubkey_backend = wolfssl_pk_import_pub,
     .export_pubkey_backend = wolfssl_pk_export_pub,
-    .export_privkey_backend = wolfssl_pk_export_priv,
+    .export_privkey_x509_backend = wolfssl_pk_export_privkey_x509,
+    .export_pubkey_x509_backend = wolfssl_pk_export_pubkey_x509,
     .verify_privkey_params_backend = wolfssl_pk_verify_privkey_params,
     .verify_pubkey_params_backend = wolfssl_pk_verify_pubkey_params,
     .sign_backend = wolfssl_pk_sign,
