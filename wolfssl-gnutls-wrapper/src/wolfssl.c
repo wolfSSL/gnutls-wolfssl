@@ -76,7 +76,7 @@ void __attribute__((constructor)) wolfssl_init(void) {
 #endif
 
 /**
- * Log an error message that can be printed with printf formating.
+ * Log an error message that can be printed with printf formatting.
  *
  * @param [in] fmt   Format of string to print.
  * @param [in] args  Arguments to use when printing.
@@ -84,14 +84,14 @@ void __attribute__((constructor)) wolfssl_init(void) {
 #define WGW_ERROR(fmt, args...)    wgw_log(__LINE__, "ERROR: " fmt, ## args)
 
 /**
- * Log a message that can be printed with printf formating.
+ * Log a message that can be printed with printf formatting.
  *
  * @param [in] fmt   Format of string to print.
  * @param [in] args  Arguments to use when printing.
  */
 #define WGW_LOG(fmt, args...)    wgw_log(__LINE__, fmt, ## args)
 
-/** Wether logging output will be written. */
+/** Whether logging output will be written. */
 static int loggingEnabled = 0;
 
 /** File descriptor to log to. Set in _gnutls_wolfssl_init. */
@@ -146,7 +146,7 @@ enum {
 #define MAX_AES_KEY_SIZE    AES_256_KEY_SIZE
 /** Maximum authentication data. */
 #define MAX_AUTH_DATA       1024
-/** Maxium plaintext to encrypt for GCM  */
+/** Maximum plaintext to encrypt for GCM  */
 #define MAX_AES_GCM_PLAINTEXT ((1ULL << 36) - 32)
 /** Maximum RSA-PSS signature size */
 #define RSA_PSS_SIG_SIZE 512
@@ -431,7 +431,7 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 }
 
 /**
- * Get the key size for the cipher algorith,
+ * Get the key size for the cipher algorithm.
  *
  * @param [in] algorithm   GnuTLS cipher algorithm ID.
  * @return  Key size in bytes on success.
@@ -1032,7 +1032,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         /* If caller hasn't set tag then we are creating it. */
         if (!ctx->tag_set_ext) {
             /* Encrypt the ciphertext to get the plaintext.
-             * Tag will ahve been created on plaintext which is of no use.
+             * Tag will have been created on plaintext which is of no use.
              */
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
                 ctx->data_size, ctx->iv, ctx->iv_size,
@@ -5927,7 +5927,7 @@ static int wolfssl_pk_sign_hash_ed448(struct wolfssl_pk_ctx *ctx,
 #endif
 #endif
 
-/* checks if the bits meet the minum requirements in FIPS mode */
+/* checks if the bits meet the minimum requirements in FIPS mode */
 #if defined(HAVE_FIPS)
 static int wolfssl_check_rsa_bits(int bits, int operation) {
     switch(bits) {
@@ -7894,7 +7894,7 @@ static int wolfssl_pk_sign_ed25519(struct wolfssl_pk_ctx *ctx,
                 ret);
             return GNUTLS_E_PK_SIGN_FAILED;
         } else {
-            WGW_LOG("Succeess to derive public key before signing");
+            WGW_LOG("Success to derive public key before signing");
 
             ret = wc_ed25519_import_public(ctx->pub_data, ctx->pub_data_len,
                 &ctx->key.ed25519);
@@ -7980,7 +7980,7 @@ static int wolfssl_pk_sign_ed448(struct wolfssl_pk_ctx *ctx,
                 ret);
             return GNUTLS_E_PK_SIGN_FAILED;
         } else {
-            WGW_LOG("Succeess to derive public key before signing");
+            WGW_LOG("Success to derive public key before signing");
 
             ret = wc_ed448_import_public(ctx->pub_data, ctx->pub_data_len,
                 &ctx->key.ed448);
@@ -10046,7 +10046,7 @@ static void wolfssl_rnd_refresh(void *_ctx)
         if (ret != 0) {
             WGW_LOG("wolfSSL initialize of private random failed: %d", ret);
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-            /* Set context initialized to 0 to indicate it isn't avaialble. */
+            /* Set context initialized to 0 to indicate it isn't available. */
             ctx->initialized = 0;
         }
 
@@ -10058,7 +10058,7 @@ static void wolfssl_rnd_refresh(void *_ctx)
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
             wc_FreeRng(&ctx->priv_rng);
-            /* Set context initialized to 0 to indicate it isn't avaialble. */
+            /* Set context initialized to 0 to indicate it isn't available. */
             ctx->initialized = 0;
         }
     }
@@ -10596,7 +10596,7 @@ int _gnutls_wolfssl_init(void)
                    (XSTRCMP(str, "stderr") == 0)) {
             loggingFd = stderr;
         } else {
-            /* Try openning file for writing. */
+            /* Try opening file for writing. */
             FILE* fd = XFOPEN(str, "w");
             if (fd == XBADFILE) {
                 fprintf(stderr, "Failed to open log file: %s\n", str);
