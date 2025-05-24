@@ -1,0 +1,109 @@
+name: glib-networking Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        glib-networking_ref: [ 'master', '2.74.0', '2.80.1' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install glib-networking dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y meson ninja-build glib2.0-dev libproxy-dev gsettings-desktop-schemas gsettings-desktop-schemas-dev
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build glib-networking at ${{ matrix.glib-networking_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: GNOME/glib-networking
+          ref: ${{ matrix.glib-networking_ref }}
+          path: glib-networking
+
+      - name: Configure glib-networking
+        working-directory: glib-networking
+        run: |
+          mkdir build
+          cd build
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          if [ ${{ matrix.glib-networking_ref }} = '2.74.0' ]; then
+            meson setup -Dgnutls=enabled -Dlibproxy=disabled
+          else
+            meson setup -Dgnutls=enabled
+          fi
+
+      - name: Make glib-networking
+        working-directory: glib-networking
+        run: |
+          cd build
+          ninja
+
+      - name: Test glib-networking
+        working-directory: glib-networking
+        # Run all tests, 'meson test', when they are working
+        # mock PKCS#11 is failing with GnuTLS
+        run: |
+          cd build
+          if [ ${{ matrix.glib-networking_ref }} = '2.74.0' ]; then
+            meson test gnome file-database-gnutls environment certificate-gnutls
+          else
+            meson test gnome file-database-gnutls environment-libproxy certificate-gnutls
+          fi

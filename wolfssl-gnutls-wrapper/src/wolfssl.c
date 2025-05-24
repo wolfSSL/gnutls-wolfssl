@@ -76,7 +76,7 @@ void __attribute__((constructor)) wolfssl_init(void) {
 #endif
 
 /**
- * Log an error message that can be printed with printf formating.
+ * Log an error message that can be printed with printf formatting.
  *
  * @param [in] fmt   Format of string to print.
  * @param [in] args  Arguments to use when printing.
@@ -84,14 +84,14 @@ void __attribute__((constructor)) wolfssl_init(void) {
 #define WGW_ERROR(fmt, args...)    wgw_log(__LINE__, "ERROR: " fmt, ## args)
 
 /**
- * Log a message that can be printed with printf formating.
+ * Log a message that can be printed with printf formatting.
  *
  * @param [in] fmt   Format of string to print.
  * @param [in] args  Arguments to use when printing.
  */
 #define WGW_LOG(fmt, args...)    wgw_log(__LINE__, fmt, ## args)
 
-/** Wether logging output will be written. */
+/** Whether logging output will be written. */
 static int loggingEnabled = 0;
 
 /** File descriptor to log to. Set in _gnutls_wolfssl_init. */
@@ -146,7 +146,7 @@ enum {
 #define MAX_AES_KEY_SIZE    AES_256_KEY_SIZE
 /** Maximum authentication data. */
 #define MAX_AUTH_DATA       1024
-/** Maxium plaintext to encrypt for GCM  */
+/** Maximum plaintext to encrypt for GCM  */
 #define MAX_AES_GCM_PLAINTEXT ((1ULL << 36) - 32)
 /** Maximum RSA-PSS signature size */
 #define RSA_PSS_SIG_SIZE 512
@@ -177,13 +177,13 @@ struct wolfssl_cipher_ctx {
     } cipher;
 
     /** Indicates that this context as been initialized. */
-    int initialized:1;
+    unsigned int initialized:1;
     /** Indicates that we have been initialized for encryption. */
-    int enc_initialized:1;
+    unsigned int enc_initialized:1;
     /** Indicates that we have been initialized for decryption. */
-    int dec_initialized:1;
+    unsigned int dec_initialized:1;
     /** Indicates whether we are doing encryption or decryption.  */
-    int enc:1;
+    unsigned int enc:1;
 
     /** The GnuTLS cipher algorithm ID. */
     gnutls_cipher_algorithm_t algorithm;
@@ -209,9 +209,9 @@ struct wolfssl_cipher_ctx {
     /** Data size. */
     size_t data_size;
     /** Tag has been set. */
-    int tag_set:1;
+    unsigned int tag_set:1;
     /** Tag has been set from external source. */
-    int tag_set_ext:1;
+    unsigned int tag_set_ext:1;
 };
 
 /** Array of supported ciphers. */
@@ -431,7 +431,7 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 }
 
 /**
- * Get the key size for the cipher algorith,
+ * Get the key size for the cipher algorithm.
  *
  * @param [in] algorithm   GnuTLS cipher algorithm ID.
  * @return  Key size in bytes on success.
@@ -1032,7 +1032,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         /* If caller hasn't set tag then we are creating it. */
         if (!ctx->tag_set_ext) {
             /* Encrypt the ciphertext to get the plaintext.
-             * Tag will ahve been created on plaintext which is of no use.
+             * Tag will have been created on plaintext which is of no use.
              */
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
                 ctx->data_size, ctx->iv, ctx->iv_size,
@@ -2055,7 +2055,7 @@ struct wolfssl_cmac_ctx {
     /** Size of cached key. */
     size_t key_size;
     /** Setting of the key is required before hashing. */
-    int set_key:1;
+    unsigned int set_key:1;
 };
 
 /**
@@ -2392,7 +2392,7 @@ struct wolfssl_gmac_ctx {
     /** wolfSSL GMAC object. */
     Gmac gmac_ctx;
     /** Indicates that this context as been initialized. */
-    int initialized:1;
+    unsigned int initialized:1;
     /** The GnuTLS cipher algorithm ID. */
     gnutls_mac_algorithm_t algorithm;
     /** Nonce. */
@@ -2890,7 +2890,7 @@ struct wolfssl_hash_ctx {
     /** The GnuTLS digest algorithm ID. */
     gnutls_digest_algorithm_t algorithm;
     /** Indicates that this context as been initialized. */
-    int initialized:1;
+    unsigned int initialized:1;
 };
 
 /** Array of supported digests. */
@@ -3303,9 +3303,9 @@ struct wolfssl_shake_ctx {
     /** The GnuTLS digest algorithm ID. */
     gnutls_digest_algorithm_t algorithm;
     /** Indicates that this context as been initialized. */
-    int initialized:1;
+    unsigned int initialized:1;
     /** Started squeezing - no more absorb calls allowed. */
-    int squeezing:1;
+    unsigned int squeezing:1;
     /** Output block. */
     byte block[MAX_SHAKE_BLOCK_SIZE];
     /** Number of bytes of block already returned. */
@@ -4007,9 +4007,13 @@ static int wolfssl_pk_get_spki(void *_ctx, void *spki)
     struct wolfssl_pk_ctx *ctx = (struct wolfssl_pk_ctx *)_ctx;
 
     /* Validate input parameters */
-    if (!_ctx || !spki) {
+    if (!spki) {
         WGW_ERROR("invalid pointer");
         return GNUTLS_E_INVALID_REQUEST;
+    }
+    if (!_ctx) {
+        WGW_LOG("NULL ctx");
+        return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
     XMEMCPY(spki, &ctx->spki, sizeof(gnutls_x509_spki_st));
@@ -4614,10 +4618,8 @@ int wolfssl_get_alg_from_der(const unsigned char *keyData, word32 keySize,
 }
 
 /* import a private key from raw X.509 data using trial-and-error approach */
-/* TODO: Refactor this to use ToTraditional_ex to get the algID instead of using
- * the trial-and-error approach */
 static int wolfssl_pk_import_privkey_x509(void **_ctx,
-    gnutls_pk_algorithm_t **privkey_algo, gnutls_ecc_curve_t *curve,
+    gnutls_pk_algorithm_t *privkey_algo, gnutls_ecc_curve_t *curve,
     const gnutls_datum_t *data, gnutls_x509_crt_fmt_t format, const void *y,
     const void *x)
 {
@@ -4709,7 +4711,6 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
                     wolfssl_pk_import_privkey_x509_rsa_pss(ctx, keyData,
                         keySize, &key_found);
                     ctx->algo = GNUTLS_PK_RSA_PSS;
-                    ctx->spki.pk = GNUTLS_PK_RSA_PSS;
                     break;
                 case ECDSAk:
                     WGW_LOG("ECDSA private key");
@@ -4768,10 +4769,11 @@ static int wolfssl_pk_import_privkey_x509(void **_ctx,
 #endif
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
-    *privkey_algo = &ctx->algo;
+    *privkey_algo = ctx->algo;
     *curve = ctx->curve;
 
     ctx->initialized = 1;
+    ctx->spki.pk = ctx->algo;
     *_ctx = ctx;
 
     WGW_LOG("private key imported successfully");
@@ -5927,7 +5929,7 @@ static int wolfssl_pk_sign_hash_ed448(struct wolfssl_pk_ctx *ctx,
 #endif
 #endif
 
-/* checks if the bits meet the minum requirements in FIPS mode */
+/* checks if the bits meet the minimum requirements in FIPS mode */
 #if defined(HAVE_FIPS)
 static int wolfssl_check_rsa_bits(int bits, int operation) {
     switch(bits) {
@@ -6033,6 +6035,7 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         }
 #endif
         if (hash_algo != rsa_hash_from_bits(bits)) {
+            WGW_LOG("bit size strength doesn't match hash algorithm strength");
             return GNUTLS_E_CONSTRAINT_ERROR;
         }
         ret = wolfssl_pk_sign_hash_rsa_pss(ctx, hash_type, hash_data,
@@ -7025,7 +7028,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
 }
 
 static int wolfssl_rsa_export_pub(struct wolfssl_pk_ctx *priv_ctx,
-    gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx)
+    gnutls_datum_t *pub, struct wolfssl_pk_ctx *pub_ctx, int with_hdr)
 {
     int ret;
     word32 pubSz = 0;
@@ -7033,7 +7036,7 @@ static int wolfssl_rsa_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     WGW_FUNC_ENTER();
 
     /* Get size required for DER formatted public key */
-    ret = wc_RsaPublicKeyDerSize(&priv_ctx->key.rsa, 1);
+    ret = wc_RsaPublicKeyDerSize(&priv_ctx->key.rsa, with_hdr);
     /* Note: wc_RsaPublicKeyDerSize returns size on success, negative on
      * error */
     if (ret < 0) {
@@ -7054,7 +7057,8 @@ static int wolfssl_rsa_export_pub(struct wolfssl_pk_ctx *priv_ctx,
     }
 
     /* Export the public key in DER format */
-    ret = wc_RsaKeyToPublicDer(&priv_ctx->key.rsa, pub->data, pubSz);
+    ret = wc_RsaKeyToPublicDer_ex(&priv_ctx->key.rsa, pub->data, pubSz,
+        with_hdr);
     if (ret < 0) {
         WGW_ERROR("RSA public key DER export failed with code %d", ret);
         gnutls_free(pub->data);
@@ -7280,7 +7284,7 @@ static int wolfssl_x448_export_pub(struct wolfssl_pk_ctx *priv_ctx,
 
 /* export pub from the key pair */
 static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
-    const void *pubkey)
+    const void *pubkey, int with_hdr)
 {
     struct wolfssl_pk_ctx *priv_ctx = _priv_ctx;
     struct wolfssl_pk_ctx *pub_ctx;
@@ -7317,7 +7321,7 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
 
     if (priv_ctx->algo == GNUTLS_PK_RSA ||
             priv_ctx->algo == GNUTLS_PK_RSA_PSS) {
-        ret = wolfssl_rsa_export_pub(priv_ctx, pub, pub_ctx);
+        ret = wolfssl_rsa_export_pub(priv_ctx, pub, pub_ctx, with_hdr);
         if (ret != 0) {
             gnutls_free(pub_ctx);
             return ret;
@@ -7583,7 +7587,7 @@ static int wolfssl_pk_export_pubkey_x509(void *_pub_ctx, const void *pubkey) {
 
     if (pub_ctx->algo == GNUTLS_PK_RSA ||
             pub_ctx->algo == GNUTLS_PK_RSA_PSS) {
-        ret = wolfssl_rsa_export_pub(pub_ctx, pub, pub_ctx);
+        ret = wolfssl_rsa_export_pub(pub_ctx, pub, pub_ctx, 1);
         if (ret != 0) {
             gnutls_free(pub_ctx);
             return ret;
@@ -7667,10 +7671,11 @@ static int wolfssl_pk_export_pubkey_x509(void *_pub_ctx, const void *pubkey) {
 
 
 static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
-    enum wc_HashType hash_type, const gnutls_datum_t *msg_data,
+    enum wc_HashType hash_type, int hash_enc, const gnutls_datum_t *msg_data,
     gnutls_datum_t *sig)
 {
     int ret;
+    int sign_type = WC_SIGNATURE_TYPE_RSA;
     /* Get the maximum signature size - typically the key size */
     word32 sig_buf_len = wc_RsaEncryptSize(&ctx->key.rsa);
     word32 actual_sig_size = sig_buf_len;
@@ -7682,8 +7687,13 @@ static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
     }
 
     WGW_LOG("using RSA PKCS#1 v1.5 padding");
+    if (hash_enc) {
+        WGW_LOG("Encoding digest in DER");
+        sign_type = WC_SIGNATURE_TYPE_RSA_W_ENC;
+    }
+
     /* Use wc_SignatureGenerate for PKCS#1 v1.5 */
-    ret = wc_SignatureGenerate(hash_type, WC_SIGNATURE_TYPE_RSA, msg_data->data,
+    ret = wc_SignatureGenerate(hash_type, sign_type, msg_data->data,
         msg_data->size, sig_buf, &actual_sig_size, &ctx->key.rsa,
         sizeof(ctx->key.rsa), &ctx->rng);
     if (ret != 0) {
@@ -7780,6 +7790,7 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
         WGW_ERROR("Hashing of the message before signing failed with ret: %d\n",
             ret);
         gnutls_free(sig_buf);
+        gnutls_free(digest);
         return GNUTLS_E_PK_SIGN_FAILED;
     }
 
@@ -7788,6 +7799,7 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     if (ret < 0) {
         WGW_ERROR("RSA-PSS signing failed with code %d", ret);
         gnutls_free(sig_buf);
+        gnutls_free(digest);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
 #endif
@@ -7799,6 +7811,7 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     sig->data = gnutls_malloc(actual_sig_size);
     if (!sig->data) {
         gnutls_free(sig_buf);
+        gnutls_free(digest);
         WGW_ERROR("Memory allocation failed");
         return GNUTLS_E_MEMORY_ERROR;
     }
@@ -7807,6 +7820,7 @@ static int wolfssl_pk_sign_rsa_pss(struct wolfssl_pk_ctx *ctx,
     XMEMCPY(sig->data, sig_buf, actual_sig_size);
     sig->size = actual_sig_size;
     gnutls_free(sig_buf);
+    gnutls_free(digest);
 
     return 0;
 }
@@ -7894,7 +7908,7 @@ static int wolfssl_pk_sign_ed25519(struct wolfssl_pk_ctx *ctx,
                 ret);
             return GNUTLS_E_PK_SIGN_FAILED;
         } else {
-            WGW_LOG("Succeess to derive public key before signing");
+            WGW_LOG("Success to derive public key before signing");
 
             ret = wc_ed25519_import_public(ctx->pub_data, ctx->pub_data_len,
                 &ctx->key.ed25519);
@@ -7980,7 +7994,7 @@ static int wolfssl_pk_sign_ed448(struct wolfssl_pk_ctx *ctx,
                 ret);
             return GNUTLS_E_PK_SIGN_FAILED;
         } else {
-            WGW_LOG("Succeess to derive public key before signing");
+            WGW_LOG("Success to derive public key before signing");
 
             ret = wc_ed448_import_public(ctx->pub_data, ctx->pub_data_len,
                 &ctx->key.ed448);
@@ -8027,8 +8041,9 @@ static int wolfssl_pk_sign_ed448(struct wolfssl_pk_ctx *ctx,
 
 /* sign message */
 static int wolfssl_pk_sign(void *_ctx, const void *privkey,
-    gnutls_digest_algorithm_t hash, const void *data, const void *signature,
-    unsigned int flags, gnutls_sign_algorithm_t algo, void* params)
+    gnutls_digest_algorithm_t hash, int hash_enc, const void *data,
+    const void *signature, unsigned int flags, gnutls_sign_algorithm_t algo,
+    void* params)
 {
     struct wolfssl_pk_ctx *ctx = _ctx;
     int ret;
@@ -8135,7 +8150,7 @@ static int wolfssl_pk_sign(void *_ctx, const void *privkey,
 
     if (pk_algo == GNUTLS_PK_RSA) {
         WGW_LOG("signing with RSA");
-        ret = wolfssl_pk_sign_rsa(ctx, hash_type, msg_data, sig);
+        ret = wolfssl_pk_sign_rsa(ctx, hash_type, hash_enc, msg_data, sig);
         if (ret != 0) {
             return ret;
         }
@@ -10046,7 +10061,7 @@ static void wolfssl_rnd_refresh(void *_ctx)
         if (ret != 0) {
             WGW_LOG("wolfSSL initialize of private random failed: %d", ret);
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-            /* Set context initialized to 0 to indicate it isn't avaialble. */
+            /* Set context initialized to 0 to indicate it isn't available. */
             ctx->initialized = 0;
         }
 
@@ -10058,7 +10073,7 @@ static void wolfssl_rnd_refresh(void *_ctx)
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitRng", ret);
             wc_FreeRng(&ctx->priv_rng);
-            /* Set context initialized to 0 to indicate it isn't avaialble. */
+            /* Set context initialized to 0 to indicate it isn't available. */
             ctx->initialized = 0;
         }
     }
@@ -10596,7 +10611,7 @@ int _gnutls_wolfssl_init(void)
                    (XSTRCMP(str, "stderr") == 0)) {
             loggingFd = stderr;
         } else {
-            /* Try openning file for writing. */
+            /* Try opening file for writing. */
             FILE* fd = XFOPEN(str, "w");
             if (fd == XBADFILE) {
                 fprintf(stderr, "Failed to open log file: %s\n", str);
