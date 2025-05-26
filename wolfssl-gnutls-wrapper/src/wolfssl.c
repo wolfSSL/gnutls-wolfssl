@@ -9765,6 +9765,7 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             pub_ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
                     pub_ctx->key.ecc.dp->id);
             break;
+#if defined(HAVE_ED25519)
        case GNUTLS_PK_EDDSA_ED25519:
             WGW_LOG("ED25519");
             pub_ctx->pub_data_len = ED25519_PUB_KEY_SIZE;
@@ -9786,6 +9787,8 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
             break;
+#endif
+#if defined(HAVE_ED448)
        case GNUTLS_PK_EDDSA_ED448:
             WGW_LOG("ED448");
             pub_ctx->pub_data_len = ED448_PUB_KEY_SIZE;
@@ -9807,6 +9810,8 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
             break;
+#endif
+#if defined(HAVE_X25519)
        case GNUTLS_PK_ECDH_X25519:
             WGW_LOG("X25519");
             pub_ctx->pub_data_len = CURVE25519_PUB_KEY_SIZE;
@@ -9828,6 +9833,8 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
             break;
+#endif
+#if defined(HAVE_X448)
        case GNUTLS_PK_ECDH_X448:
             WGW_LOG("X448");
             pub_ctx->pub_data_len = CURVE448_PUB_KEY_SIZE;
@@ -9849,6 +9856,7 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
             break;
+#endif
        default:
             return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
