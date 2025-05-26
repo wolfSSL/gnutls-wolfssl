@@ -68,7 +68,7 @@ static int test_tls_prf(gnutls_mac_algorithm_t mac_alg,
     const unsigned char* expected, size_t sz)
 {
     int ret;
-    unsigned char output[64];
+    char output[64];
 
     /* Rest of test code remains the same */
     printf("Testing wolfSSL's %s TLS PRF implementation via GnuTLS...\n",

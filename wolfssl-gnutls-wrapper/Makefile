@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -DENABLE_WOLFSSL -fPIC -Wall -Wextra
-CFLAGS_DEBUG = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -g
+CFLAGS = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -Werror
+CFLAGS_DEBUG = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -Werror -g
 INCLUDES = -I/opt/gnutls/include/ -I/opt/wolfssl/include/
 
 UNAME_S := $(shell uname -s)

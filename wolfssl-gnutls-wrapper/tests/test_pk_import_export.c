@@ -177,7 +177,8 @@ int main(void) {
         return 1;
     }
 
-    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM, rsa_2048_public_key_pem,
+    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM,
+        (const unsigned char *)rsa_2048_public_key_pem,
         strlen(rsa_2048_public_key_pem));
     if (ret != 0) {
         fprintf(stderr, "RSA PEM failed\n");
@@ -191,7 +192,8 @@ int main(void) {
         return 1;
     }
 
-    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM, ecc_p256_public_key_pem,
+    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM,
+        (const unsigned char *)ecc_p256_public_key_pem,
         strlen(ecc_p256_public_key_pem));
     if (ret != 0) {
         fprintf(stderr, "ECC PEM failed\n");
@@ -205,7 +207,8 @@ int main(void) {
         return 1;
     }
 
-    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM, ed25519_public_key_pem,
+    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM,
+        (const unsigned char *)ed25519_public_key_pem,
         strlen(ed25519_public_key_pem));
     if (ret != 0) {
         fprintf(stderr, "Ed25519 PEM failed\n");
@@ -219,7 +222,8 @@ int main(void) {
         return 1;
     }
 
-    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM, ed448_public_key_pem,
+    ret = test_pk_import_export(GNUTLS_X509_FMT_PEM,
+        (const unsigned char *)ed448_public_key_pem,
         strlen(ed448_public_key_pem));
     if (ret != 0) {
         fprintf(stderr, "Ed448 PEM failed\n");
