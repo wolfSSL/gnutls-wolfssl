@@ -3964,6 +3964,18 @@ static int wolfssl_pk_get_bits(void *_ctx, unsigned int* bits)
 {
     struct wolfssl_pk_ctx *ctx = (struct wolfssl_pk_ctx *)_ctx;
 
+    WGW_FUNC_ENTER();
+
+	if (!ctx || !ctx->initialized) {
+		WGW_LOG("ctx not initialized");
+		return GNUTLS_E_ALGO_NOT_SUPPORTED;
+	}
+
+	if (!wolfssl_pk_supported[ctx->algo]) {
+		WGW_LOG("algorithm not supported");
+		return GNUTLS_E_ALGO_NOT_SUPPORTED;
+	}
+
     switch (ctx->algo) {
         case GNUTLS_PK_RSA:
         case GNUTLS_PK_RSA_PSS:
@@ -7547,16 +7559,20 @@ static int wolfssl_pk_export_privkey_x509(void *_priv_ctx, const void *privkey) 
         }
     } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
         WGW_LOG("ED25519");
+#if defined(HAVE_ED25519)
         ret = wolfssl_ed25519_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
+#endif
     } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED448) {
         WGW_LOG("ED448");
+#if defined(HAVE_ED448)
         ret = wolfssl_ed448_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
+#endif
     } else {
         WGW_ERROR("unsupported algorithm for exporting private key: %d",
             priv_ctx->algo);
@@ -8789,6 +8805,7 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                     return GNUTLS_E_INVALID_REQUEST;
                 }
 
+
                 if (!priv_ctx->key.x25519.privSet) {
                     WGW_LOG("Private key is not set, importing now");
                     const gnutls_datum_t *priv = (const gnutls_datum_t *)privkey;
@@ -8803,6 +8820,11 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                         return GNUTLS_E_INVALID_REQUEST;
                     }
                 }
+
+
+#if !defined(HAVE_FIPS)
+                wc_curve25519_set_rng(&priv_ctx->key.x25519, &priv_ctx->rng);
+#endif
 
                 /* Generate the shared secret */
                 ret = wc_curve25519_shared_secret_ex(&priv_ctx->key.x25519, &peer_key,
@@ -9686,7 +9708,7 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx, const void* x, const vo
 
 /* export public key in raw bytes to the provided gnutls_datum_t */
 static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
-    const void *y)
+    const void *y, gnutls_ecc_curve_t *curve)
 {
     struct wolfssl_pk_ctx *pub_ctx = ctx;
     gnutls_datum_t *x_datum = (gnutls_datum_t *)x;
@@ -9704,49 +9726,144 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    if (!x_datum || !y_datum) {
-        WGW_ERROR("Public key datum parameter (x or y) is NULL");
-        return GNUTLS_E_INVALID_REQUEST;
+    switch(pub_ctx->algo) {
+        case GNUTLS_PK_EC:
+            WGW_LOG("EC");
+            if (!x_datum || !y_datum) {
+                WGW_ERROR("Public key datum parameter (x or y) is NULL");
+                return GNUTLS_E_ALGO_NOT_SUPPORTED;
+            }
+
+            /* Export public key using wc_ecc_export_public_raw */
+            ret = wc_ecc_export_public_raw(&pub_ctx->key.ecc, x_buffer, &x_size,
+                    y_buffer, &y_size);
+            if (ret != 0) {
+                WGW_ERROR("wc_ecc_export_public_raw failed: %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+
+            /* Allocate and copy public key x-ordinate */
+            x_datum->data = gnutls_malloc(x_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+            /* Allocate and copy public key y-ordinate */
+            y_datum->data = gnutls_malloc(y_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                gnutls_free(x_datum->data);
+                x_datum->data = NULL;
+                x_datum->size = 0;
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+
+            XMEMCPY(x_datum->data, x_buffer, x_size);
+            x_datum->size = x_size;
+            XMEMCPY(y_datum->data, y_buffer, y_size);
+            y_datum->size = y_size;
+            pub_ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
+                    pub_ctx->key.ecc.dp->id);
+            break;
+#if defined(HAVE_ED25519)
+       case GNUTLS_PK_EDDSA_ED25519:
+            WGW_LOG("ED25519");
+            pub_ctx->pub_data_len = ED25519_PUB_KEY_SIZE;
+            ret = wc_ed25519_export_public(&pub_ctx->key.ed25519, x_buffer,
+                    &x_size);
+            if (ret != 0) {
+                WGW_ERROR("wc_ed25519_export_public failed: %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            pub_ctx->curve = GNUTLS_ECC_CURVE_ED25519;
+
+            /* Allocate and copy public key x-ordinate */
+            x_datum->data = gnutls_malloc(x_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+
+            XMEMCPY(x_datum->data, x_buffer, x_size);
+            x_datum->size = x_size;
+            break;
+#endif
+#if defined(HAVE_ED448)
+       case GNUTLS_PK_EDDSA_ED448:
+            WGW_LOG("ED448");
+            pub_ctx->pub_data_len = ED448_PUB_KEY_SIZE;
+            ret = wc_ed448_export_public(&pub_ctx->key.ed448, x_buffer,
+                    &x_size);
+            if (ret != 0) {
+                WGW_ERROR("wc_ed448_export_public failed: %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            pub_ctx->curve = GNUTLS_ECC_CURVE_ED448;
+
+            /* Allocate and copy public key x-ordinate */
+            x_datum->data = gnutls_malloc(x_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+
+            XMEMCPY(x_datum->data, x_buffer, x_size);
+            x_datum->size = x_size;
+            break;
+#endif
+#if defined(HAVE_X25519)
+       case GNUTLS_PK_ECDH_X25519:
+            WGW_LOG("X25519");
+            pub_ctx->pub_data_len = CURVE25519_PUB_KEY_SIZE;
+            ret = wc_curve25519_export_public_ex(&pub_ctx->key.x25519,
+                x_buffer, &x_size, EC25519_LITTLE_ENDIAN);
+            if (ret != 0) {
+                WGW_ERROR("wc_curve25519_export_public failed: %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            pub_ctx->curve = GNUTLS_ECC_CURVE_X25519;
+
+            /* Allocate and copy public key x-ordinate */
+            x_datum->data = gnutls_malloc(x_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+
+            XMEMCPY(x_datum->data, x_buffer, x_size);
+            x_datum->size = x_size;
+            break;
+#endif
+#if defined(HAVE_X448)
+       case GNUTLS_PK_ECDH_X448:
+            WGW_LOG("X448");
+            pub_ctx->pub_data_len = CURVE448_PUB_KEY_SIZE;
+            ret = wc_curve448_export_public_ex(&pub_ctx->key.x448, x_buffer,
+                &x_size, EC448_LITTLE_ENDIAN);
+            if (ret != 0) {
+                WGW_ERROR("wc_curve448_export_public failed: %d", ret);
+                return GNUTLS_E_INVALID_REQUEST;
+            }
+            pub_ctx->curve = GNUTLS_ECC_CURVE_X448;
+
+            /* Allocate and copy public key x-ordinate */
+            x_datum->data = gnutls_malloc(x_size);
+            if (!x_datum->data) {
+                WGW_ERROR("Memory allocation failed for public key");
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+
+            XMEMCPY(x_datum->data, x_buffer, x_size);
+            x_datum->size = x_size;
+            break;
+#endif
+       default:
+            return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
-    /* Ensure the context is for ECDH algorithm */
-    if (pub_ctx->algo != GNUTLS_PK_ECDHX &&
-            pub_ctx->algo != GNUTLS_PK_ECDSA) {
-        WGW_ERROR("Context algorithm is not ECDH/ECDSA (%d)", pub_ctx->algo);
-        return GNUTLS_E_INVALID_REQUEST;
-    }
+    *curve = pub_ctx->curve;
 
-    /* Export public key using wc_ecc_export_public_raw */
-    ret = wc_ecc_export_public_raw(&pub_ctx->key.ecc, x_buffer, &x_size,
-        y_buffer, &y_size);
-    if (ret != 0) {
-        WGW_ERROR("wc_ecc_export_public_raw failed: %d", ret);
-        return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    /* Allocate and copy public key x-ordinate */
-    x_datum->data = gnutls_malloc(x_size);
-    if (!x_datum->data) {
-        WGW_ERROR("Memory allocation failed for public key");
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-    /* Allocate and copy public key y-ordinate */
-    y_datum->data = gnutls_malloc(y_size);
-    if (!x_datum->data) {
-        WGW_ERROR("Memory allocation failed for public key");
-        gnutls_free(x_datum->data);
-        x_datum->data = NULL;
-        x_datum->size = 0;
-        return GNUTLS_E_MEMORY_ERROR;
-    }
-
-    XMEMCPY(x_datum->data, x_buffer, x_size);
-    x_datum->size = x_size;
-    XMEMCPY(y_datum->data, y_buffer, y_size);
-    y_datum->size = y_size;
-
-    WGW_LOG("ECDH public key exported successfully (sizes=%u,,%u)",
-        x_datum->size, y_datum->size);
+    WGW_LOG("ECDH public key exported successfully");
 
     return 0;
 }
