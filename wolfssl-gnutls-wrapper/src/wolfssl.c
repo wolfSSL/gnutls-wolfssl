@@ -8793,6 +8793,7 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                     return GNUTLS_E_INVALID_REQUEST;
                 }
 
+
                 if (!priv_ctx->key.x25519.privSet) {
                     WGW_LOG("Private key is not set, importing now");
                     const gnutls_datum_t *priv = (const gnutls_datum_t *)privkey;
@@ -8807,6 +8808,11 @@ static int wolfssl_pk_derive_shared_secret(void *_pub_ctx, void *_priv_ctx, cons
                         return GNUTLS_E_INVALID_REQUEST;
                     }
                 }
+
+
+#if !defined(HAVE_FIPS)
+                wc_curve25519_set_rng(&priv_ctx->key.x25519, &priv_ctx->rng);
+#endif
 
                 /* Generate the shared secret */
                 ret = wc_curve25519_shared_secret_ex(&priv_ctx->key.x25519, &peer_key,
