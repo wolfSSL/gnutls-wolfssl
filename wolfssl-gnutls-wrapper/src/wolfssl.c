@@ -7547,16 +7547,20 @@ static int wolfssl_pk_export_privkey_x509(void *_priv_ctx, const void *privkey) 
         }
     } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED25519) {
         WGW_LOG("ED25519");
+#if defined(HAVE_ED25519)
         ret = wolfssl_ed25519_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
+#endif
     } else if (priv_ctx->algo == GNUTLS_PK_EDDSA_ED448) {
         WGW_LOG("ED448");
+#if defined(HAVE_ED448)
         ret = wolfssl_ed448_export_priv(priv_ctx, priv);
         if (ret != 0) {
             return ret;
         }
+#endif
     } else {
         WGW_ERROR("unsupported algorithm for exporting private key: %d",
             priv_ctx->algo);
