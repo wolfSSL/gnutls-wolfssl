@@ -1,0 +1,108 @@
+name: OpenLDAP Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        openldap_ref: [ 'master', 'OPENLDAP_REL_ENG_2_5_13', 'OPENLDAP_REL_ENG_2_6_9' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install OpenLDAP dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit libargon2-dev groff-base libltdl-dev
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build OpenLDAP at ${{ matrix.openldap_ref }}
+        run: |
+          git clone https://git.openldap.org/openldap/openldap.git
+          cd openldap
+          if [ "${{ matrix.openldap_ref }}" != "master" ]; then
+            git checkout ${{ matrix.openldap_ref }}
+          fi
+
+      - name: Configure OpenLDAP
+        working-directory: openldap
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          export CPPFLAGS=-I/opt/gnutls/include
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib"
+          ./configure \
+            --with-tls=gnutls \
+            --with-cyrus-sasl \
+            --enable-otp \
+            --with-argon2=libargon2 \
+            --enable-argon2 \
+            --enable-ppolicy \
+            --enable-remoteauth \
+            --prefix=/opt/openldap \
+            --enable-modules
+
+      - name: Build OpenLDAP
+        working-directory: openldap
+        run: |
+          make depend
+          make
+
+      - name: Test OpenLDAP
+        working-directory: openldap
+        run: |
+          WGW_LOGGING=0 make test
