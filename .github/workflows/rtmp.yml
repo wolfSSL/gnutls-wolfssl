@@ -1,0 +1,162 @@
+name: RTMPDump Client/Server Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  client_server_test:
+    name: RTMPDump Client/Server TLS Test
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        rtmpdump_ref: [ 'master', 'fa8646d' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install RTMPDump dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y zlib1g-dev
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          test -d /opt/wolfssl || exit 1
+          echo "Check for GnuTLS installation..."
+          test -d /opt/gnutls || exit 1
+          echo "Check for wrapper installation..."
+          test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
+      - name: Build RTMPDump at ${{ matrix.rtmpdump_ref }}
+        run: |
+          git clone git://git.ffmpeg.org/rtmpdump
+          cd rtmpdump
+          if [ "${{ matrix.rtmpdump_ref }}" != "master" ]; then
+            git checkout ${{ matrix.rtmpdump_ref }}
+          fi
+
+      - name: Configure and build RTMPDump
+        working-directory: rtmpdump
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          make SYS=posix CRYPTO=GNUTLS SHARED= \
+            INC="-I/opt/gnutls/include" \
+            LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib" \
+            PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+
+      - name: Test RTMPDump Build
+        working-directory: rtmpdump
+        run: |
+          ./rtmpdump --help >/dev/null
+          echo "RTMPDump functional"
+
+      - name: Generate TLS Certificates
+        working-directory: rtmpdump
+        run: |
+          echo "Generating TLS certificates..."
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/C=US/ST=Test/L=Test/O=RTMPTest/CN=localhost"
+          ls -la *.pem
+
+      - name: Start RTMP Server
+        working-directory: rtmpdump
+        run: |
+          echo "Starting rtmpsrv server..."
+          nohup ./rtmpsrv -c cert.pem -k key.pem -z > server.log 2>&1 &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+          echo "Server PID: $SERVER_PID"
+          sleep 3
+          if kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Server started successfully"
+          else
+            echo "Server failed to start"
+            cat server.log
+            exit 1
+          fi
+
+      - name: Test RTMP Client Connection
+        working-directory: rtmpdump
+        run: |
+          echo "Testing RTMP client connection..."
+          sleep 2
+          echo "Running rtmpdump client..."
+          timeout 30s ./rtmpdump -r rtmps://localhost:1935/live/test -v -z -o output.flv > client.log 2>&1 || true
+
+          echo "=== CLIENT OUTPUT ==="
+          cat client.log
+          echo "====================="
+
+          TLS_SUCCESS=0
+          RTMP_SUCCESS=0
+          PROTOCOL_SUCCESS=0
+
+          if grep -q "connected, handshaking" client.log; then
+            echo "TLS connection successful"
+            TLS_SUCCESS=1
+          fi
+
+          if grep -q "handshaked" client.log; then
+            echo "RTMP handshake successful"
+            RTMP_SUCCESS=1
+          fi
+
+          if grep -q "Connected..." client.log; then
+            echo "RTMP protocol exchange successful"
+            PROTOCOL_SUCCESS=1
+          fi
+
+          if grep -q "failed to read RTMP packet header" client.log; then
+            echo "Expected error: Server has no media content"
+          fi
+
+          if [ $TLS_SUCCESS -eq 1 ] && [ $RTMP_SUCCESS -eq 1 ] && [ $PROTOCOL_SUCCESS -eq 1 ]; then
+            echo "CLIENT/SERVER TEST PASSED"
+
+          else
+            echo "CLIENT/SERVER TEST FAILED"
+            echo "TLS: $TLS_SUCCESS, RTMP: $RTMP_SUCCESS, Protocol: $PROTOCOL_SUCCESS"
+            exit 1
+          fi
+
+      - name: Cleanup
+        working-directory: rtmpdump
+        if: always()
+        run: |
+          if [ -n "$SERVER_PID" ] && kill -0 $SERVER_PID 2>/dev/null; then
+            kill $SERVER_PID
+            echo "Server stopped"
+          fi
+
+          echo "=== SERVER LOG ==="
+          cat server.log 2>/dev/null || echo "No server log"
+          echo "=================="
