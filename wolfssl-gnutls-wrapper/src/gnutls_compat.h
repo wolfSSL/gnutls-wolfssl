@@ -230,6 +230,17 @@ typedef enum gnutls_privkey_flags {
     GNUTLS_PRIVKEY_FLAG_RSA_PSS_FIXED_SALT_LENGTH = 1 << 10
 } gnutls_privkey_flags_t;
 
+/**
+ * gnutls_abstract_export_flags:
+ * @GNUTLS_EXPORT_FLAG_NO_LZ: do not prepend a leading zero to exported values
+ *
+ * Enumeration of different certificate import flags.
+ */
+typedef enum gnutls_abstract_export_flags {
+        GNUTLS_EXPORT_FLAG_NO_LZ = 1
+} gnutls_abstract_export_flags_t;
+
+
 #define FIX_SIGN_PARAMS(params, flags, dig)                            \
     do {                                                           \
         if ((flags) & GNUTLS_PRIVKEY_FLAG_REPRODUCIBLE) {      \
@@ -379,6 +390,8 @@ typedef struct gnutls_crypto_pk {
     gnutls_pk_sign_hash_func sign_hash_backend;
     gnutls_pk_verify_hash_func verify_hash_backend;
     gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
+    gnutls_pk_import_rsa_raw_func import_rsa_raw_backend;
+    gnutls_pk_export_rsa_raw_func export_rsa_raw_backend;
     gnutls_pk_privkey_export_dh_raw_func privkey_export_dh_raw_backend;
     gnutls_pk_pubkey_export_dh_raw_func pubkey_export_dh_raw_backend;
     gnutls_pk_privkey_import_ecdh_raw_func privkey_import_ecdh_raw_backend;
