@@ -7769,12 +7769,26 @@ static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
         sign_type = WC_SIGNATURE_TYPE_RSA_W_ENC;
     }
 
+    if (!ctx->rng_initialized) {
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+        ret = wc_InitRng(&ctx->rng);
+        if (ret != 0) {
+            WGW_ERROR("wc_InitRng failed with code %d", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_RANDOM_FAILED;
+        }
+        ctx->rng_initialized = 1;
+    }
+
     /* Use wc_SignatureGenerate for PKCS#1 v1.5 */
     ret = wc_SignatureGenerate(hash_type, sign_type, msg_data->data,
         msg_data->size, sig_buf, &actual_sig_size, &ctx->key.rsa,
         sizeof(ctx->key.rsa), &ctx->rng);
     if (ret != 0) {
         WGW_ERROR("RSA PKCS#1 v1.5 signing failed with code %d", ret);
+        WGW_LOG("found the problem!");
         gnutls_free(sig_buf);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
