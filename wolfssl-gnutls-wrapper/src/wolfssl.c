@@ -4402,12 +4402,16 @@ static int wolfssl_ecc_curve_id_to_curve_type(int curve_id)
 {
     switch (curve_id) {
         case ECC_SECP224R1:
+            WGW_LOG("P224R1");
             return GNUTLS_ECC_CURVE_SECP224R1;
         case ECC_SECP256R1:
+            WGW_LOG("P256R1");
             return GNUTLS_ECC_CURVE_SECP256R1;
         case ECC_SECP384R1:
+            WGW_LOG("P384R1");
             return GNUTLS_ECC_CURVE_SECP384R1;
         case ECC_SECP521R1:
+            WGW_LOG("P521R1");
             return GNUTLS_ECC_CURVE_SECP521R1;
         default:
     }
@@ -6692,7 +6696,7 @@ int wolfssl_pk_get_curve_id(int bits, int *curve_id)
 }
 
 static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
-    unsigned int bits)
+    unsigned int bits, gnutls_ecc_curve_t *curve)
 {
     int ret;
     int curve_id;
@@ -6719,6 +6723,11 @@ static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
 
     curve_size = wc_ecc_get_curve_size_from_id(curve_id);
     WGW_LOG("curve size: %d", curve_size);
+
+    *curve = wolfssl_ecc_curve_id_to_curve_type(
+            curve_id);
+
+    WGW_LOG("curve id (gnutls type): %d", curve_id);
 
     PRIVATE_KEY_UNLOCK();
 
@@ -6983,7 +6992,7 @@ static int wolfssl_pk_generate_dh(struct wolfssl_pk_ctx *ctx,
 /* generate a pk key pair */
 static int wolfssl_pk_generate(void **_ctx, const void *privkey,
     gnutls_pk_algorithm_t algo, unsigned int bits, const void *p, const void *g,
-    const void *q)
+    const void *q, gnutls_ecc_curve_t *curve)
 {
     struct wolfssl_pk_ctx *ctx;
     int ret;
@@ -7024,7 +7033,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         }
     } else if (algo == GNUTLS_PK_EC) {
         WGW_LOG("EC");
-        ret = wolfssl_pk_generate_ecc(ctx, bits);
+        ret = wolfssl_pk_generate_ecc(ctx, bits, curve);
         if (ret != 0) {
             return ret;
         }
@@ -7639,6 +7648,8 @@ static int wolfssl_pk_export_privkey_x509(void *_priv_ctx, const void *privkey)
             priv_ctx->algo);
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
+
+    WGW_LOG("export of the private key in X.509 format succeeded");
 
     return 0;
 }
