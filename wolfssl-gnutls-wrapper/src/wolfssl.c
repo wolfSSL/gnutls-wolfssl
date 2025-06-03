@@ -91,6 +91,17 @@ void __attribute__((constructor)) wolfssl_init(void) {
  */
 #define WGW_LOG(fmt, args...)    wgw_log(__LINE__, fmt, ## args)
 
+#define WGW_DUMP(name, data, len)                                   \
+    do {                                                            \
+        int _i;                                                     \
+        fprintf(stderr, "%s\n", name);                              \
+        for (_i = 0; _i < (int)len; _i++) {                         \
+            fprintf(stderr, "%02x ", ((unsigned char *)data)[_i]);  \
+            if ((_i % 16) == 15) fprintf(stderr, "\n");             \
+        }                                                           \
+        if (_i % 16 != 0) fprintf(stderr, "\n");                    \
+    } while (0)
+
 /** Whether logging output will be written. */
 static int loggingEnabled = 0;
 
@@ -1326,7 +1337,7 @@ static int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
             if (ret == BAD_FUNC_ARG)
                 return GNUTLS_E_INVALID_REQUEST;
 #endif
-            return GNUTLS_E_ENCRYPTION_FAILED;
+            return GNUTLS_E_DECRYPTION_FAILED;
         }
         return 0;
     } else {
@@ -6030,7 +6041,7 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
 
 #if defined(HAVE_FIPS)
     if (hash_type == WC_SHA) {
-        WGW_LOG("hash algo not supported for signing");
+        WGW_ERROR("hash algo not supported for signing");
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
     }
 #endif
@@ -6055,7 +6066,7 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
         WGW_LOG("bits: %d", bits);
         /* we check if the bits meet the minimum requirement */
         if (!wolfssl_check_rsa_bits(bits, SIGN_OP)) {
-            WGW_LOG("unusual bits size: %d", bits);
+            WGW_ERROR("unusual bits size: %d", bits);
             return GNUTLS_FIPS140_OP_NOT_APPROVED;
         }
 #endif
@@ -6073,10 +6084,6 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
             return GNUTLS_FIPS140_OP_NOT_APPROVED;
         }
 #endif
-        if (hash_algo != rsa_hash_from_bits(bits)) {
-            WGW_LOG("bit size strength doesn't match hash algorithm strength");
-            return GNUTLS_E_CONSTRAINT_ERROR;
-        }
         ret = wolfssl_pk_sign_hash_rsa_pss(ctx, hash_type, hash_data,
             signature);
         if (ret != 0) {
@@ -6085,7 +6092,7 @@ static int wolfssl_pk_sign_hash(void *_ctx, const void *signer,
     } else if (pk_algo == GNUTLS_PK_ECDSA) {
 #if defined(HAVE_FIPS)
         if (!is_hash_type_fips(hash_type, SIGN_OP)) {
-            WGW_LOG("hash type not approved for signing");
+            WGW_ERROR("hash type not approved for signing");
             return GNUTLS_FIPS140_OP_NOT_APPROVED;
         }
 #endif
@@ -6719,6 +6726,8 @@ static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
         gnutls_free(ctx);
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
+
+    ctx->curve = wolfssl_ecc_curve_id_to_curve_type(curve_id);
 
     return 0;
 }
