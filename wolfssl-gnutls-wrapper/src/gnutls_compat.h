@@ -512,3 +512,4 @@ int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
                                     const gnutls_crypto_pk_st *s,
                                     int free_s);
 
+extern int _gnutls_config_is_rsa_pkcs1_encrypt_allowed(void);

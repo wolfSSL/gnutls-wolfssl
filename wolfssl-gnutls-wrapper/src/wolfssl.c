@@ -5298,10 +5298,18 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
     ret = wolfssl_get_alg_from_der(publicKeyDer, publicKeySize, &derAlgId,
         &params);
     if (ret != 0 && algId == ANONk) {
-        wc_FreeRng(&ctx->rng);
-        gnutls_free(ctx);
-        WGW_ERROR("could not determine public key type from certificate");
-        return GNUTLS_E_ALGO_NOT_SUPPORTED;
+        if (publicKeySize == 32) {
+            derAlgId = ED25519k;
+        }
+        else if (publicKeySize == 57) {
+            derAlgId = ED448k;
+        }
+        else {
+            wc_FreeRng(&ctx->rng);
+            gnutls_free(ctx);
+            WGW_ERROR("could not determine public key type from certificate");
+            return GNUTLS_E_ALGO_NOT_SUPPORTED;
+        }
     }
     if (algId == ANONk) {
         algId = derAlgId;
@@ -7356,6 +7364,8 @@ static int wolfssl_pk_export_pub(void **_pub_ctx, void *_priv_ctx,
 
     WGW_FUNC_ENTER();
 
+    WGW_LOG("With hdr = %d", with_hdr);
+
     if (!priv_ctx || !priv_ctx->initialized) {
         WGW_ERROR("PK context not initialized");
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
@@ -9068,10 +9078,16 @@ static int wolfssl_pk_encrypt(void *_ctx, gnutls_pubkey_t key,
     if (ctx->algo == GNUTLS_PK_RSA_PSS) {
         return GNUTLS_E_INVALID_REQUEST;
     }
+
     if (ctx->algo != GNUTLS_PK_RSA) {
         WGW_ERROR("Only RSA is supported for encryption, algorithm is: %d",
             ctx->algo);
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!_gnutls_config_is_rsa_pkcs1_encrypt_allowed()) {
+        WGW_LOG("PKCS#1 RSA encryption disabled");
+        return GNUTLS_E_UNSUPPORTED_ENCRYPTION_ALGORITHM;
     }
 
     /* Import the public key if needed */
@@ -9177,6 +9193,11 @@ static int wolfssl_pk_decrypt(void *_ctx, gnutls_privkey_t key,
         WGW_ERROR("Only RSA is supported for decryption, algorithm is: %d",
             ctx->algo);
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
+    }
+
+    if (!_gnutls_config_is_rsa_pkcs1_encrypt_allowed()) {
+        WGW_LOG("PKCS#1 RSA encryption disabled");
+        return GNUTLS_E_UNSUPPORTED_ENCRYPTION_ALGORITHM;
     }
 
     /* Get the maximum plaintext size - typically the key size */
@@ -10236,6 +10257,13 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    *curve = pub_ctx->curve;
+
+    if (!x && !y) {
+        WGW_LOG("Returning curve only - not X and Y");
+        return 0;
+    }
+
     switch(pub_ctx->algo) {
         case GNUTLS_PK_EC:
             WGW_LOG("EC");
@@ -10296,6 +10324,10 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
 
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
+            if (y_datum) {
+                y_datum->data = NULL;
+                y_datum->size = 0;
+            }
             break;
 #endif
 #if defined(HAVE_ED448)
@@ -10319,6 +10351,10 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
 
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
+            if (y_datum) {
+                y_datum->data = NULL;
+                y_datum->size = 0;
+            }
             break;
 #endif
 #if defined(HAVE_X25519)
@@ -10342,6 +10378,10 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
 
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
+            if (y_datum) {
+                y_datum->data = NULL;
+                y_datum->size = 0;
+            }
             break;
 #endif
 #if defined(HAVE_X448)
@@ -10365,6 +10405,10 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
 
             XMEMCPY(x_datum->data, x_buffer, x_size);
             x_datum->size = x_size;
+            if (y_datum) {
+                y_datum->data = NULL;
+                y_datum->size = 0;
+            }
             break;
 #endif
        default:
