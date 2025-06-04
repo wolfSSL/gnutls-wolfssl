@@ -4402,12 +4402,16 @@ static int wolfssl_ecc_curve_id_to_curve_type(int curve_id)
 {
     switch (curve_id) {
         case ECC_SECP224R1:
+            WGW_LOG("P224R1");
             return GNUTLS_ECC_CURVE_SECP224R1;
         case ECC_SECP256R1:
+            WGW_LOG("P256R1");
             return GNUTLS_ECC_CURVE_SECP256R1;
         case ECC_SECP384R1:
+            WGW_LOG("P384R1");
             return GNUTLS_ECC_CURVE_SECP384R1;
         case ECC_SECP521R1:
+            WGW_LOG("P521R1");
             return GNUTLS_ECC_CURVE_SECP521R1;
         default:
     }
@@ -4974,35 +4978,104 @@ static int wolfssl_rsa_pss_import_public(struct wolfssl_pk_ctx *ctx,
 static int wolfssl_ecc_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
-    int ret;
+	int ret;
 
-    WGW_FUNC_ENTER();
+	WGW_FUNC_ENTER();
 
-    ret = wc_ecc_init(&ctx->key.ecc);
-    if (ret == 0) {
-        word32 idx = 0;
-        ret = wc_EccPublicKeyDecode(publicKeyDer, &idx, &ctx->key.ecc,
-            publicKeySize);
-        if (ret == 0) {
-            WGW_LOG("ECDSA public key import succeeded");
-            ctx->algo = GNUTLS_PK_ECDSA;
-            ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
-                ctx->key.ecc.dp->id);
-            *key_found = 1;
-            if (publicKeySize <= sizeof(ctx->pub_data)) {
-                XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
-                ctx->pub_data_len = publicKeySize;
-            }
-        } else {
-            WGW_LOG("ECDSA public key import failed with code %d", ret);
-            wc_ecc_free(&ctx->key.ecc);
-        }
-    } else {
-        WGW_WOLFSSL_ERROR("wc_ecc_init", ret);
-        return GNUTLS_E_MEMORY_ERROR;
-    }
+	WGW_LOG("ECC public key data size: %u", publicKeySize);
 
-    return 0;
+	ret = wc_ecc_init(&ctx->key.ecc);
+	if (ret == 0) {
+		word32 idx = 0;
+		ret = wc_EccPublicKeyDecode(publicKeyDer, &idx, &ctx->key.ecc, publicKeySize);
+
+		if (ret == 0) {
+			WGW_LOG("ECDSA public key import succeeded");
+			ctx->algo = GNUTLS_PK_ECDSA;
+			ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
+					ctx->key.ecc.dp->id);
+			*key_found = 1;
+			if (publicKeySize <= sizeof(ctx->pub_data)) {
+				XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
+				ctx->pub_data_len = publicKeySize;
+			}
+		} else if (ret == ASN_ECC_KEY_E) {
+			WGW_LOG("ECDSA public key import failed with ASN_ECC_KEY_E, attempting manual point extraction");
+
+			/* Since ASN.1 parsing works but point import fails, let's manually extract the point */
+			/* Find the BIT STRING containing the point data */
+			word32 i;
+			for (i = 0; i < publicKeySize - 10; i++) {
+				/* Look for BIT STRING tag (0x03) followed by length */
+				if (publicKeyDer[i] == 0x03) {
+					word32 bitStringIdx = i;
+					word32 length;
+
+					/* Parse BIT STRING length */
+					if (publicKeyDer[i + 1] & 0x80) {
+						/* Long form length */
+						int lenBytes = publicKeyDer[i + 1] & 0x7F;
+						if (lenBytes == 1 && (i + 3) < publicKeySize) {
+							length = publicKeyDer[i + 2];
+							bitStringIdx = i + 3;
+						} else if (lenBytes == 2 && (i + 4) < publicKeySize) {
+							length = (publicKeyDer[i + 2] << 8) | publicKeyDer[i + 3];
+							bitStringIdx = i + 4;
+						} else {
+							continue; /* Skip this BIT STRING */
+						}
+					} else {
+						/* Short form length */
+						length = publicKeyDer[i + 1];
+						bitStringIdx = i + 2;
+					}
+
+					/* Skip unused bits byte in BIT STRING */
+					if (bitStringIdx < publicKeySize && publicKeyDer[bitStringIdx] == 0x00) {
+						bitStringIdx++;
+						length--;
+					}
+
+					/* Check if this looks like an ECC point (should start with 0x04 for uncompressed) */
+					if (bitStringIdx < publicKeySize && length > 64 &&
+							publicKeyDer[bitStringIdx] == 0x04) {
+
+						/* Try to import this point data directly */
+						wc_ecc_free(&ctx->key.ecc);
+						ret = wc_ecc_init(&ctx->key.ecc);
+						if (ret == 0) {
+							ret = wc_ecc_import_x963_ex(publicKeyDer + bitStringIdx, length,
+									&ctx->key.ecc, ECC_CURVE_DEF);
+							if (ret == 0) {
+								WGW_LOG("ECDSA public key import succeeded using extracted point data");
+								ctx->algo = GNUTLS_PK_ECDSA;
+								ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
+										ctx->key.ecc.dp->id);
+								*key_found = 1;
+								if (publicKeySize <= sizeof(ctx->pub_data)) {
+									XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
+									ctx->pub_data_len = publicKeySize;
+								}
+								return 0;
+							} else {
+								WGW_LOG("Direct point import failed with code %d", ret);
+							}
+						}
+					}
+				}
+			}
+
+			WGW_LOG("Manual point extraction failed");
+			wc_ecc_free(&ctx->key.ecc);
+		} else {
+			WGW_LOG("ECDSA public key import failed with code %d", ret);
+			wc_ecc_free(&ctx->key.ecc);
+		}
+	} else {
+		WGW_WOLFSSL_ERROR("wc_ecc_init", ret);
+	}
+
+	return 0;
 }
 
 #if defined(HAVE_ED25519)
@@ -6692,7 +6765,7 @@ int wolfssl_pk_get_curve_id(int bits, int *curve_id)
 }
 
 static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
-    unsigned int bits)
+    unsigned int bits, gnutls_ecc_curve_t *curve)
 {
     int ret;
     int curve_id;
@@ -6719,6 +6792,11 @@ static int wolfssl_pk_generate_ecc(struct wolfssl_pk_ctx *ctx,
 
     curve_size = wc_ecc_get_curve_size_from_id(curve_id);
     WGW_LOG("curve size: %d", curve_size);
+
+    *curve = wolfssl_ecc_curve_id_to_curve_type(
+            curve_id);
+
+    WGW_LOG("curve id (gnutls type): %d", curve_id);
 
     PRIVATE_KEY_UNLOCK();
 
@@ -6983,7 +7061,7 @@ static int wolfssl_pk_generate_dh(struct wolfssl_pk_ctx *ctx,
 /* generate a pk key pair */
 static int wolfssl_pk_generate(void **_ctx, const void *privkey,
     gnutls_pk_algorithm_t algo, unsigned int bits, const void *p, const void *g,
-    const void *q)
+    const void *q, gnutls_ecc_curve_t *curve)
 {
     struct wolfssl_pk_ctx *ctx;
     int ret;
@@ -7024,7 +7102,7 @@ static int wolfssl_pk_generate(void **_ctx, const void *privkey,
         }
     } else if (algo == GNUTLS_PK_EC) {
         WGW_LOG("EC");
-        ret = wolfssl_pk_generate_ecc(ctx, bits);
+        ret = wolfssl_pk_generate_ecc(ctx, bits, curve);
         if (ret != 0) {
             return ret;
         }
@@ -7640,6 +7718,8 @@ static int wolfssl_pk_export_privkey_x509(void *_priv_ctx, const void *privkey)
         return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
+    WGW_LOG("export of the private key in X.509 format succeeded");
+
     return 0;
 }
 
@@ -7769,12 +7849,26 @@ static int wolfssl_pk_sign_rsa(struct wolfssl_pk_ctx *ctx,
         sign_type = WC_SIGNATURE_TYPE_RSA_W_ENC;
     }
 
+    if (!ctx->rng_initialized) {
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+        ret = wc_InitRng(&ctx->rng);
+        if (ret != 0) {
+            WGW_ERROR("wc_InitRng failed with code %d", ret);
+            gnutls_free(ctx);
+            return GNUTLS_E_RANDOM_FAILED;
+        }
+        ctx->rng_initialized = 1;
+    }
+
     /* Use wc_SignatureGenerate for PKCS#1 v1.5 */
     ret = wc_SignatureGenerate(hash_type, sign_type, msg_data->data,
         msg_data->size, sig_buf, &actual_sig_size, &ctx->key.rsa,
         sizeof(ctx->key.rsa), &ctx->rng);
     if (ret != 0) {
         WGW_ERROR("RSA PKCS#1 v1.5 signing failed with code %d", ret);
+        WGW_LOG("found the problem!");
         gnutls_free(sig_buf);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
