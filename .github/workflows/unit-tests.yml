@@ -16,6 +16,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest, macos-latest ]
+        fips: [ "", "fips" ]
         provider:
           - ""
           - "GNUTLS_NO_PROVIDER=1"
@@ -30,11 +31,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
-      - name: run tests (no fips)
+      - name: run tests (no FIPS)
+        if: matrix.fips == ''
         run: |
           BUILD_RESULT=0
           TEST_RESULT=0
           ./setup.sh || BUILD_RESULT=$?
+          cd wolfssl-gnutls-wrapper
+          ${{ matrix.provider }} make test || TEST_RESULT=$?
+          if [ "$BUILD_RESULT" -ne 0 ] || [ "$TEST_RESULT" -ne 0 ]; then
+            echo "Build or test failed: BUILD_RESULT=$BUILD_RESULT, TEST_RESULT=$TEST_RESULT"
+            exit 1
+          fi
+
+      - name: run tests (FIPS)
+        if: matrix.fips == 'fips'
+        run: |
+          BUILD_RESULT=0
+          TEST_RESULT=0
+          ./setup.sh fips || BUILD_RESULT=$?
           cd wolfssl-gnutls-wrapper
           ${{ matrix.provider }} make test || TEST_RESULT=$?
           if [ "$BUILD_RESULT" -ne 0 ] || [ "$TEST_RESULT" -ne 0 ]; then
