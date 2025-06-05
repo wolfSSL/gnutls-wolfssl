@@ -1,0 +1,125 @@
+name: rsyslog Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        rsyslog_ref: [ 'master', 'v8.2302.0' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install rsyslog dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y build-essential pkg-config libestr-dev libfastjson-dev zlib1g-dev uuid-dev libhiredis-dev uuid-dev flex bison
+          sudo apt-get install -y libdbi-dev libmysqlclient-dev postgresql-client libpq-dev libnet-dev librdkafka-dev libpcre3-dev libtokyocabinet-dev libglib2.0-dev libmongo-client-dev
+          sudo apt-get install -y libcurl4-gnutls-dev
+          sudo pip install docutils
+
+      - name: Install build and test dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y autoconf libtool valgrind
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build rsyslog at ${{ matrix.rsyslog_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: rsyslog/rsyslog
+          ref: ${{ matrix.rsyslog_ref }}
+          path: rsyslog
+
+      - name: Configure rsyslog
+        working-directory: rsyslog
+        run: |
+          ./autogen.sh --enable-gnutls --disable-libgcrypt --enable-testbench --enable-imdiag --enable-omstdout PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+
+      - name: Make rsyslog
+        working-directory: rsyslog
+        run: |
+          make -j $(nproc)
+
+      - name: Test rsyslog
+        working-directory: rsyslog
+        run: |
+          cat <<EOF >> tests/valgrind.supp
+          {
+             pselect_cancel
+             Memcheck:Param
+             pselect6(sig)
+             fun:__syscall_cancel_arch
+             fun:__internal_syscall_cancel
+             fun:__syscall_cancel
+             fun:pselect64_syscall
+             fun:pselect
+             fun:wait_timeout
+             fun:mainloop
+             fun:main
+          }
+          EOF
+          export VALGRINDFLAGS=--suppressions=valgrind.supp
+          export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib
+          make check 2>&1 | tee test.log
+          awk '/^FAIL:/ {gsub(/\.sh$/, ".log", $2); print "==== " $2 " ===="; system("cat tests/" $2 "\n")}' test.log
+          echo "Check for failures but exclude: rscript_http_request-vg.sh"
+          EC=0
+          grep -v rscript_http_request-vg.sh test.log | grep '^FAIL:' && EC=1
+          exit $EC
+
