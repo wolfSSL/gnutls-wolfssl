@@ -10053,6 +10053,7 @@ static int wolfssl_pk_export_privkey_ecc_raw(struct wolfssl_pk_ctx *priv_ctx,
     return 0;
 }
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_pk_export_privkey_ed25519_raw(
     struct wolfssl_pk_ctx *priv_ctx, gnutls_datum_t *x, gnutls_datum_t *k)
 {
@@ -10082,7 +10083,9 @@ static int wolfssl_pk_export_privkey_ed25519_raw(
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_pk_export_privkey_ed448_raw(
     struct wolfssl_pk_ctx *priv_ctx, gnutls_datum_t *x, gnutls_datum_t *k)
 {
@@ -10112,7 +10115,9 @@ static int wolfssl_pk_export_privkey_ed448_raw(
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE25519)
 static int wolfssl_pk_export_privkey_x25519_raw(
     struct wolfssl_pk_ctx *priv_ctx, gnutls_datum_t *x, gnutls_datum_t *k)
 {
@@ -10142,7 +10147,9 @@ static int wolfssl_pk_export_privkey_x25519_raw(
 
     return 0;
 }
+#endif
 
+#if defined(HAVE_CURVE448)
 static int wolfssl_pk_export_privkey_x448_raw(
     struct wolfssl_pk_ctx *priv_ctx, gnutls_datum_t *x, gnutls_datum_t *k)
 {
@@ -10172,6 +10179,7 @@ static int wolfssl_pk_export_privkey_x448_raw(
 
     return 0;
 }
+#endif
 
 static int copy_into_datum(gnutls_datum_t *src, gnutls_datum_t *dst, int lz)
 {
@@ -10241,6 +10249,7 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx,
     }
 
     switch (priv_ctx->algo) {
+#if defined(HAVE_ED25519)
         case GNUTLS_PK_EDDSA_ED25519:
             if (x_datum) {
                 ret = wolfssl_pk_export_privkey_ed25519_raw(priv_ctx, &x, &k);
@@ -10253,6 +10262,8 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx,
             y.size = 0;
             lz = 0;
             break;
+#endif
+#if defined(HAVE_ED448)
         case GNUTLS_PK_EDDSA_ED448:
             if (x_datum) {
                 ret = wolfssl_pk_export_privkey_ed448_raw(priv_ctx, &x, &k);
@@ -10265,6 +10276,8 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx,
             y.size = 0;
             lz = 0;
             break;
+#endif
+#if defined(HAVE_CURVE25519)
         case GNUTLS_PK_ECDH_X25519:
             if (x_datum) {
                 ret = wolfssl_pk_export_privkey_x25519_raw(priv_ctx, &x, &k);
@@ -10277,6 +10290,8 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx,
             y.size = 0;
             lz = 0;
             break;
+#endif
+#if defined(HAVE_CURVE448)
         case GNUTLS_PK_ECDH_X448:
             if (x_datum) {
                 ret = wolfssl_pk_export_privkey_x448_raw(priv_ctx, &x, &k);
@@ -10289,6 +10304,7 @@ static int wolfssl_pk_export_privkey_ecdh_raw(void *ctx,
             y.size = 0;
             lz = 0;
             break;
+#endif
         case GNUTLS_PK_ECDSA:
             if (x_datum || y_datum) {
                 ret = wolfssl_pk_export_privkey_ecc_raw(priv_ctx, &x, &y, &k);
