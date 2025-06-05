@@ -4975,6 +4975,82 @@ static int wolfssl_rsa_pss_import_public(struct wolfssl_pk_ctx *ctx,
     return 0;
 }
 
+static int wolfssl_ecc_import_public_manual(struct wolfssl_pk_ctx *ctx,
+    unsigned char* publicKeyDer, word32 publicKeySize, int* key_found) {
+    int ret;
+
+    WGW_FUNC_ENTER();
+
+    WGW_LOG("ECC public key data size: %u", publicKeySize);
+
+    /* Since ASN.1 parsing works but point import fails, let's manually extract the point */
+    /* Find the BIT STRING containing the point data */
+    word32 i;
+    for (i = 0; i < publicKeySize - 10; i++) {
+        /* Look for BIT STRING tag (0x03) followed by length */
+        if (publicKeyDer[i] == 0x03) {
+            word32 bitStringIdx = i;
+            word32 length;
+
+            /* Parse BIT STRING length */
+            if (publicKeyDer[i + 1] & 0x80) {
+                /* Long form length */
+                int lenBytes = publicKeyDer[i + 1] & 0x7F;
+                if (lenBytes == 1 && (i + 3) < publicKeySize) {
+                    length = publicKeyDer[i + 2];
+                    bitStringIdx = i + 3;
+                } else if (lenBytes == 2 && (i + 4) < publicKeySize) {
+                    length = (publicKeyDer[i + 2] << 8) | publicKeyDer[i + 3];
+                    bitStringIdx = i + 4;
+                } else {
+                    continue; /* Skip this BIT STRING */
+                }
+            } else {
+                /* Short form length */
+                length = publicKeyDer[i + 1];
+                bitStringIdx = i + 2;
+            }
+
+            /* Skip unused bits byte in BIT STRING */
+            if (bitStringIdx < publicKeySize && publicKeyDer[bitStringIdx] == 0x00) {
+                bitStringIdx++;
+                length--;
+            }
+
+            /* Check if this looks like an ECC point (should start with 0x04 for uncompressed) */
+            if (bitStringIdx < publicKeySize && length > 64 &&
+                    publicKeyDer[bitStringIdx] == 0x04) {
+
+                /* Try to import this point data directly */
+                ret = wc_ecc_init(&ctx->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_import_x963_ex(publicKeyDer + bitStringIdx, length,
+                            &ctx->key.ecc, ECC_CURVE_DEF);
+                    if (ret == 0) {
+                        WGW_LOG("ECDSA public key import succeeded using extracted point data");
+                        ctx->algo = GNUTLS_PK_ECDSA;
+                        ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
+                                ctx->key.ecc.dp->id);
+                        *key_found = 1;
+                        if (publicKeySize <= sizeof(ctx->pub_data)) {
+                            XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
+                            ctx->pub_data_len = publicKeySize;
+                        }
+                        return 0;
+                    } else {
+                        WGW_LOG("Direct point import failed with code %d", ret);
+                    }
+                }
+            }
+        }
+    }
+
+    WGW_LOG("Manual point extraction failed");
+    wc_ecc_free(&ctx->key.ecc);
+
+    return 0;
+}
+
 static int wolfssl_ecc_import_public(struct wolfssl_pk_ctx *ctx,
     unsigned char* publicKeyDer, word32 publicKeySize, int* key_found)
 {
@@ -4999,77 +5075,10 @@ static int wolfssl_ecc_import_public(struct wolfssl_pk_ctx *ctx,
 				XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
 				ctx->pub_data_len = publicKeySize;
 			}
-		} else if (ret == ASN_ECC_KEY_E) {
-			WGW_LOG("ECDSA public key import failed with ASN_ECC_KEY_E, attempting manual point extraction");
-
-			/* Since ASN.1 parsing works but point import fails, let's manually extract the point */
-			/* Find the BIT STRING containing the point data */
-			word32 i;
-			for (i = 0; i < publicKeySize - 10; i++) {
-				/* Look for BIT STRING tag (0x03) followed by length */
-				if (publicKeyDer[i] == 0x03) {
-					word32 bitStringIdx = i;
-					word32 length;
-
-					/* Parse BIT STRING length */
-					if (publicKeyDer[i + 1] & 0x80) {
-						/* Long form length */
-						int lenBytes = publicKeyDer[i + 1] & 0x7F;
-						if (lenBytes == 1 && (i + 3) < publicKeySize) {
-							length = publicKeyDer[i + 2];
-							bitStringIdx = i + 3;
-						} else if (lenBytes == 2 && (i + 4) < publicKeySize) {
-							length = (publicKeyDer[i + 2] << 8) | publicKeyDer[i + 3];
-							bitStringIdx = i + 4;
-						} else {
-							continue; /* Skip this BIT STRING */
-						}
-					} else {
-						/* Short form length */
-						length = publicKeyDer[i + 1];
-						bitStringIdx = i + 2;
-					}
-
-					/* Skip unused bits byte in BIT STRING */
-					if (bitStringIdx < publicKeySize && publicKeyDer[bitStringIdx] == 0x00) {
-						bitStringIdx++;
-						length--;
-					}
-
-					/* Check if this looks like an ECC point (should start with 0x04 for uncompressed) */
-					if (bitStringIdx < publicKeySize && length > 64 &&
-							publicKeyDer[bitStringIdx] == 0x04) {
-
-						/* Try to import this point data directly */
-						wc_ecc_free(&ctx->key.ecc);
-						ret = wc_ecc_init(&ctx->key.ecc);
-						if (ret == 0) {
-							ret = wc_ecc_import_x963_ex(publicKeyDer + bitStringIdx, length,
-									&ctx->key.ecc, ECC_CURVE_DEF);
-							if (ret == 0) {
-								WGW_LOG("ECDSA public key import succeeded using extracted point data");
-								ctx->algo = GNUTLS_PK_ECDSA;
-								ctx->curve = wolfssl_ecc_curve_id_to_curve_type(
-										ctx->key.ecc.dp->id);
-								*key_found = 1;
-								if (publicKeySize <= sizeof(ctx->pub_data)) {
-									XMEMCPY(ctx->pub_data, publicKeyDer, publicKeySize);
-									ctx->pub_data_len = publicKeySize;
-								}
-								return 0;
-							} else {
-								WGW_LOG("Direct point import failed with code %d", ret);
-							}
-						}
-					}
-				}
-			}
-
-			WGW_LOG("Manual point extraction failed");
-			wc_ecc_free(&ctx->key.ecc);
 		} else {
 			WGW_LOG("ECDSA public key import failed with code %d", ret);
 			wc_ecc_free(&ctx->key.ecc);
+            return ret;
 		}
 	} else {
 		WGW_WOLFSSL_ERROR("wc_ecc_init", ret);
@@ -5419,6 +5428,11 @@ static int wolfssl_pk_import_public(struct wolfssl_pk_ctx *ctx,
             WGW_LOG("ECDSA public key");
             ret = wolfssl_ecc_import_public(ctx, publicKeyDer, publicKeySize,
                 key_found);
+            if (ret == ASN_ECC_KEY_E) {
+                WGW_LOG("Importing via raw DER failed, importing ecc points manually");
+                ret = wolfssl_ecc_import_public_manual(ctx, publicKeyDer,
+                        publicKeySize, key_found);
+            }
             break;
 #if !defined(HAVE_FIPS)
 #if defined(HAVE_ED25519)

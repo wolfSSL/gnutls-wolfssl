@@ -1,0 +1,230 @@
+name: LibCUPS Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  libcups_tls_test:
+    name: LibCUPS TLS Test
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        cups_version: [ 'latest', 'target' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Install build essentials
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install CUPS dependencies
+        run: |
+          sudo apt-get install -y autoconf libavahi-client-dev libnss-mdns libpng-dev \
+            libssl-dev zlib1g-dev avahi-daemon libkrb5-dev libpam-dev libsystemd-dev \
+            libusb-1.0-0-dev po4a
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
+      - name: Verify setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          test -d /opt/wolfssl || exit 1
+          echo "Check for GnuTLS installation..."
+          test -d /opt/gnutls || exit 1
+          echo "Check for wrapper installation..."
+          test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
+      - name: Clone and build LibCUPS latest release
+        if: matrix.cups_version == 'latest'
+        run: |
+          git clone --recurse-submodules https://github.com/OpenPrinting/libcups.git
+          cd libcups
+          git checkout v3.0rc4
+          
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          
+          ./configure --with-tls=gnutls --enable-debug --enable-debug-printfs \
+            'LDFLAGS=-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib -L/opt/gnutls/lib' \
+            'CPPFLAGS=-I/opt/gnutls/include -I/opt/gnutls/include'
+          
+          make -j$(nproc)
+          cd cups/
+          make -j$(nproc) unittests
+
+      - name: Clone and build CUPS target release (v2.4.2)
+        if: matrix.cups_version == 'target'
+        run: |
+          git clone https://github.com/OpenPrinting/cups.git
+          cd cups
+          git checkout v2.4.2
+          
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          
+          ./configure --with-tls=gnutls --enable-debug --enable-debug-printfs \
+            'LDFLAGS=-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib -L/opt/gnutls/lib' \
+            'CPPFLAGS=-I/opt/gnutls/include -I/opt/gnutls/include'
+          
+          make -j$(nproc)
+          cd cups/
+          make -j$(nproc) unittests
+
+      - name: Generate TLS test certificates
+        run: |
+          echo "Generating test certificates..."
+          openssl req -x509 -newkey rsa:2048 -keyout test-rsa.key -out test-rsa.crt \
+            -days 1 -nodes -subj "/CN=localhost"
+
+      - name: Start TLS server
+        run: |
+          openssl s_server -accept 8443 -cert test-rsa.crt -key test-rsa.key -www </dev/null >/dev/null 2>&1 &
+          SERVER_PID=$!
+          echo "TLS_SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+          sleep 3
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Failed to start TLS server"
+            exit 1
+          fi
+          echo "TLS server started successfully with PID $SERVER_PID"
+
+      - name: Run tests and analyze results
+        run: |
+          # Determine test directory
+          if [ "${{ matrix.cups_version }}" == "latest" ]; then
+            TEST_DIR="libcups/cups"
+          else
+            TEST_DIR="cups/cups"
+          fi
+          
+          cd $TEST_DIR
+          
+          # Run tests WITH provider
+          echo "=== RUNNING TESTS WITH PROVIDER ==="
+          export WGW_LOGGING=0
+          
+          > /tmp/with_provider.log
+          
+          if [ "${{ matrix.cups_version }}" == "latest" ]; then
+            echo "--- testcreds with provider ---"
+            ./testcreds client https://localhost:8443 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- testhash with provider ---"
+            ./testhash 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- testjson with provider ---"
+            ./testjson 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- testjwt with provider ---"
+            ./testjwt 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- testoauth with provider ---"
+            ./testoauth 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- tlscheck with provider ---"
+            ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
+            timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
+          else
+            echo "--- testcreds with provider ---"
+            ./testcreds https://localhost:8443 2>&1 | tee -a /tmp/with_provider.log || true
+            
+            echo "--- tlscheck with provider ---"
+            ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
+            timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
+          fi
+          
+          WITH_FAILS=$(grep -c "FAIL" /tmp/with_provider.log | tr -d '\n' || echo "0")
+          
+          # Run tests WITHOUT provider
+          echo "=== RUNNING TESTS WITHOUT PROVIDER ==="
+          export GNUTLS_NO_PROVIDER=1
+          
+          > /tmp/without_provider.log
+          
+          if [ "${{ matrix.cups_version }}" == "latest" ]; then
+            echo "--- testcreds without provider ---"
+            ./testcreds client https://localhost:8443 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- testhash without provider ---"
+            ./testhash 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- testjson without provider ---"
+            ./testjson 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- testjwt without provider ---"
+            ./testjwt 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- testoauth without provider ---"
+            ./testoauth 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- tlscheck without provider ---"
+            ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
+            timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
+          else
+            echo "--- testcreds without provider ---"
+            ./testcreds https://localhost:8443 2>&1 | tee -a /tmp/without_provider.log || true
+            
+            echo "--- tlscheck without provider ---"
+            ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
+            timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
+          fi
+          
+          WITHOUT_FAILS=$(grep -c "FAIL" /tmp/without_provider.log | tr -d '\n' || echo "0")
+          
+          # Analyze results
+          echo "=== FINAL RESULTS ==="
+          echo "Failures with provider: $WITH_FAILS"
+          echo "Failures without provider: $WITHOUT_FAILS"
+          
+          if [ "$WITH_FAILS" = "$WITHOUT_FAILS" ]; then
+            echo "✅ SUCCESS: Same number of failures"
+            exit 0
+          else
+            echo "❌ FAILURE: Different number of failures"
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -n "$TLS_SERVER_PID" ] && kill -0 $TLS_SERVER_PID 2>/dev/null; then
+            kill $TLS_SERVER_PID
+            echo "TLS server stopped"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== TEST SUMMARY ==="
+          echo "CUPS Version: ${{ matrix.cups_version }}"
+          if [ "$WITH_FAILS" = "$WITHOUT_FAILS" ]; then
+            echo "Test Result: SUCCESS"
+          else
+            echo "Test Result: FAILURE"
+          fi
+          echo "=================="
