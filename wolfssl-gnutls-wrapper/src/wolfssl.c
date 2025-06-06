@@ -11203,20 +11203,34 @@ static int wolfssl_tls13_init_secret(gnutls_mac_algorithm_t mac,
     const unsigned char *psk, size_t psk_size, void *out, size_t output_size)
 {
     int ret;
+    int hash_type;
     unsigned char tmp[WC_MAX_DIGEST_SIZE];
 
     WGW_FUNC_ENTER();
 
-    /* When no key supplied, use an all zero key. */
-    if (psk == NULL) {
-        psk_size = output_size;
-        XMEMSET(tmp, 0, psk_size);
+    (void)output_size;
+
+    /* Get hash algorithm. */
+    hash_type = get_hash_type(mac);
+    if (hash_type < 0) {
+        WGW_ERROR("HMAC algorithm not supported");
+        return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    if (psk == NULL && psk_size == 0) {
         psk = tmp;
     }
 
-    ret = wolfssl_hmac_fast(mac, NULL, 0, "", 0, psk, psk_size, out);
+    PRIVATE_KEY_UNLOCK();
+
+    ret = wc_Tls13_HKDF_Extract(out, NULL, 0, (byte*)psk, psk_size,
+        hash_type);
+
+    PRIVATE_KEY_LOCK();
+
     if (ret != 0) {
-        return ret;
+        WGW_WOLFSSL_ERROR("wc_Tls13_HKDF_Extract_ex", ret);
+        return GNUTLS_E_INTERNAL_ERROR;
     }
 
     return 0;
