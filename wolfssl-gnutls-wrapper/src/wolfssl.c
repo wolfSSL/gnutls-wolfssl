@@ -10381,7 +10381,8 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    *curve = pub_ctx->curve;
+    if (curve)
+        *curve = pub_ctx->curve;
 
     if (!x && !y) {
         WGW_LOG("Returning curve only - not X and Y");
@@ -10438,7 +10439,6 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
                 return GNUTLS_E_INVALID_REQUEST;
             }
             pub_ctx->curve = GNUTLS_ECC_CURVE_ED25519;
-
             /* Allocate and copy public key x-ordinate */
             x_datum->data = gnutls_malloc(x_size);
             if (!x_datum->data) {
@@ -10539,7 +10539,8 @@ static int wolfssl_pk_export_pubkey_ecdh_raw(void *ctx, const void *x,
             return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
-    *curve = pub_ctx->curve;
+    if (curve)
+        *curve = pub_ctx->curve;
 
     WGW_LOG("ECDH public key exported successfully");
 

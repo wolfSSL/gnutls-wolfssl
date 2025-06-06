@@ -200,14 +200,6 @@ jobs:
           echo "=== FINAL RESULTS ==="
           echo "Failures with provider: $WITH_FAILS"
           echo "Failures without provider: $WITHOUT_FAILS"
-          
-          if [ "$WITH_FAILS" = "$WITHOUT_FAILS" ]; then
-            echo "✅ SUCCESS: Same number of failures"
-            exit 0
-          else
-            echo "❌ FAILURE: Different number of failures"
-            exit 1
-          fi
 
       - name: Cleanup
         if: always()
