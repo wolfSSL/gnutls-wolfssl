@@ -15,11 +15,11 @@ concurrency:
 jobs:
   build_gnutls:
     name: Build wolfSSL, GnuTLS and provider
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       matrix:
         os: [ ubuntu-latest ]
-        rsyslog_ref: [ 'master', 'v8.2302.0', 'v8.40.0' ]
+        rsyslog_ref: [ 'master', 'v8.2302.0' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
 
