@@ -1,0 +1,154 @@
+name: tpm2-tools • wolfSSL / GnuTLS CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ '*' ]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tpm2-wolfssl-gnutls-integration:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        tpm2_tools_version: [master, "5.7"]
+      fail-fast: false
+    name: TPM2 wolfSSL/GnuTLS Integration (tpm2-tools ${{ matrix.tpm2_tools_version }})
+
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends \
+            autoconf automake libtool m4 pkg-config build-essential git \
+            meson ninja-build gettext clang gperf gnulib autopoint \
+            gtk-doc-tools nettle-dev libtasn1-bin libtasn1-6-dev \
+            libunistring-dev libp11-kit-dev libunbound-dev bison python3-yaml \
+            libcurl4-openssl-dev libdbus-1-dev libcmocka-dev expect xxd pandoc \
+            libssl-dev libgmp-dev libjson-c-dev libtss2-dev swtpm autoconf-archive
+      
+      - name: Build wolfSSL, wrapper and GnuTLS
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+      
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+      
+      - name: Build curl (GnuTLS backend)
+        run: |
+          export MAKEFLAGS="-j$(nproc)"
+          git clone --branch curl-8_4_0 https://github.com/curl/curl
+          cd curl
+          autoreconf -fi
+          ./configure --with-gnutls=/opt/gnutls --prefix=/usr/local
+          make
+          sudo make install
+          sudo ldconfig
+      
+      - name: Build tpm2-tss
+        run: |
+          export MAKEFLAGS="-j$(nproc)"
+          git clone https://github.com/tpm2-software/tpm2-tss
+          cd tpm2-tss
+          git submodule update --init --recursive
+          ./bootstrap
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          ./configure --prefix=/usr/local --disable-hardening
+          make
+          sudo make install
+          sudo ldconfig
+      
+      - name: Build tpm2-abrmd
+        run: |
+          export MAKEFLAGS="-j$(nproc)"
+          git clone https://github.com/tpm2-software/tpm2-abrmd
+          cd tpm2-abrmd
+          ./bootstrap
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          ./configure --prefix=/usr/local \
+            --with-dbuspolicydir=/etc/dbus-1/system.d \
+            --with-systemdsystemunitdir=/lib/systemd/system
+          make
+          sudo make install
+          sudo ldconfig
+      
+      - name: Build IBM swtpm2 simulator
+        run: |
+          git clone https://github.com/kgoldman/ibmswtpm2.git
+          make -C ibmswtpm2/src -j"$(nproc)"
+          sudo install -m755 ibmswtpm2/src/tpm_server /usr/local/bin
+          echo "/usr/local/bin" >> $GITHUB_PATH
+      
+      - name: Build tpm2-tools
+        run: |
+          export MAKEFLAGS="-j$(nproc)"
+          git clone https://github.com/tpm2-software/tpm2-tools
+          cd tpm2-tools
+          
+          # Checkout the appropriate version
+          if [ "${{ matrix.tpm2_tools_version }}" != "master" ]; then
+            echo "Checking out tag ${{ matrix.tpm2_tools_version }}"
+            git checkout ${{ matrix.tpm2_tools_version }}
+          else
+            echo "Using master branch"
+          fi
+          
+          ./bootstrap
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          ./configure --prefix=/usr/local --enable-unit=abrmd
+          make
+          sudo make install
+          sudo ldconfig
+      
+      - name: Verify linkage
+        run: |
+          for bin in /usr/local/bin/tpm2_getcap /usr/local/bin/tss2 /usr/local/lib/libtss2-fapi.so; do
+            echo "::group::ldd $bin"
+            ldd "$bin" | grep -E "lib(curl|gnutls)"
+            echo "::endgroup::"
+            ldd "$bin" | grep -q "libcurl.so.4 => /usr/local/lib/libcurl.so.4" &&
+            ldd "$bin" | grep -q "libgnutls.so.30 => /opt/gnutls/lib/libgnutls.so.30" ||
+            { echo "❌ Wrong linkage detected in $bin"; exit 1; }
+          done
+      
+      - name: Run complete test-suite
+        run: |
+          cd tpm2-tools
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export GNUTLS_DEBUG_LEVEL=5
+          export WGW_LOGGING=1
+          export TEST_REGENERATE_OUTPUT=1
+
+          make check
