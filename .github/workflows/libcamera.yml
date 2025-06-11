@@ -1,0 +1,98 @@
+name: Libcamera Build and Test
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+jobs:
+  libcamera_build_test:
+    name: Libcamera Build Test
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        libcamera_ref: [ 'master', 'v0.5.1', 'v0.0.3' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+      - name: Setup Python 3.11 for older libcamera
+        if: matrix.libcamera_ref == 'v0.0.3'
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev libjpeg-dev
+      - name: Install libcamera dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y cmake meson ninja-build pkg-config python3-ply python3-jinja2 python3-yaml libyaml-dev libgtest-dev
+      - name: Install Python dependencies for v0.0.3
+        if: matrix.libcamera_ref == 'v0.0.3'
+        run: |
+          python -m pip install ply jinja2 pyyaml
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+      - name: Check setup.sh output directories
+        run: |
+          test -d /opt/wolfssl || exit 1
+          test -d /opt/gnutls || exit 1
+          test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+      - name: Checkout libcamera at ${{ matrix.libcamera_ref }}
+        run: |
+          git clone https://git.libcamera.org/libcamera/libcamera.git
+          cd libcamera
+          if [ "${{ matrix.libcamera_ref }}" != "master" ]; then
+            git checkout ${{ matrix.libcamera_ref }}
+          fi
+      - name: Configure and build libcamera
+        working-directory: libcamera
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
+          meson setup build -Dtest=true
+          meson compile -C build
+      - name: Run unit-tests that don’t need hardware
+        working-directory: libcamera/build
+        run: |
+          if [ "${{ matrix.libcamera_ref }}" = "v0.0.3" ]; then
+            meson test -v \
+              'control_info' 'control_value' \
+              'ipa_module_test' 'ipa_interface_test' \
+              'unixsocket_ipc' 'unixsocket' 'log_api' 'log_process' \
+              'process_test' 'generated_serializer_test' \
+              'stream_formats' 'stream_colorspace' 'color-space' 'geometry' \
+              'public-api' 'signal' 'span' 'bayer-format' 'byte-stream-buffer' \
+              'event-thread' 'file' 'flags' 'event' 'object' 'object-delete' \
+              'object-invoke' 'pixel-format' 'shared-fd' 'message' \
+              'signal-threads' 'threads' 'timer-thread' 'unique-fd' 'utils' \
+              'yaml-parser' 'event-dispatcher' 'timer'
+          else
+            meson test -v \
+              'control_info' 'control_value' 'fixedpoint' 'histogram' \
+              'interpolator' 'ipa_module_test' 'ipa_interface_test' \
+              'unixsocket_ipc' 'unixsocket' 'log_api' 'log_process' \
+              'process_test' 'generated_serializer_test' 'stream_formats' \
+              'stream_colorspace' 'color-space' 'geometry' 'public-api' \
+              'signal' 'span' 'transform' 'bayer-format' 'byte-stream-buffer' \
+              'event-thread' 'file' 'flags' 'matrix' 'event' 'object' \
+              'object-delete' 'object-invoke' 'pixel-format' 'shared-fd' \
+              'message' 'signal-threads' 'threads' 'timer-thread' 'unique-fd' \
+              'utils' 'vector' 'yaml-parser' 'event-dispatcher' 'timer'
+          fi
