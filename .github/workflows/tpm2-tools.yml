@@ -64,7 +64,7 @@ jobs:
           git clone --branch curl-8_4_0 https://github.com/curl/curl
           cd curl
           autoreconf -fi
-          ./configure --with-gnutls=/opt/gnutls --prefix=/usr/local
+          ./configure --with-gnutls=/opt/gnutls --prefix=/opt/curl
           make
           sudo make install
           sudo ldconfig
@@ -76,9 +76,10 @@ jobs:
           cd tpm2-tss
           git submodule update --init --recursive
           ./bootstrap
-          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
-          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
-          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/curl/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export CPPFLAGS="-I/opt/gnutls/include -I/opt/curl/include${CPPFLAGS:+ $CPPFLAGS}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/opt/curl/lib -Wl,-rpath,/opt/gnutls/lib:/opt/curl/lib${LDFLAGS:+ $LDFLAGS}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/curl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           ./configure --prefix=/usr/local --disable-hardening
           make
           sudo make install
@@ -90,9 +91,10 @@ jobs:
           git clone https://github.com/tpm2-software/tpm2-abrmd
           cd tpm2-abrmd
           ./bootstrap
-          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
-          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
-          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/curl/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export CPPFLAGS="-I/opt/gnutls/include -I/opt/curl/include${CPPFLAGS:+ $CPPFLAGS}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/opt/curl/lib -Wl,-rpath,/opt/gnutls/lib:/opt/curl/lib${LDFLAGS:+ $LDFLAGS}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/curl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           ./configure --prefix=/usr/local \
             --with-dbuspolicydir=/etc/dbus-1/system.d \
             --with-systemdsystemunitdir=/lib/systemd/system
@@ -122,9 +124,10 @@ jobs:
           fi
           
           ./bootstrap
-          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
-          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
-          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/curl/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export CPPFLAGS="-I/opt/gnutls/include -I/opt/curl/include${CPPFLAGS:+ $CPPFLAGS}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/opt/curl/lib -Wl,-rpath,/opt/gnutls/lib:/opt/curl/lib${LDFLAGS:+ $LDFLAGS}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/curl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           ./configure --prefix=/usr/local --enable-unit=abrmd
           make
           sudo make install
@@ -136,7 +139,7 @@ jobs:
             echo "::group::ldd $bin"
             ldd "$bin" | grep -E "lib(curl|gnutls)"
             echo "::endgroup::"
-            ldd "$bin" | grep -q "libcurl.so.4 => /usr/local/lib/libcurl.so.4" &&
+            ldd "$bin" | grep -q "libcurl.so.4 => /opt/curl/lib/libcurl.so.4" &&
             ldd "$bin" | grep -q "libgnutls.so.30 => /opt/gnutls/lib/libgnutls.so.30" ||
             { echo "❌ Wrong linkage detected in $bin"; exit 1; }
           done
@@ -144,9 +147,10 @@ jobs:
       - name: Run complete test-suite
         run: |
           cd tpm2-tools
-          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
-          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
-          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/curl/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          export CPPFLAGS="-I/opt/gnutls/include -I/opt/curl/include${CPPFLAGS:+ $CPPFLAGS}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/opt/curl/lib -Wl,-rpath,/opt/gnutls/lib:/opt/curl/lib${LDFLAGS:+ $LDFLAGS}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/curl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export GNUTLS_DEBUG_LEVEL=5
           export WGW_LOGGING=1
           export TEST_REGENERATE_OUTPUT=1
