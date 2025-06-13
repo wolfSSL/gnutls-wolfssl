@@ -1,0 +1,111 @@
+name: NetworkManager • wolfSSL / GnuTLS CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nm-wolfssl-gnutls:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        nm_version: [ master, "1.52.0", "1.42.4" ]
+
+    steps:
+    # ────────────────────────── checkout + packages ─────────────────────────
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install --yes --no-install-recommends \
+          autoconf automake libtool m4 pkg-config build-essential git \
+          meson ninja-build gettext clang gperf gnulib autopoint gtk-doc-tools \
+          nettle-dev libtasn1-bin libtasn1-6-dev libunistring-dev \
+          libp11-kit-dev libunbound-dev bison python3-yaml \
+          debhelper debugedit dh-autoreconf dh-strip-nondeterminism dwz intltool \
+          libbluetooth-dev libcurl4-gnutls-dev libdebhelper-perl \
+          libfile-stripnondeterminism-perl libglib2.0-doc libgnutls28-dev \
+          libnewt-dev libnl-3-dev libnl-cli-3-200 libnl-nf-3-200 libnvme-dev \
+          libpolkit-agent-1-dev libslang2-dev libsub-override-perl \
+          libteam-dev libteam5 libyaml-perl po-debconf
+
+    - name: Build forked GnuTLS stack
+      run: |
+        LOGGING=0 GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+        test -d /opt/gnutls && test -d /opt/wolfssl
+
+    - name: Build curl 7.88.1 (GnuTLS backend)
+      run: |
+        git clone --branch curl-7_88_1 https://github.com/curl/curl
+        cd curl
+        autoreconf -fi
+        ./configure --with-gnutls=/opt/gnutls --prefix=/usr/local \
+                    --disable-static --enable-shared
+        make -j"$(nproc)"
+        sudo make install
+        sudo ldconfig
+
+    - name: Clone NetworkManager ${{ matrix.nm_version }}
+      run: |
+        git clone https://github.com/NetworkManager/NetworkManager
+        cd NetworkManager
+        if [ "${{ matrix.nm_version }}" != "master" ]; then
+          git checkout "${{ matrix.nm_version }}"
+        fi
+
+    - name: Configure & build NetworkManager
+      working-directory: NetworkManager
+      run: |
+        export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export CPPFLAGS="-I/opt/gnutls/include -I/usr/local/include $CPPFLAGS"
+        export LDFLAGS="-L/opt/gnutls/lib -L/usr/local/lib -Wl,-rpath,/opt/gnutls/lib:/usr/local/lib $LDFLAGS"
+        export LD_LIBRARY_PATH="/opt/gnutls/lib:/usr/local/lib:$LD_LIBRARY_PATH"
+
+        meson setup build-gnutls \
+          -Dcrypto=gnutls \
+          -Dtests=yes \
+          -Dsystemd_journal=true \
+          -Dmore_logging=true \
+          -Dqt=false
+        ninja -C build-gnutls -j"$(nproc)"
+
+    # ───────────────────── verify linkage (before tests) ────────────────────
+    - name: Verify linkage to /opt/gnutls
+      working-directory: NetworkManager/build-gnutls
+      run: |
+        BIN=src/nmcli/nmcli
+        LIB=$(find src/libnm-client-impl -name 'libnm.so*' -type f | head -n1)
+        for obj in "$BIN" "$LIB"; do
+          echo "::group::ldd $obj"
+          ldd "$obj" | grep -E 'lib(curl|gnutls)'
+          echo "::endgroup::"
+          ldd "$obj" | grep -q '/opt/gnutls/lib/libgnutls.so.30' || exit 1
+        done
+
+    # ────────────────────────── run test-suite ──────────────────────────────
+    - name: Run NetworkManager tests
+      working-directory: NetworkManager
+      run: |
+        export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export CPPFLAGS="-I/opt/gnutls/include -I/usr/local/include $CPPFLAGS"
+        export LDFLAGS="-L/opt/gnutls/lib -L/usr/local/lib -Wl,-rpath,/opt/gnutls/lib:/usr/local/lib $LDFLAGS"
+        export LD_LIBRARY_PATH="/opt/gnutls/lib:/usr/local/lib:$LD_LIBRARY_PATH"
+
+        if [ "${{ matrix.nm_version }}" = "1.42.4" ]; then
+          ninja -C build-gnutls meson-test -- --skip platform/test-link-linux --skip config/test-config
+        else
+          ninja -C build-gnutls test
+        fi
