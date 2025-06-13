@@ -36,11 +36,11 @@ jobs:
           nettle-dev libtasn1-bin libtasn1-6-dev libunistring-dev \
           libp11-kit-dev libunbound-dev bison python3-yaml \
           debhelper debugedit dh-autoreconf dh-strip-nondeterminism dwz intltool \
-          libbluetooth-dev libcurl4-gnutls-dev libdebhelper-perl \
+          libbluetooth-dev libcurl4-gnutls-dev libdebhelper-perl libndp-dev \
           libfile-stripnondeterminism-perl libglib2.0-doc libgnutls28-dev \
           libnewt-dev libnl-3-dev libnl-cli-3-200 libnl-nf-3-200 libnvme-dev \
-          libpolkit-agent-1-dev libslang2-dev libsub-override-perl \
-          libteam-dev libteam5 libyaml-perl po-debconf
+          libpolkit-agent-1-dev libslang2-dev libsub-override-perl libdbus-1-dev \
+          libteam-dev libteam5 libyaml-perl po-debconf libudev-dev libsystemd-dev
 
     - name: Build forked GnuTLS stack
       run: |
