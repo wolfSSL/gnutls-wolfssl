@@ -82,7 +82,7 @@ static int test_tls_prf(gnutls_mac_algorithm_t mac_alg,
         return 1;
     }
 
-    if (compare("Master", output, expected, sz) != 0) {
+    if (compare("Master", (unsigned char*)output, expected, sz) != 0) {
         return 1;
     }
 
