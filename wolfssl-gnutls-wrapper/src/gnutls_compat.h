@@ -369,37 +369,6 @@ typedef enum {
 
 /* Public key algorithms */
 typedef struct gnutls_crypto_pk {
-    gnutls_pk_get_bits_func get_bits;
-    gnutls_pk_get_spki_func get_spki;
-    gnutls_pk_set_spki_func set_spki;
-    gnutls_pk_generate_func generate_backend;
-    gnutls_pk_import_pubkey_func import_pubkey_backend;
-    gnutls_pk_export_pubkey_func export_pubkey_backend;
-    gnutls_pk_export_privkey_x509_func export_privkey_x509_backend;
-    gnutls_pk_export_pubkey_x509_func export_pubkey_x509_backend;
-    gnutls_pk_import_privkey_x509_func import_privkey_x509_backend;
-    gnutls_pk_verify_privkey_params_func verify_privkey_params_backend;
-    gnutls_pk_verify_pubkey_params_func verify_pubkey_params_backend;
-    gnutls_pk_pubkey_encrypt_func pubkey_encrypt_backend;
-    gnutls_pk_privkey_decrypt_func privkey_decrypt_backend;
-    gnutls_pk_import_pubkey_x509_func import_pubkey_x509_backend;
-    gnutls_pk_import_privkey_url_func import_privkey_url_backend;
-    gnutls_pk_import_pubkey_url_func import_pubkey_url_backend;
-    gnutls_pk_sign_func sign_backend;
-    gnutls_pk_verify_func verify_backend;
-    gnutls_pk_sign_hash_func sign_hash_backend;
-    gnutls_pk_verify_hash_func verify_hash_backend;
-    gnutls_pk_derive_shared_secret_func derive_shared_secret_backend;
-    gnutls_pk_import_rsa_raw_func import_rsa_raw_backend;
-    gnutls_pk_export_rsa_raw_func export_rsa_raw_backend;
-    gnutls_pk_privkey_export_dh_raw_func privkey_export_dh_raw_backend;
-    gnutls_pk_pubkey_export_dh_raw_func pubkey_export_dh_raw_backend;
-    gnutls_pk_privkey_import_ecdh_raw_func privkey_import_ecdh_raw_backend;
-    gnutls_pk_pubkey_import_ecdh_raw_func pubkey_import_ecdh_raw_backend;
-    gnutls_pk_privkey_export_ecdh_raw_func privkey_export_ecdh_raw_backend;
-    gnutls_pk_pubkey_export_ecdh_raw_func pubkey_export_ecdh_raw_backend;
-    gnutls_pk_copy_func copy_backend;
-    gnutls_pk_deinit_func deinit_backend;
     /* The params structure should contain the private or public key
      * parameters, depending on the operation */
     int (*encrypt)(gnutls_pk_algorithm_t, gnutls_datum_t *ciphertext,
@@ -513,3 +482,11 @@ int gnutls_crypto_single_pk_register(gnutls_pk_algorithm_t algorithm,
                                     int free_s);
 
 extern int _gnutls_config_is_rsa_pkcs1_encrypt_allowed(void);
+
+extern int _gnutls_mpi_init_scan(bigint_t *ret_mpi, const void *buffer,
+    size_t nbytes);
+extern void _gnutls_mpi_zrelease(bigint_t *x);
+extern int _gnutls_mpi_dprint(const bigint_t a, gnutls_datum_t *dest);
+
+extern int _gnutls_have_lib_error(void);
+

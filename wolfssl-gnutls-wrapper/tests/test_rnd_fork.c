@@ -25,6 +25,8 @@ int test_rnd_write(const char* filename, unsigned char* buf, size_t sz)
 
     fwrite(buf, 1, sz, fp);
     fclose(fp);
+
+    return 0;
 }
 
 int test_rnd_read(const char* filename, unsigned char* buf, size_t sz)
