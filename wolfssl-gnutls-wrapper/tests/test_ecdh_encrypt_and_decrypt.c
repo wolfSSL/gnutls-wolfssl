@@ -445,6 +445,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
 
 int main(void) {
     int ret;
+    unsigned int fips_mode;
 
     printf("Testing GnuTLS's ECDH encryption/decryption with various curves...\n");
 
@@ -455,18 +456,25 @@ int main(void) {
         return 1;
     }
 
-    /* Test X25519 */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X25519, "X25519");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
-    }
+    /* Check if FIPS mode is enabled */
+    fips_mode = gnutls_fips140_mode_enabled();
 
-    /* Test X448 */
-    ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X448, "X448");
-    if (ret != 0) {
-        gnutls_global_deinit();
-        return 1;
+    if (!fips_mode) {
+        /* Test X25519 */
+        ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X25519, "X25519");
+        if (ret != 0) {
+            gnutls_global_deinit();
+            return 1;
+        }
+
+        /* Test X448 */
+        ret = test_ecdh_encrypt_decrypt(GNUTLS_PK_ECDH_X448, "X448");
+        if (ret != 0) {
+            gnutls_global_deinit();
+            return 1;
+        }
+    } else {
+        printf("Skipping X448 and X25519 since FIPS mode is enabled.\n");
     }
 
     /* Test P-256 (SECP256R1) */

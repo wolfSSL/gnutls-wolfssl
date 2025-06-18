@@ -1720,30 +1720,6 @@ static int get_hash_type(gnutls_mac_algorithm_t algorithm)
     }
 }
 
-/* checks if the provided operation and hash_type are fips approved */
-#if defined(HAVE_FIPS)
-static int is_hash_type_fips(int hash_type, int operation) {
-    switch(hash_type) {
-        case WC_SHA:
-            if (operation == VERIFY_OP)
-                return 1;
-            else
-                return 0;
-        case WC_SHA224:
-        case WC_SHA256:
-        case WC_SHA384:
-        case WC_SHA512:
-        case WC_SHA3_224:
-        case WC_SHA3_256:
-        case WC_SHA3_384:
-        case WC_SHA3_512:
-            return 1;
-        default:
-            return 0;
-    }
-}
-#endif
-
 /**
  * Checks if MAC is supported.
  *
@@ -4002,6 +3978,7 @@ static int dh_load_params(DhKey *dh, const gnutls_pk_params_st *params)
 static int ecc_level_to_curve(int level, int *curve_id, int *curve_size)
 {
     switch (level) {
+#if !defined(HAVE_FIPS)
 #if ECC_MIN_KEY_SZ <= 192
         case GNUTLS_ECC_CURVE_SECP192R1:
             WGW_LOG("SECP192R1 - 24 bytes");
@@ -4015,6 +3992,7 @@ static int ecc_level_to_curve(int level, int *curve_id, int *curve_size)
             *curve_id = ECC_SECP224R1;
             *curve_size = 28;
             break;
+#endif
 #endif
         case GNUTLS_ECC_CURVE_SECP256R1:
             WGW_LOG("SECP256R1 - 32 bytes");
@@ -4070,7 +4048,11 @@ static int ecc_load_params(ecc_key *ecc, const gnutls_pk_params_st *pk_params,
         ret = mp_set(ecc->pubkey.z, 1);
     }
     if ((ret == 0) && priv) {
+#if !defined(HAVE_FIPS)
         ret = bigint_to_mp(pk_params->params[ECC_K], ecc->k);
+#else
+        ret = bigint_to_mp(pk_params->params[ECC_K], &ecc->k);
+#endif
     }
     if (ret == 0) {
         if (priv) {
@@ -4449,6 +4431,10 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
 
     WGW_FUNC_ENTER();
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -4549,6 +4535,9 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
     ecc_key ecc;
     WC_RNG rng;
     word32 len;
+#if defined(HAVE_FIPS)
+    (void)sign_params;
+#endif
 
     WGW_FUNC_ENTER();
 
@@ -4993,6 +4982,7 @@ static int wolfssl_pk_verify(gnutls_pk_algorithm_t algo,
             break;
 #endif
         default:
+            WGW_LOG("algo not supported!");
             ret = GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -5193,6 +5183,10 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     }
 #endif
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -5375,6 +5369,10 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     WGW_FUNC_ENTER();
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -5477,6 +5475,10 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int level,
         return ret;
     }
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -5514,7 +5516,11 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int level,
     }
     if (ret == 0) {
         params->params_nr++;
+#if !defined(HAVE_FIPS)
         ret = mp_to_bigint(ecc.k, &params->params[ECC_K]);
+#else
+        ret = mp_to_bigint(&ecc.k, &params->params[ECC_K]);
+#endif
     }
     if (ret == 0) {
         params->params_nr++;
@@ -6392,8 +6398,13 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     if (flags & PK_DERIVE_TLS13) {
+#if !defined(HAVE_FIPS)
         ret = wc_DhAgree_ct(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
+#else
+        ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
+            public.data, public.size);
+#endif
     } else {
         ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
