@@ -1720,30 +1720,6 @@ static int get_hash_type(gnutls_mac_algorithm_t algorithm)
     }
 }
 
-/* checks if the provided operation and hash_type are fips approved */
-#if defined(HAVE_FIPS)
-static int is_hash_type_fips(int hash_type, int operation) {
-    switch(hash_type) {
-        case WC_SHA:
-            if (operation == VERIFY_OP)
-                return 1;
-            else
-                return 0;
-        case WC_SHA224:
-        case WC_SHA256:
-        case WC_SHA384:
-        case WC_SHA512:
-        case WC_SHA3_224:
-        case WC_SHA3_256:
-        case WC_SHA3_384:
-        case WC_SHA3_512:
-            return 1;
-        default:
-            return 0;
-    }
-}
-#endif
-
 /**
  * Checks if MAC is supported.
  *
@@ -3125,6 +3101,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
 
     /* Finalize the digest and get the result. */
     if (ctx->algorithm == GNUTLS_DIG_MD5) {
+        WGW_LOG("Outputting Md5");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_MD5_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for MD5 output");
@@ -3132,6 +3109,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Md5Final(&ctx->obj.md5, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
+        WGW_LOG("Outputting Sha1");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-1 output");
@@ -3139,6 +3117,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_ShaFinal(&ctx->obj.sha, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA224) {
+        WGW_LOG("Outputting Sha224");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA224_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-224 output");
@@ -3146,6 +3125,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha224Final(&ctx->obj.sha224, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA256) {
+        WGW_LOG("Outputting Sha256");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA256_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-256 output");
@@ -3153,6 +3133,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha256Final(&ctx->obj.sha256, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA384) {
+        WGW_LOG("Outputting Sha384");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA384_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-384 output");
@@ -3160,6 +3141,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha384Final(&ctx->obj.sha384, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA512) {
+        WGW_LOG("Outputting Sha512");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA512_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-512 output");
@@ -3167,6 +3149,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha512Final(&ctx->obj.sha512, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_224) {
+        WGW_LOG("Outputting Sha3 224");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_224_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-224 output");
@@ -3174,6 +3157,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_224_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_256) {
+        WGW_LOG("Outputting Sha3 256");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_256_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-256 output");
@@ -3181,6 +3165,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_256_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_384) {
+        WGW_LOG("Outputting Sha3 384");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_384_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-384 output");
@@ -3188,6 +3173,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_384_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_512) {
+        WGW_LOG("Outputting Sha3 512");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_512_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-512 output");
@@ -4002,6 +3988,7 @@ static int dh_load_params(DhKey *dh, const gnutls_pk_params_st *params)
 static int ecc_level_to_curve(int level, int *curve_id, int *curve_size)
 {
     switch (level) {
+#if !defined(HAVE_FIPS)
 #if ECC_MIN_KEY_SZ <= 192
         case GNUTLS_ECC_CURVE_SECP192R1:
             WGW_LOG("SECP192R1 - 24 bytes");
@@ -4015,6 +4002,7 @@ static int ecc_level_to_curve(int level, int *curve_id, int *curve_size)
             *curve_id = ECC_SECP224R1;
             *curve_size = 28;
             break;
+#endif
 #endif
         case GNUTLS_ECC_CURVE_SECP256R1:
             WGW_LOG("SECP256R1 - 32 bytes");
@@ -4070,7 +4058,11 @@ static int ecc_load_params(ecc_key *ecc, const gnutls_pk_params_st *pk_params,
         ret = mp_set(ecc->pubkey.z, 1);
     }
     if ((ret == 0) && priv) {
+#if !defined(HAVE_FIPS)
         ret = bigint_to_mp(pk_params->params[ECC_K], ecc->k);
+#else
+        ret = bigint_to_mp(pk_params->params[ECC_K], &ecc->k);
+#endif
     }
     if (ret == 0) {
         if (priv) {
@@ -4449,6 +4441,10 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
 
     WGW_FUNC_ENTER();
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -4549,6 +4545,9 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
     ecc_key ecc;
     WC_RNG rng;
     word32 len;
+#if defined(HAVE_FIPS)
+    (void)sign_params;
+#endif
 
     WGW_FUNC_ENTER();
 
@@ -4993,6 +4992,7 @@ static int wolfssl_pk_verify(gnutls_pk_algorithm_t algo,
             break;
 #endif
         default:
+            WGW_LOG("algo not supported!");
             ret = GNUTLS_E_INVALID_REQUEST;
     }
 
@@ -5193,6 +5193,10 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     }
 #endif
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -5375,6 +5379,10 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     WGW_FUNC_ENTER();
 
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
+
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitRng", ret);
@@ -5441,11 +5449,11 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     wc_FreeRng(&rng);
     wc_FreeDhKey(&dh);
+
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_DhGenerateKeyPair", ret);
         gnutls_free(pub);
         gnutls_free(priv);
-        wc_FreeDhKey(&dh);
         return ret;
     }
 
@@ -5457,6 +5465,9 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     if (ret == 0) {
         params->params_nr++;
     }
+
+    gnutls_free(pub);
+    gnutls_free(priv);
 
     return ret;
 }
@@ -5476,6 +5487,10 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int level,
     if (ret != 0) {
         return ret;
     }
+
+#ifdef WC_RNG_SEED_CB
+        wc_SetSeed_Cb(wc_GenerateSeed);
+#endif
 
     ret = wc_InitRng(&rng);
     if (ret != 0) {
@@ -5514,7 +5529,11 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int level,
     }
     if (ret == 0) {
         params->params_nr++;
+#if !defined(HAVE_FIPS)
         ret = mp_to_bigint(ecc.k, &params->params[ECC_K]);
+#else
+        ret = mp_to_bigint(&ecc.k, &params->params[ECC_K]);
+#endif
     }
     if (ret == 0) {
         params->params_nr++;
@@ -6392,8 +6411,13 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     if (flags & PK_DERIVE_TLS13) {
+#if !defined(HAVE_FIPS)
         ret = wc_DhAgree_ct(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
+#else
+        ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
+            public.data, public.size);
+#endif
     } else {
         ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);

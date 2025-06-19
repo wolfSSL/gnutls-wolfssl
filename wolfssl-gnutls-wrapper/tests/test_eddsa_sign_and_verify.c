@@ -116,6 +116,7 @@ int test_eddsa_curve(const char *curve_name) {
 
 int main(void) {
     int ret;
+    unsigned int fips_mode;
 
     printf("Testing GnuTLS's EdDSA implementation...\n");
 
@@ -124,6 +125,13 @@ int main(void) {
     if (ret != 0) {
         printf("Error initializing GnuTLS: %s\n", gnutls_strerror(ret));
         return 1;
+    }
+
+    /* Check if FIPS mode is enabled */
+    fips_mode = gnutls_fips140_mode_enabled();
+    if (fips_mode == 1) {
+        printf("This test can be run only when FIPS140 mode is not enabled\n");
+        return 0; /* Skip test */
     }
 
     /* Test Ed25519 */
