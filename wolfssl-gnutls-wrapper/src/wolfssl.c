@@ -3101,6 +3101,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
 
     /* Finalize the digest and get the result. */
     if (ctx->algorithm == GNUTLS_DIG_MD5) {
+        WGW_LOG("Outputting Md5");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_MD5_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for MD5 output");
@@ -3108,6 +3109,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Md5Final(&ctx->obj.md5, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
+        WGW_LOG("Outputting Sha1");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-1 output");
@@ -3115,6 +3117,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_ShaFinal(&ctx->obj.sha, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA224) {
+        WGW_LOG("Outputting Sha224");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA224_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-224 output");
@@ -3122,6 +3125,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha224Final(&ctx->obj.sha224, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA256) {
+        WGW_LOG("Outputting Sha256");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA256_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-256 output");
@@ -3129,6 +3133,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha256Final(&ctx->obj.sha256, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA384) {
+        WGW_LOG("Outputting Sha384");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA384_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-384 output");
@@ -3136,6 +3141,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha384Final(&ctx->obj.sha384, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA512) {
+        WGW_LOG("Outputting Sha512");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA512_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA-512 output");
@@ -3143,6 +3149,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha512Final(&ctx->obj.sha512, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_224) {
+        WGW_LOG("Outputting Sha3 224");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_224_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-224 output");
@@ -3150,6 +3157,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_224_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_256) {
+        WGW_LOG("Outputting Sha3 256");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_256_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-256 output");
@@ -3157,6 +3165,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_256_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_384) {
+        WGW_LOG("Outputting Sha3 384");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_384_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-384 output");
@@ -3164,6 +3173,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
         }
         ret = wc_Sha3_384_Final(&ctx->obj.sha3, (byte*)digest);
     } else if (ctx->algorithm == GNUTLS_DIG_SHA3_512) {
+        WGW_LOG("Outputting Sha3 512");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_SHA3_512_DIGEST_SIZE) {
             WGW_ERROR("digestsize too small for SHA3-512 output");
@@ -5439,11 +5449,11 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     wc_FreeRng(&rng);
     wc_FreeDhKey(&dh);
+
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_DhGenerateKeyPair", ret);
         gnutls_free(pub);
         gnutls_free(priv);
-        wc_FreeDhKey(&dh);
         return ret;
     }
 
@@ -5455,6 +5465,9 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     if (ret == 0) {
         params->params_nr++;
     }
+
+    gnutls_free(pub);
+    gnutls_free(priv);
 
     return ret;
 }
