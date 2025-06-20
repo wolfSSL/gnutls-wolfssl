@@ -4,7 +4,7 @@ Experimental port of wolfSSL into GnuTLS. One script builds everything and drops
 
 ## Quick start
 ```
-git clone https://github.com/YOURORG/gnutls-wolfssl.git
+git clone https://github.com/wolfssl/gnutls-wolfssl.git
 cd gnutls-wolfssl
 # regular build
 ./setup.sh
