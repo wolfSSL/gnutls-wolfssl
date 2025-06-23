@@ -330,16 +330,6 @@ void gnutls_pk_params_init(gnutls_pk_params_st *p);
 #define ECC_Y 1
 #define ECC_K 2
 
-#define GOST_X 0
-#define GOST_Y 1
-#define GOST_K 2
-
-#define DSA_P 0
-#define DSA_Q 1
-#define DSA_G 2
-#define DSA_Y 3
-#define DSA_X 4
-
 #define DH_P 0
 #define DH_Q 1
 #define DH_G 2

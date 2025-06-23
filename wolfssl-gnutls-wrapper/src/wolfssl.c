@@ -345,8 +345,9 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 #if defined(HAVE_FIPS)
         WGW_LOG("returning GNUTLS_E_UNWANTED_ALGORITHM");
         return GNUTLS_E_UNWANTED_ALGORITHM;
-#endif
+#else
         return GNUTLS_E_INVALID_REQUEST;
+#endif
     }
 
     /* allocate context */
@@ -1821,9 +1822,10 @@ static int wolfssl_hmac_setkey(void *_ctx, const void *key, size_t keysize)
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HmacSetKey", ret);
 #if defined(HAVE_FIPS)
-            return GNUTLS_FIPS140_OP_NOT_APPROVED;
+        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+#else
+        return GNUTLS_E_HASH_FAILED;
 #endif
-            return GNUTLS_E_HASH_FAILED;
     }
 
     WGW_LOG("hmac key set successfully");
@@ -3917,6 +3919,11 @@ int bigint_to_mp_int(bigint_t bi, mp_int *mp)
 
 /**************** Algorithm specific helper functions ****************/
 
+/** Maximum number of RSA key fields stored in valid GnuTLS parameters. */
+#define RSA_MAX_PARAMS      8
+/** Minimum number of RSA key fields stored in valid GnuTLS parameters. */
+#define RSA_MIN_PRIV_PARAMS 5
+
 /**
  * Get the MGF id for the hash type.
  *
@@ -4095,7 +4102,7 @@ static int rsa_store_params(RsaKey *rsa, gnutls_pk_params_st *params)
 /**
  * Load the wolfSSL DH object with data from the GnuTLS parameters.
  *
- * @param [in, out] DH      wolfSSL DH object.
+ * @param [in, out] dh      wolfSSL DH object.
  * @param [in]      params  GnuTLS PK parameters.
  * @return  0 on success.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing DH key fails.
@@ -4127,6 +4134,43 @@ static int dh_load_params(DhKey *dh, const gnutls_pk_params_st *params)
 }
 
 /**
+ * Store all the wolfSSL DH parameters in the GnuTLS parameters.
+ *
+ * @param [in]      dh      wolfSSL DH parameters.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GnuTLS error on failure.
+ */
+static int dh_store_params(const DhParams* dh, gnutls_pk_params_st *params)
+{
+    int ret;
+
+    /* Start with no allocated parameters. */
+    params->params_nr = 0;
+
+    /* Store the prime. */
+    ret = _gnutls_mpi_init_scan(&params->params[DH_P], dh->p, dh->p_len);
+    if (ret == 0) {
+        /* Update allocated bigint count. */
+        params->params_nr++;
+        /* Store the generator. */
+        ret = _gnutls_mpi_init_scan(&params->params[DH_G], dh->g, dh->g_len);
+    }
+    if (ret == 0) {
+        /* Update allocated bigint count. */
+        params->params_nr++;
+        /* Store the generating prime. */
+        ret = _gnutls_mpi_init_scan(&params->params[DH_Q], dh->q, dh->q_len);
+    }
+    if (ret == 0) {
+        /* Update allocated bigint count. */
+        params->params_nr++;
+    }
+
+    return ret;
+}
+
+/**
  * Checks whether the GnuTLS algorithm identifier is a ECC signature algorithm.
  *
  * @param [in] a  GnuTLS algorithm identifier.
@@ -4147,7 +4191,7 @@ static int dh_load_params(DhKey *dh, const gnutls_pk_params_st *params)
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when curve not supported.
  */
-static int ecc_level_to_curve(int curve, int *curve_id, int *curve_size)
+static int ecc_curve_to_id_size(int curve, int *curve_id, int *curve_size)
 {
     switch (curve) {
 #if !defined(HAVE_FIPS)
@@ -4212,7 +4256,7 @@ static int ecc_load_params(ecc_key *ecc, const gnutls_pk_params_st *params,
     int curve_size;
 
     /* Get the curve id and size for GnuTLS curve. */
-    ret = ecc_level_to_curve(params->curve, &curve_id, &curve_size);
+    ret = ecc_curve_to_id_size(params->curve, &curve_id, &curve_size);
     if (ret != 0) {
         return ret;
     }
@@ -4271,7 +4315,7 @@ static int ecc_load_params(ecc_key *ecc, const gnutls_pk_params_st *params,
  * @return  0 on success.
  * @return  GnuTLS error on failure.
  */
-static int ecc_store_params(ecc_key *ecc, gnutls_pk_params_st *params)
+static int ecc_store_key(ecc_key *ecc, gnutls_pk_params_st *params)
 {
     int ret;
 
@@ -5757,6 +5801,7 @@ static int wolfssl_pk_verify_ed448(const gnutls_datum_t *vdata,
  * @param [in] sign_params  GnuTLS signature parameters.
  * @return  0 on success.
  * @return  GNUTLS_E_SIG_VERIFY_FAILED when verification fails.
+ * @return  GNUTLS_E_LIB_IN_ERROR_STATE when library is an error state.
  * @return  Other GnuTLS error on failure.
  */
 static int wolfssl_pk_verify(gnutls_pk_algorithm_t algo,
@@ -6030,14 +6075,113 @@ static int wolfssl_pk_verify_pub_params(gnutls_pk_algorithm_t algo,
 }
 
 /**
- * Generate an RSA private/public key.
+ * Generate DH parameters.
  *
- * @param [in] bits    Number of bits in key.
- * @param [in] params  GnuTLS PK parameters.
+ * @param [in]      bits    Number of bits in prime.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when bit size is not supported.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_params_dh(unsigned int bits,
+    gnutls_pk_params_st *params)
+{
+    const DhParams* dh = NULL;
+
+    WGW_FUNC_ENTER();
+
+    /* Use predefined parameters based on bits size */
+    switch (bits) {
+        case 2048:
+#ifdef HAVE_FFDHE_2048
+            WGW_LOG("2048");
+            /* Get predefined 2048-bit parameters. */
+            dh = wc_Dh_ffdhe2048_Get();
+#endif
+            break;
+        case 3072:
+#ifdef HAVE_FFDHE_3072
+            WGW_LOG("3072");
+            /* Get predefined 3072-bit parameters. */
+            dh = wc_Dh_ffdhe3072_Get();
+#endif
+            break;
+        case 4096:
+#ifdef HAVE_FFDHE_4096
+            WGW_LOG("4096");
+            /* Get predefined 4096-bit parameters. */
+            dh = wc_Dh_ffdhe4096_Get();
+#endif
+            break;
+        case 6144:
+#ifdef HAVE_FFDHE_6144
+            WGW_LOG("6144");
+            /* Get predefined 6144-bit parameters. */
+            dh = wc_Dh_ffdhe6144_Get();
+#endif
+            break;
+        case 8192:
+#ifdef HAVE_FFDHE_8192
+            WGW_LOG("8192");
+            /* Get predefined 8192-bit parameters. */
+            dh = wc_Dh_ffdhe8192_Get();
+#endif
+            break;
+        default:
+            /* Key size not supported. */
+            WGW_ERROR("Unsupported DH key size: %d", bits);
+            return GNUTLS_E_INVALID_REQUEST;
+    }
+
+    /* Store the parameters in the GnuTLS parameters. */
+    return dh_store_params(dh, params);
+}
+
+/**
+ * Generate DH parameters.
+ *
+ * Only DH parameter generation supported.
+ * RSA/ECDSA/EDDSA do not require parameter generation.
+ *
+ * @param [in]      algo    GnuTLS PK algorithm.
+ * @param [in]      level   For DH, number of bits in prime.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when bit size is not supported.
+ * @return  GNUTLS_E_LIB_IN_ERROR_STATE when library is an error state.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_params(gnutls_pk_algorithm_t algo,
+    unsigned int level, gnutls_pk_params_st *params)
+{
+    int ret = 0;
+
+    WGW_FUNC_ENTER();
+
+    /* Check that the library is not in an error state. */
+    if (_gnutls_have_lib_error()) {
+        return GNUTLS_E_LIB_IN_ERROR_STATE;
+    }
+
+    /* Handle different key types */
+    if (algo == GNUTLS_PK_DH) {
+        ret = wolfssl_pk_generate_params_dh(level, params);
+    }
+
+    return ret;
+}
+
+
+/**
+ * Generate an RSA private/public key pair.
+ *
+ * @param [in]      bits    Number of bits in key.
+ * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
  * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing RSA key fails.
+ * @return  GnuTLS error on other failure.
  */
 static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     gnutls_pk_params_st *params)
@@ -6084,113 +6228,35 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
 
     PRIVATE_KEY_LOCK();
 
+    /* Random number generator no longer needed. */
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_ERROR("RSA key generation failed with code %d", ret);
         wc_FreeRsaKey(&rsa);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#endif
+#else
         return GNUTLS_E_PK_GENERATION_ERROR;
+#endif
     }
 
+    /* Store RSA fields in the GnuTLS parameters. */
     ret = rsa_store_params(&rsa, params);
+    /* RSA key object no longer needed. */
     wc_FreeRsaKey(&rsa);
 
     return ret;
 }
 
-static int wolfssl_pk_generate_params_dh(unsigned int bits,
-    gnutls_pk_params_st *params)
-{
-    int ret;
-    const DhParams* dh = NULL;
-
-    WGW_FUNC_ENTER();
-
-    /* Use predefined parameters based on bits size */
-    switch (bits) {
-        case 2048:
-#ifdef HAVE_FFDHE_2048
-            WGW_LOG("2048");
-            dh = wc_Dh_ffdhe2048_Get();
-#endif
-            break;
-        case 3072:
-#ifdef HAVE_FFDHE_3072
-            WGW_LOG("3072");
-            dh = wc_Dh_ffdhe3072_Get();
-#endif
-            break;
-        case 4096:
-#ifdef HAVE_FFDHE_4096
-            WGW_LOG("4096");
-            dh = wc_Dh_ffdhe4096_Get();
-#endif
-            break;
-        case 6144:
-#ifdef HAVE_FFDHE_6144
-            WGW_LOG("6144");
-            dh = wc_Dh_ffdhe6144_Get();
-#endif
-            break;
-        case 8192:
-#ifdef HAVE_FFDHE_8192
-            WGW_LOG("8192");
-            dh = wc_Dh_ffdhe8192_Get();
-#endif
-            break;
-        default:
-            WGW_ERROR("Unsupported DH key size: %d", bits);
-            return GNUTLS_E_INVALID_REQUEST;
-    }
-
-    params->params_nr = 0;
-
-    ret = _gnutls_mpi_init_scan(&params->params[DH_P], dh->p, dh->p_len);
-    if (ret == 0) {
-        params->params_nr++;
-        ret = _gnutls_mpi_init_scan(&params->params[DH_G], dh->g, dh->g_len);
-    }
-    if (ret == 0) {
-        params->params_nr++;
-        ret = _gnutls_mpi_init_scan(&params->params[DH_Q], dh->q, dh->q_len);
-    }
-    if (ret == 0) {
-        params->params_nr++;
-    }
-
-    return ret;
-}
-
-/* Generates algorithm's parameters. That is:
- *  For DSA: p, q, and g are generated.
- *  For RSA: nothing
- *  For ECDSA/EDDSA: nothing
+/**
+ * Generate a DH private/public key pair.
  *
- * level      Either bits or curve.
+ * @param [in]      bits    Number of bits in key.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GnuTLS error on other failure.
  */
-static int wolfssl_pk_generate_params(gnutls_pk_algorithm_t algo,
-    unsigned int level, gnutls_pk_params_st *params)
-{
-    int ret = 0;
-
-    WGW_FUNC_ENTER();
-
-    /* Check that the library is not in an error state. */
-    if (_gnutls_have_lib_error()) {
-        return GNUTLS_E_LIB_IN_ERROR_STATE;
-    }
-
-    /* Handle different key types */
-    if (algo == GNUTLS_PK_DH) {
-        ret = wolfssl_pk_generate_params_dh(level, params);
-    }
-
-    return ret;
-}
-
-
 static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     gnutls_pk_params_st *params)
 {
@@ -6216,6 +6282,7 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
         return GNUTLS_E_RANDOM_FAILED;
     }
 
+    /* Convert private key size to public key size. */
     if (bits == 256) {
         bits = 2048;
     } else if (bits == 276) {
@@ -6227,6 +6294,10 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     } else if (bits == 512) {
         bits = 8192;
     }
+
+    /* Generate/get the parameters for the bit size if bit size specified.
+     * Otherwise, the parameters are already in GnuTLS's params.
+     */
     if (bits != 0) {
         WGW_LOG("Get fixed parameters");
         ret = wolfssl_pk_generate_params_dh(bits, params);
@@ -6235,6 +6306,7 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
             return ret;
         }
     }
+    /* Load the parameters from GnuTLS parameters into wolfSSL DH key. */
     WGW_LOG("Load DH parameters from params");
     ret = dh_load_params(&dh, params);
     if (ret != 0) {
@@ -6243,9 +6315,11 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
         return ret;
     }
     if (bits == 0) {
+        /* If bits not passed in then still need it - calculate from prime. */
         bits = mp_count_bits(&dh.p);
     }
 
+    /* Convert bits to bytes and allocate private key. */
     privSz = (bits + 7) / 8;
     priv = gnutls_malloc(privSz);
     if (priv == NULL) {
@@ -6254,6 +6328,7 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
         wc_FreeDhKey(&dh);
         return GNUTLS_E_MEMORY_ERROR;
     }
+    /* Convert bits to bytes and allocate public key. */
     pubSz = (bits + 7) / 8;
     pub = gnutls_malloc(pubSz);
     if (pub == NULL) {
@@ -6266,13 +6341,15 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     PRIVATE_KEY_UNLOCK();
 
+    /* Generate public/private key pair for DH. */
     ret = wc_DhGenerateKeyPair(&dh, &rng, priv, &privSz, pub, &pubSz);
 
     PRIVATE_KEY_LOCK();
 
+    /* No longer need random or DH key (private/public generated into buffers.
+     */
     wc_FreeRng(&rng);
     wc_FreeDhKey(&dh);
-
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_DhGenerateKeyPair", ret);
         gnutls_free(pub);
@@ -6280,21 +6357,36 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
         return ret;
     }
 
-    ret = _gnutls_mpi_init_scan(&params->params[DSA_Y], pub, pubSz);
+    /* Load the public key into the GnuTLS parameters. */
+    ret = _gnutls_mpi_init_scan(&params->params[DH_Y], pub, pubSz);
     if (ret == 0) {
+        /* Update allocated bigint count. */
         params->params_nr++;
-        ret = _gnutls_mpi_init_scan(&params->params[DSA_X], priv, privSz);
+        /* Load the private key into the GnuTLS parameters. */
+        ret = _gnutls_mpi_init_scan(&params->params[DH_X], priv, privSz);
     }
     if (ret == 0) {
+        /* Update allocated bigint count. */
         params->params_nr++;
     }
 
+    /* Dispose of dynamically allocated data. */
     gnutls_free(pub);
     gnutls_free(priv);
 
     return ret;
 }
 
+/**
+ * Generate an ECC private/public key pair.
+ *
+ * @param [in]      curve   GnuTLS curve.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     gnutls_pk_params_st *params)
 {
@@ -6306,7 +6398,8 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
 
     WGW_FUNC_ENTER();
 
-    ret = ecc_level_to_curve(curve, &curve_id, &curve_size);
+    /* Get the curve id and size for GnuTLS curve. */
+    ret = ecc_curve_to_id_size(curve, &curve_id, &curve_size);
     if (ret != 0) {
         return ret;
     }
@@ -6337,6 +6430,7 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
 
     PRIVATE_KEY_LOCK();
 
+    /* Random number generator no longer needed. */
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_make_key_ex", ret);
@@ -6344,16 +6438,29 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
 
+    /* Store the curve in the GnuTLS parameters. */
     params->curve = curve;
-
-    ret = ecc_store_params(&ecc, params);
+    /* Store the ECC key in the GnuTLS parameters. */
+    ret = ecc_store_key(&ecc, params);
+    /* wolfSSL ECC key no longer needed. */
     wc_ecc_free(&ecc);
 
     return ret;
 }
 
 #ifdef HAVE_ED25519
-static int wolfssl_pk_generate_keys_ed25519(unsigned int level,
+/**
+ * Generate an Ed25519 private/public key pair.
+ *
+ * @param [in]      curve   GnuTLS curve.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
@@ -6363,6 +6470,11 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int level,
     word32 pubSz = ED25519_PUB_KEY_SIZE;
 
     WGW_FUNC_ENTER();
+
+    /* Check curve matches algorithm. */
+    if (curve != GNUTLS_ECC_CURVE_ED25519) {
+        return GNUTLS_ECC_CURVE_INVALID;
+    }
 
     /* Initialize a new random for generation. */
     ret = wc_InitRng(&rng);
@@ -6386,6 +6498,7 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int level,
 
     PRIVATE_KEY_LOCK();
 
+    /* Random number generator no longer needed. */
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_make_key", ret);
@@ -6393,31 +6506,51 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int level,
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
 
-    params->curve = level;
+    /* Set the curve into the GnuTLS parameters. */
+    params->curve = curve;
+    /* No allocated parameters - keys in raw fields. */
     params->params_nr = 0;
 
+    /* Allocate memory in GnuTLS parameters for private value. */
     params->raw_priv.data = gnutls_malloc(privSz);
     if (params->raw_priv.data == NULL) {
         WGW_ERROR("Allocating memory for private key: %d", privSz);
         wc_ed25519_free(&ed25519);
         return GNUTLS_E_MEMORY_ERROR;
     }
+    /* Allocate memory in GnuTLS parameters for public value. */
     params->raw_pub.data = gnutls_malloc(pubSz);
     if (params->raw_pub.data == NULL) {
         WGW_ERROR("Allocating memory for public key: %d", pubSz);
         wc_ed25519_free(&ed25519);
+        /* Dispose of private value buffer. */
+        gnutls_free(params->raw_priv.data);
+        /* Ensure private values is empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Export public and private key into buffers. */
     ret = wc_ed25519_export_key(&ed25519, params->raw_priv.data, &privSz,
         params->raw_pub.data, &pubSz);
+    /* wolfSSL Ed25519 object no longer needed. */
     wc_ed25519_free(&ed25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_export_key", ret);
+        /* Dispose of private and public value buffers. */
+        gnutls_free(params->raw_priv.data);
+        gnutls_free(params->raw_pub.data);
+        /* Ensure private and public values are empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-    params->raw_priv.size = ED25519_KEY_SIZE;
+    /* Set sizes of private and public values into GnuTLS parameters. */
+    params->raw_priv.size = ED25519_KEY_SIZE;   /* Private-only */
     params->raw_pub.size = pubSz;
 
     return ret;
@@ -6425,7 +6558,18 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int level,
 #endif
 
 #ifdef HAVE_ED448
-static int wolfssl_pk_generate_keys_ed448(unsigned int level,
+/**
+ * Generate an Ed448 private/public key pair.
+ *
+ * @param [in]      curve   GnuTLS curve.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
@@ -6435,6 +6579,11 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int level,
     word32 pubSz = ED448_PUB_KEY_SIZE;
 
     WGW_FUNC_ENTER();
+
+    /* Check curve matches algorithm. */
+    if (curve != GNUTLS_ECC_CURVE_ED448) {
+        return GNUTLS_ECC_CURVE_INVALID;
+    }
 
     /* Initialize a new random for generation. */
     ret = wc_InitRng(&rng);
@@ -6458,6 +6607,7 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int level,
 
     PRIVATE_KEY_LOCK();
 
+    /* Random number generator no longer needed. */
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_make_key", ret);
@@ -6465,31 +6615,50 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int level,
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
 
-    params->curve = level;
+    /* Set the curve into the GnuTLS parameters. */
+    params->curve = curve;
+    /* No allocated parameters - keys in raw fields. */
     params->params_nr = 0;
 
+    /* Allocate memory in GnuTLS parameters for private value. */
     params->raw_priv.data = gnutls_malloc(privSz);
     if (params->raw_priv.data == NULL) {
         WGW_ERROR("Allocating memory for private key: %d", privSz);
         wc_ed448_free(&ed448);
         return GNUTLS_E_MEMORY_ERROR;
     }
+    /* Allocate memory in GnuTLS parameters for public value. */
     params->raw_pub.data = gnutls_malloc(pubSz);
     if (params->raw_pub.data == NULL) {
         WGW_ERROR("Allocating memory for public key: %d", pubSz);
         wc_ed448_free(&ed448);
+        /* Dispose of private value buffer. */
+        gnutls_free(params->raw_priv.data);
+        /* Ensure private values is empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Export public and private key into buffers. */
     ret = wc_ed448_export_key(&ed448, params->raw_priv.data, &privSz,
         params->raw_pub.data, &pubSz);
     wc_ed448_free(&ed448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_export_key", ret);
+        /* Dispose of private and public value buffers. */
+        gnutls_free(params->raw_priv.data);
+        gnutls_free(params->raw_pub.data);
+        /* Ensure private and public values are empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-    params->raw_priv.size = ED448_KEY_SIZE;
+    /* Set sizes of private and public values into GnuTLS parameters. */
+    params->raw_priv.size = ED448_KEY_SIZE;     /* Private-only */
     params->raw_pub.size = pubSz;
 
     return ret;
@@ -6497,7 +6666,18 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int level,
 #endif
 
 #ifdef HAVE_CURVE25519
-static int wolfssl_pk_generate_keys_x25519(unsigned int level,
+/**
+ * Generate an X25519 private/public key pair.
+ *
+ * @param [in]      curve   GnuTLS curve.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
@@ -6507,6 +6687,11 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int level,
     word32 pubSz = CURVE25519_PUB_KEY_SIZE;
 
     WGW_FUNC_ENTER();
+
+    /* Check curve matches algorithm. */
+    if (curve != GNUTLS_ECC_CURVE_X25519) {
+        return GNUTLS_ECC_CURVE_INVALID;
+    }
 
     /* Initialize a new random for generation. */
     ret = wc_InitRng(&rng);
@@ -6530,6 +6715,7 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int level,
 
     PRIVATE_KEY_LOCK();
 
+    /* Random number generator no longer needed. */
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_make_key", ret);
@@ -6537,30 +6723,49 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int level,
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
 
-    params->curve = level;
+    /* Set the curve into the GnuTLS parameters. */
+    params->curve = curve;
+    /* No allocated parameters - keys in raw fields. */
     params->params_nr = 0;
 
+    /* Allocate memory in GnuTLS parameters for private value. */
     params->raw_priv.data = gnutls_malloc(privSz);
     if (params->raw_priv.data == NULL) {
         WGW_ERROR("Allocating memory for private key: %d", privSz);
         wc_curve25519_free(&x25519);
         return GNUTLS_E_MEMORY_ERROR;
     }
+    /* Allocate memory in GnuTLS parameters for public value. */
     params->raw_pub.data = gnutls_malloc(pubSz);
     if (params->raw_pub.data == NULL) {
         WGW_ERROR("Allocating memory for public key: %d", pubSz);
         wc_curve25519_free(&x25519);
+        /* Dispose of private value buffer. */
+        gnutls_free(params->raw_priv.data);
+        /* Ensure private values is empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Export public and private key into buffers. */
     ret = wc_curve25519_export_key_raw_ex(&x25519, params->raw_priv.data,
         &privSz, params->raw_pub.data, &pubSz, EC25519_LITTLE_ENDIAN);
     wc_curve25519_free(&x25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_export_key_raw", ret);
+        /* Dispose of private and public value buffers. */
+        gnutls_free(params->raw_priv.data);
+        gnutls_free(params->raw_pub.data);
+        /* Ensure private and public values are empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Set sizes of private and public values into GnuTLS parameters. */
     params->raw_priv.size = privSz;
     params->raw_pub.size = pubSz;
 
@@ -6569,7 +6774,18 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int level,
 #endif
 
 #ifdef HAVE_CURVE448
-static int wolfssl_pk_generate_keys_x448(unsigned int level,
+/**
+ * Generate an X448 private/public key pair.
+ *
+ * @param [in]      curve   GnuTLS curve.
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_generate_keys_x448(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
@@ -6579,6 +6795,11 @@ static int wolfssl_pk_generate_keys_x448(unsigned int level,
     word32 pubSz = CURVE448_PUB_KEY_SIZE;
 
     WGW_FUNC_ENTER();
+
+    /* Check curve matches algorithm. */
+    if (curve != GNUTLS_ECC_CURVE_X448) {
+        return GNUTLS_ECC_CURVE_INVALID;
+    }
 
     /* Initialize a new random for generation. */
     ret = wc_InitRng(&rng);
@@ -6591,6 +6812,7 @@ static int wolfssl_pk_generate_keys_x448(unsigned int level,
     ret = wc_curve448_init(&x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_init", ret);
+        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
@@ -6599,6 +6821,7 @@ static int wolfssl_pk_generate_keys_x448(unsigned int level,
     /* Generate X448 key */
     ret = wc_curve448_make_key(&rng, CURVE448_KEY_SIZE, &x448);
 
+    /* Random number generator no longer needed. */
     PRIVATE_KEY_LOCK();
 
     wc_FreeRng(&rng);
@@ -6608,30 +6831,49 @@ static int wolfssl_pk_generate_keys_x448(unsigned int level,
         return GNUTLS_E_PK_GENERATION_ERROR;
     }
 
-    params->curve = level;
+    /* Set the curve into the GnuTLS parameters. */
+    params->curve = curve;
+    /* No allocated parameters - keys in raw fields. */
     params->params_nr = 0;
 
+    /* Allocate memory in GnuTLS parameters for private value. */
     params->raw_priv.data = gnutls_malloc(privSz);
     if (params->raw_priv.data == NULL) {
         WGW_ERROR("Allocating memory for private key: %d", privSz);
         wc_curve448_free(&x448);
         return GNUTLS_E_MEMORY_ERROR;
     }
+    /* Allocate memory in GnuTLS parameters for public value. */
     params->raw_pub.data = gnutls_malloc(pubSz);
     if (params->raw_pub.data == NULL) {
         WGW_ERROR("Allocating memory for public key: %d", pubSz);
         wc_curve448_free(&x448);
+        /* Dispose of private value buffer. */
+        gnutls_free(params->raw_priv.data);
+        /* Ensure private values is empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
         return GNUTLS_E_MEMORY_ERROR;
     }
 
+    /* Export public and private key into buffers. */
     ret = wc_curve448_export_key_raw_ex(&x448, params->raw_priv.data, &privSz,
         params->raw_pub.data, &pubSz, EC448_LITTLE_ENDIAN);
     wc_curve448_free(&x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_export_key_raw_ex", ret);
+        /* Dispose of private and public value buffers. */
+        gnutls_free(params->raw_priv.data);
+        gnutls_free(params->raw_pub.data);
+        /* Ensure private and public values are empty on error. */
+        params->raw_priv.data = NULL;
+        params->raw_priv.size = 0;
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Set sizes of private and public values into GnuTLS parameters. */
     params->raw_priv.size = privSz;
     params->raw_pub.size = pubSz;
 
@@ -6639,11 +6881,20 @@ static int wolfssl_pk_generate_keys_x448(unsigned int level,
 }
 #endif
 
-/* To generate a DH key either q must be set in the params or
- * level should be set to the number of required bits.
+/**
+ * Generate an X448 private/public key pair.
  *
- * level      Either bits or curve.
- * ephemeral  non-zero indicates true.
+ * @param [in]      algo       GnuTLS PK algorithm.
+ * @param [in]      level      GnuTLS curve or size of prime in bits.
+ * @param [in, out] params     GnuTLS PK parameters.
+ * @param [in]      ephemeral  Key pair is ephemenral - random can be weaker.
+ *                             Ignored.
+ * @return  0 on success.
+ * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
+ * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
+ * @return  GnuTLS error on other failure.
  */
 static int wolfssl_pk_generate_keys(gnutls_pk_algorithm_t algo,
     unsigned int level, gnutls_pk_params_st *params,
@@ -6660,56 +6911,72 @@ static int wolfssl_pk_generate_keys(gnutls_pk_algorithm_t algo,
 
     (void)ephemeral;
 
+    /* Use GnuTLS algorithm identifier. */
     switch (algo) {
         case GNUTLS_PK_RSA_PSS:
         case GNUTLS_PK_RSA_OAEP:
         case GNUTLS_PK_RSA:
+            /* Generate an RSA key. */
             ret = wolfssl_pk_generate_keys_rsa(level, params);
             break;
 
         case GNUTLS_PK_DH:
+            /* Generate a DH key. */
             ret = wolfssl_pk_generate_keys_dh(level, params);
             break;
 
         case GNUTLS_PK_ECDSA:
+            /* Generate an ECC key. */
             ret = wolfssl_pk_generate_keys_ecc(level, params);
             break;
 
 #ifdef HAVE_ED25519
         case GNUTLS_PK_EDDSA_ED25519:
+            /* Generate an Ed25519 key. */
             ret = wolfssl_pk_generate_keys_ed25519(level, params);
             break;
 #endif
 #ifdef HAVE_ED448
         case GNUTLS_PK_EDDSA_ED448:
+            /* Generate an Ed448 key. */
             ret = wolfssl_pk_generate_keys_ed448(level, params);
             break;
 #endif
 
 #ifdef HAVE_CURVE25519
         case GNUTLS_PK_ECDH_X25519:
+            /* Generate an X25519 key. */
             ret = wolfssl_pk_generate_keys_x25519(level, params);
             break;
 #endif
 #ifdef HAVE_CURVE448
         case GNUTLS_PK_ECDH_X448:
+            /* Generate an X448 key. */
             ret = wolfssl_pk_generate_keys_x448(level, params);
             break;
 #endif
 
         default:
+            /* Algorithm not supported. */
             WGW_ERROR("Algorithm not supported: %d", algo);
             return GNUTLS_E_ALGO_NOT_SUPPORTED;
     }
 
+    /* Store the algorithm into the GnuTLS parameters. */
     params->algo = algo;
 
     return ret;
 }
 
-#define RSA_MAX_PARAMS      8
-#define RSA_MIN_PRIV_PARAMS 5
-
+/**
+ * Fixup RSA key by generating missing CRT parameters.
+ *
+ * @param [in, out] params  GnuTLS PK parameters.
+ * @return  0 on success.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when P is 0.
+ * @return  GNUTLS_E_INTERNAL_ERROR when a calculation fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6723,8 +6990,10 @@ static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
     _gnutls_mpi_zrelease(&params->params[RSA_E1]);
     _gnutls_mpi_zrelease(&params->params[RSA_E2]);
 
+    /* Set the number of allocated parameters to exclude CRT parameter. */
     params->params_nr = RSA_MIN_PRIV_PARAMS;
 
+    /* Load the wolfSSL RSA key with data from the GnuTLS parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
         return ret;
@@ -6737,20 +7006,23 @@ static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
 
-    /* Calculate coefficient (u) and add to parameters. */
+    /* Calculate coefficient (u). */
     ret = mp_invmod(&rsa.q, &rsa.p, &rsa.u);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_invmod", ret);
         wc_FreeRsaKey(&rsa);
         return GNUTLS_E_INTERNAL_ERROR;
     }
+    /* Store coefficient in GnuTLS parameters. */
     ret = mp_int_to_bigint(&rsa.u, &params->params[RSA_COEF]);
     if (ret != 0) {
         wc_FreeRsaKey(&rsa);
         return ret;
     }
+    /* Update allocated bigint count. */
     params->params_nr++;
 
+    /* Initialize mp_int for use as a temporary in calculations */
     ret = mp_init(&tmp);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_init", ret);
@@ -6758,7 +7030,7 @@ static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-    /* Calculate exponent 1 (dP) and add to parameters. */
+    /* Calculate first exponent (dP). */
     ret = mp_sub_d(&rsa.p, 1, &tmp);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_init", ret);
@@ -6773,15 +7045,17 @@ static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
         wc_FreeRsaKey(&rsa);
         return GNUTLS_E_INTERNAL_ERROR;
     }
+    /* Store first exponent in GnuTLS parameters. */
     ret = mp_int_to_bigint(&rsa.dP, &params->params[RSA_E1]);
     if (ret != 0) {
         mp_free(&tmp);
         wc_FreeRsaKey(&rsa);
         return ret;
     }
+    /* Update allocated bigint count. */
     params->params_nr++;
 
-    /* Calculate exponent 2 (dQ) and add to parameters. */
+    /* Calculate second exponent (dQ). */
     ret = mp_sub_d(&rsa.q, 1, &tmp);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_init", ret);
@@ -6796,16 +7070,30 @@ static int wolfssl_pk_fixup_rsa_calc_exp(gnutls_pk_params_st *params)
         wc_FreeRsaKey(&rsa);
         return GNUTLS_E_INTERNAL_ERROR;
     }
+    /* Store second exponent in GnuTLS parameters. */
     ret = mp_int_to_bigint(&rsa.dQ, &params->params[RSA_E2]);
     wc_FreeRsaKey(&rsa);
     if (ret != 0) {
         return ret;
     }
+    /* Update allocated bigint count. */
     params->params_nr++;
 
     return 0;
 }
 
+/**
+ * Check that the product of the two primes is the modulus.
+ *
+ * @param [in] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when count of bits of q + u < p.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when multiplying p and q fails.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when is not equal to product of p and q.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing the temporary mp_int
+ *          fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_fixup_rsa_check_p_q(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6814,17 +7102,20 @@ static int wolfssl_pk_fixup_rsa_check_p_q(gnutls_pk_params_st *params)
 
     WGW_FUNC_ENTER();
 
+    /* Load the RSA key from the GnuTLS parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
         return ret;
     }
 
+    /* Check q, u and p are about the right sizes. */
     if (mp_count_bits(&rsa.q) + mp_count_bits(&rsa.u) < mp_count_bits(&rsa.p)) {
         WGW_ERROR("q and c smaller than p");
         wc_FreeRsaKey(&rsa);
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
 
+    /* Initialize a temporary to use in calculations. */
     ret = mp_init(&tmp);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_init", ret);
@@ -6832,6 +7123,7 @@ static int wolfssl_pk_fixup_rsa_check_p_q(gnutls_pk_params_st *params)
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Calculate product of p and q. */
     ret = mp_mul(&rsa.p, &rsa.q, &tmp);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("mp_init", ret);
@@ -6840,6 +7132,7 @@ static int wolfssl_pk_fixup_rsa_check_p_q(gnutls_pk_params_st *params)
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
 
+    /* Compare p * q to n. */
     ret = mp_cmp(&rsa.n, &tmp);
     mp_free(&tmp);
     wc_FreeRsaKey(&rsa);
@@ -6851,6 +7144,19 @@ static int wolfssl_pk_fixup_rsa_check_p_q(gnutls_pk_params_st *params)
     return 0;
 }
 
+/**
+ * Fill in CRT parameters if not available and check p * q = n.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when P is 0.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when count of bits of q + u < p.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when multiplying p and q fails.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when is not equal to product of p and q.
+ * @return  GNUTLS_E_INTERNAL_ERROR when a calculation fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing the temporary mp_int
+ *          fails.
+ */
 static int wolfssl_pk_fixup_rsa(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6863,6 +7169,7 @@ static int wolfssl_pk_fixup_rsa(gnutls_pk_params_st *params)
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
 
+    /* Check we have CRT parameters. */
     if (params->params_nr < RSA_MAX_PARAMS) {
         WGW_LOG("RSA private key missing exp parameters");
         ret = wolfssl_pk_fixup_rsa_calc_exp(params);
@@ -6871,10 +7178,76 @@ static int wolfssl_pk_fixup_rsa(gnutls_pk_params_st *params)
         }
     }
 
+    /* Check p, q and u look about right and p * q equals n. */
     return wolfssl_pk_fixup_rsa_check_p_q(params);
 }
 
+/**
+ * Check RSA key and PSS parameters.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when not all private key fields are set.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing the temporary mp_int
+ *          fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY_PARAMS when PSS parameters are invalid.
+ * @return  GnuTLS error on other failure.
+ */
+static int wolfssl_pk_fixup_rsa_pss(gnutls_pk_params_st *params)
+{
+    int ret;
+
+    WGW_FUNC_ENTER();
+
+    /* Check we have the basic RSA private key parameters: n, e, d, p, q */
+    if (params->params_nr < RSA_MIN_PRIV_PARAMS) {
+        WGW_ERROR("Too few parameters for RSA private key");
+        return GNUTLS_E_PK_INVALID_PRIVKEY;
+    }
+
+    /* If we have digest for PSS check digest and salt size are valid. */
+    if (params->spki.rsa_pss_dig != GNUTLS_DIG_UNKNOWN) {
+        int bits;
+        int hash_len = gnutls_hash_get_len(params->spki.rsa_pss_dig);
+        mp_int n;
+
+        /* Initialize a mp_int for the modulus. */
+        ret = mp_init(&n);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("mp_init", ret);
+            return GNUTLS_E_INTERNAL_ERROR;
+        }
+        /* Put modulus into mp_int. */
+        ret = bigint_to_mp_int(params->params[RSA_MODULUS], &n);
+        if (ret != 0) {
+            mp_free(&n);
+            return ret;
+        }
+        /* Count bits in modulus. */
+        bits = mp_count_bits(&n);
+        mp_free(&n);
+
+        /* Check hash length plus salt size is valid for key size. */
+        if (hash_len + (int)params->spki.salt_size + 2 > (bits + 7) / 8) {
+            return GNUTLS_E_PK_INVALID_PUBKEY_PARAMS;
+        }
+    }
+
+    return 0;
+}
+
 #ifdef HAVE_ED25519
+/**
+ * Check curve field and make public key from Ed25519 private key.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve field is invalid.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when no private key data.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing dynamic memory fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when importing private key fails.
+ */
 static int wolfssl_pk_fixup_ed25519(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6882,16 +7255,20 @@ static int wolfssl_pk_fixup_ed25519(gnutls_pk_params_st *params)
 
     WGW_FUNC_ENTER();
 
+    /* Check curve field of parameters is correct. */
     if (params->curve != GNUTLS_ECC_CURVE_ED25519) {
         WGW_ERROR("Algorithm isn't curve: %d %d", GNUTLS_ECC_CURVE_ED25519,
             params->curve);
         return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
+    /* Check we have a private key. */
     if (params->raw_priv.data == NULL) {
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
+    /* Check whether a public key buffer has been allocated. */
     if (params->raw_pub.data == NULL) {
+        /* Allocate a public key buffer now. */
         params->raw_pub.data = gnutls_malloc(ED25519_PUB_KEY_SIZE);
         if (params->raw_pub.data == NULL) {
             WGW_ERROR("Allocating memory for public key: %d",
@@ -6904,27 +7281,44 @@ static int wolfssl_pk_fixup_ed25519(gnutls_pk_params_st *params)
     ret = wc_ed25519_init(&ed25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_init", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import private key only. */
     ret = wc_ed25519_import_private_only(params->raw_priv.data,
         params->raw_priv.size, &ed25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_import_private_key", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         wc_ed25519_free(&ed25519);
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-
+    /* Make key into buffer in GnuTLS parameters. */
     ret = wc_ed25519_make_public(&ed25519, params->raw_pub.data,
         ED25519_PUB_KEY_SIZE);
+    /* wolfSSL Ed25519 key no longer needed.  */
     wc_ed25519_free(&ed25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_make_public", ret);
+        /* Dispose of public value buffer. */
         gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
         params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
+
+    /* Set the public key size into GnuTLS parameters. */
     params->raw_pub.size = ED25519_PUB_KEY_SIZE;
 
     return 0;
@@ -6932,6 +7326,17 @@ static int wolfssl_pk_fixup_ed25519(gnutls_pk_params_st *params)
 #endif
 
 #ifdef HAVE_ED448
+/**
+ * Check curve field and make public key from Ed448 private key.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve field is invalid.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when no private key data.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing dynamic memory fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when importing private key fails.
+ */
 static int wolfssl_pk_fixup_ed448(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6939,16 +7344,20 @@ static int wolfssl_pk_fixup_ed448(gnutls_pk_params_st *params)
 
     WGW_FUNC_ENTER();
 
+    /* Check curve field of parameters is correct. */
     if (params->curve != GNUTLS_ECC_CURVE_ED448) {
         WGW_ERROR("Algorithm isn't curve: %d %d", GNUTLS_ECC_CURVE_ED448,
             params->curve);
         return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
+    /* Check we have a private key. */
     if (params->raw_priv.data == NULL) {
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
+    /* Check whether a public key buffer has been allocated. */
     if (params->raw_pub.data == NULL) {
+        /* Allocate a public key buffer now. */
         params->raw_pub.data = gnutls_malloc(ED448_PUB_KEY_SIZE);
         if (params->raw_pub.data == NULL) {
             WGW_ERROR("Allocating memory for public key: %d",
@@ -6961,27 +7370,44 @@ static int wolfssl_pk_fixup_ed448(gnutls_pk_params_st *params)
     ret = wc_ed448_init(&ed448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_init", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import private key only. */
     ret = wc_ed448_import_private_only(params->raw_priv.data,
         params->raw_priv.size, &ed448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_import_private_key", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         wc_ed448_free(&ed448);
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-
+    /* Make key into buffer in GnuTLS parameters. */
     ret = wc_ed448_make_public(&ed448, params->raw_pub.data,
         ED448_PUB_KEY_SIZE);
+    /* wolfSSL Ed448 key no longer needed.  */
     wc_ed448_free(&ed448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_make_public", ret);
+        /* Dispose of public value buffer. */
         gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
         params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
+
+    /* Set the public key size into GnuTLS parameters. */
     params->raw_pub.size = ED448_PUB_KEY_SIZE;
 
     return 0;
@@ -6989,6 +7415,17 @@ static int wolfssl_pk_fixup_ed448(gnutls_pk_params_st *params)
 #endif
 
 #ifdef HAVE_CURVE25519
+/**
+ * Check curve field and make public key from X25519 private key.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve field is invalid.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when no private key data.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing dynamic memory fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when importing private key fails.
+ */
 static int wolfssl_pk_fixup_x25519(gnutls_pk_params_st *params)
 {
     int ret;
@@ -6996,16 +7433,20 @@ static int wolfssl_pk_fixup_x25519(gnutls_pk_params_st *params)
 
     WGW_FUNC_ENTER();
 
+    /* Check curve field of parameters is correct. */
     if (params->curve != GNUTLS_ECC_CURVE_X25519) {
         WGW_ERROR("Algorithm isn't curve: %d %d", GNUTLS_ECC_CURVE_X25519,
             params->curve);
         return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
+    /* Check we have a private key. */
     if (params->raw_priv.data == NULL) {
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
+    /* Check whether a public key buffer has been allocated. */
     if (params->raw_pub.data == NULL) {
+        /* Allocate a public key buffer now. */
         params->raw_pub.data = gnutls_malloc(CURVE25519_PUB_KEY_SIZE);
         if (params->raw_pub.data == NULL) {
             WGW_ERROR("Allocating memory for public key: %d",
@@ -7018,27 +7459,44 @@ static int wolfssl_pk_fixup_x25519(gnutls_pk_params_st *params)
     ret = wc_curve25519_init(&x25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_init", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import private key only. */
     ret = wc_curve25519_import_private(params->raw_priv.data,
         params->raw_priv.size, &x25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_import_private_key", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         wc_curve25519_free(&x25519);
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-
+    /* Make key into buffer in GnuTLS parameters. */
     ret = wc_curve25519_make_pub(CURVE25519_PUB_KEY_SIZE, params->raw_pub.data,
         params->raw_priv.size, params->raw_priv.data);
+    /* wolfSSL X25519 key no longer needed.  */
     wc_curve25519_free(&x25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_make_pub", ret);
+        /* Dispose of public value buffer. */
         gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
         params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
+
+    /* Set the public key size into GnuTLS parameters. */
     params->raw_pub.size = CURVE25519_PUB_KEY_SIZE;
 
     return 0;
@@ -7046,6 +7504,17 @@ static int wolfssl_pk_fixup_x25519(gnutls_pk_params_st *params)
 #endif
 
 #ifdef HAVE_CURVE448
+/**
+ * Check curve field and make public key from X448 private key.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve field is invalid.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when no private key data.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing dynamic memory fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when importing private key fails.
+ */
 static int wolfssl_pk_fixup_x448(gnutls_pk_params_st *params)
 {
     int ret;
@@ -7053,16 +7522,20 @@ static int wolfssl_pk_fixup_x448(gnutls_pk_params_st *params)
 
     WGW_FUNC_ENTER();
 
+    /* Check curve field of parameters is correct. */
     if (params->curve != GNUTLS_ECC_CURVE_X448) {
         WGW_ERROR("Algorithm isn't curve: %d %d", GNUTLS_ECC_CURVE_X448,
             params->curve);
         return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
+    /* Check we have a private key. */
     if (params->raw_priv.data == NULL) {
         return GNUTLS_E_PK_INVALID_PRIVKEY;
     }
+    /* Check whether a public key buffer has been allocated. */
     if (params->raw_pub.data == NULL) {
+        /* Allocate a public key buffer now. */
         params->raw_pub.data = gnutls_malloc(CURVE448_PUB_KEY_SIZE);
         if (params->raw_pub.data == NULL) {
             WGW_ERROR("Allocating memory for public key: %d",
@@ -7075,35 +7548,68 @@ static int wolfssl_pk_fixup_x448(gnutls_pk_params_st *params)
     ret = wc_curve448_init(&x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_init", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import private key only. */
     ret = wc_curve448_import_private(params->raw_priv.data,
         params->raw_priv.size, &x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_import_private_key", ret);
+        /* Dispose of public value buffer. */
+        gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
+        params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         wc_curve448_free(&x448);
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
-
+    /* Make key into buffer in GnuTLS parameters. */
     ret = wc_curve448_make_pub(CURVE448_PUB_KEY_SIZE, params->raw_pub.data,
         params->raw_priv.size, params->raw_priv.data);
+    /* wolfSSL X448 key no longer needed.  */
     wc_curve448_free(&x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_make_pub", ret);
+        /* Dispose of public value buffer. */
         gnutls_free(params->raw_pub.data);
+        /* Ensure public value is empty on error. */
         params->raw_pub.data = NULL;
+        params->raw_pub.size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
+
+    /* Set the public key size into GnuTLS parameters. */
     params->raw_pub.size = CURVE448_PUB_KEY_SIZE;
 
     return 0;
 }
 #endif
 
-/* this function should convert params to ones suitable
- * for the above functions
+/**
+ * Check curve field and make public key from private key.
+ *
+ * @param [in, out] params  GnuTLS params.
+ * @return  0 on success.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve field is invalid.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when no private key data.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing dynamic memory fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when importing private key fails.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when P is 0.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when count of bits of q + u < p.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when multiplying p and q fails.
+ * @return  GNUTLS_E_PK_INVALID_PRIVKEY when is not equal to product of p and q.
+ * @return  GNUTLS_E_INTERNAL_ERROR when a calculation fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing the temporary mp_int
+ *          fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY_PARAMS when PSS parameters are invalid.
  */
 static int wolfssl_pk_fixup(gnutls_pk_algorithm_t algo,
     gnutls_direction_t direction, gnutls_pk_params_st *params)
@@ -7112,34 +7618,46 @@ static int wolfssl_pk_fixup(gnutls_pk_algorithm_t algo,
 
     WGW_FUNC_ENTER();
 
+    /* Only need to fixup when exporting. */
     if (direction != GNUTLS_IMPORT)
         return 0;
 
+    /* Use GnuTLS algorithm identifier. */
     switch (algo) {
         case GNUTLS_PK_RSA:
+            /* Fixup RSA key. */
             ret = wolfssl_pk_fixup_rsa(params);
+            break;
+        case GNUTLS_PK_RSA_PSS:
+            /* Fixup RSA key that is for RSA-PSS. */
+            ret = wolfssl_pk_fixup_rsa_pss(params);
             break;
 #ifdef HAVE_ED25519
         case GNUTLS_PK_EDDSA_ED25519:
+            /* Fixup Ed25519 key. */
             ret = wolfssl_pk_fixup_ed25519(params);
             break;
 #endif
 #ifdef HAVE_ED448
         case GNUTLS_PK_EDDSA_ED448:
+            /* Fixup Ed448 key. */
             ret = wolfssl_pk_fixup_ed448(params);
             break;
 #endif
 #ifdef HAVE_CURVE25519
         case GNUTLS_PK_ECDH_X25519:
+            /* Fixup X25519 key. */
             ret = wolfssl_pk_fixup_x25519(params);
             break;
 #endif
 #ifdef HAVE_CURVE448
         case GNUTLS_PK_ECDH_X448:
+            /* Fixup X448 key. */
             ret = wolfssl_pk_fixup_x448(params);
             break;
 #endif
         default:
+            /* Other algorithms don't need fixing. */
             ret = 0;
             break;
     }
@@ -7147,6 +7665,22 @@ static int wolfssl_pk_fixup(gnutls_pk_algorithm_t algo,
     return ret;
 }
 
+/**
+ * Derive shared secret from private key and peer's public key with DH.
+ *
+ * @param [out] out    Shared secret.
+ * @param [in]  priv   Private key.
+ * @param [in]  pub    Peer's public key.
+ * @param [in]  nonce  Not used.
+ * @param [in]  flags  Flags including:
+ *                       PK_DERIVE_TLS13 - whether deriving for TLS13.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when nonce is NULL.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing a wolfSSL object fails.
+ * @return  GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER when public key is invalid.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
     const gnutls_pk_params_st *priv, const gnutls_pk_params_st *pub,
     const gnutls_datum_t *nonce, unsigned int flags)
@@ -7154,22 +7688,26 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
     int ret;
     DhKey dh;
     word32 len;
+    word32 bits;
     gnutls_datum_t private;
     gnutls_datum_t public;
     gnutls_datum_t q;
 
     WGW_FUNC_ENTER();
 
+    /* Check nonce is not NULL. */
     if (nonce != NULL) {
         WGW_ERROR("Nonce is NULL");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Get private key from PK parameters. */
     ret = _gnutls_mpi_dprint(priv->params[DH_X], &private);
     if (ret != 0) {
         WGW_ERROR("_gnutls_mpi_print: %d", ret);
         return ret;
     }
+    /* Get public key from peer's PK parameters. */
     ret = _gnutls_mpi_dprint(pub->params[DH_Y], &public);
     if (ret != 0) {
         WGW_ERROR("_gnutls_mpi_print: %d", ret);
@@ -7177,27 +7715,23 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
         return ret;
     }
 
-    ret = wc_InitDhKey(&dh);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitDhKey", ret);
-        gnutls_free(public.data);
-        gnutls_free(private.data);
-        return GNUTLS_E_INTERNAL_ERROR;
-    }
-
     WGW_LOG("Load DH parameters from params");
+    /* Load the parameters into the DH key. */
     ret = dh_load_params(&dh, priv);
     if (ret != 0) {
-        wc_FreeDhKey(&dh);
         gnutls_free(public.data);
         gnutls_free(private.data);
         return ret;
     }
 
+    /* Check for Q parameter and load if available. */
     if (priv->params[DH_Q] != NULL) {
         ret = _gnutls_mpi_dprint(priv->params[DH_Q], &q);
         if (ret != 0) {
             WGW_ERROR("_gnutls_mpi_print: %d", ret);
+            wc_FreeDhKey(&dh);
+            gnutls_free(public.data);
+            gnutls_free(private.data);
             return ret;
         }
     } else {
@@ -7205,6 +7739,7 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
         q.size = 0;
     }
 
+    /* Check public key is valid for parameters. */
     ret = wc_DhCheckPubKey_ex(&dh, public.data, public.size, q.data, q.size);
     gnutls_free(q.data);
     if (ret != 0) {
@@ -7214,7 +7749,9 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
         return GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER;
     }
 
-    len = (mp_count_bits(&dh.p) + 7) / 8;
+    /* Allocate buffer for shared secret. */
+    bits = mp_count_bits(&dh.p);
+    len = (bits + 7) / 8;
     out->data = gnutls_malloc(len);
     if (out->data == NULL) {
         WGW_ERROR("Allocating memory for shared key: %d", len);
@@ -7226,36 +7763,66 @@ static int wolfssl_pk_derive_dh(gnutls_datum_t *out,
 
     PRIVATE_KEY_UNLOCK();
 
+    /* Check if shared secret is being used with TLS v1.3. */
     if (flags & PK_DERIVE_TLS13) {
+        /* Encode with 0 front padding. */
 #if !defined(HAVE_FIPS)
         ret = wc_DhAgree_ct(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
 #else
         ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
+        /* Front pad if needed. */
+        if ((ret == 0) && (len < (bits + 7) / 8)) {
+            word32 offset = (bits + 7) / 8 - len;
+            XMEMMOVE(out->data + offset, out->data, len);
+            XMEMSET(out->data, 0, offset);
+            len += offset;
+        }
 #endif
     } else {
+        /* Don't front pad. */
         ret = wc_DhAgree(&dh, out->data, &len, private.data, private.size,
             public.data, public.size);
     }
 
     PRIVATE_KEY_LOCK();
 
+    /* DH key, public and private data are no longer needed. */
     wc_FreeDhKey(&dh);
     gnutls_free(public.data);
     gnutls_free(private.data);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_DhAgree", ret);
+        /* Dispose of shared secret value buffer. */
+        gnutls_free(out->data);
+        /* Ensure shared secret value is empty on error. */
         out->data = NULL;
         out->size = 0;
         return GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER;
     }
 
+    /* Set shared secret length. */
     out->size = len;
 
     return 0;
 }
 
+/**
+ * Derive shared secret from private key and peer's public key with ECDH.
+ *
+ * @param [out] out    Shared secret.
+ * @param [in]  priv   Private key.
+ * @param [in]  pub    Peer's public key.
+ * @param [in]  nonce  Not used.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when nonce is NULL.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing a wolfSSL object fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY when public key is invalid.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     const gnutls_pk_params_st *priv, const gnutls_pk_params_st *pub,
     const gnutls_datum_t *nonce)
@@ -7268,6 +7835,7 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
 
     WGW_FUNC_ENTER();
 
+    /* Check nonce is not NULL. */
     if (nonce != NULL) {
         WGW_ERROR("Nonce is NULL");
         return GNUTLS_E_INVALID_REQUEST;
@@ -7280,13 +7848,17 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
         return GNUTLS_E_RANDOM_FAILED;
     }
 
+    /* Initialize and load the private ECC key from GnuTLS PK parameters. */
     ret = ecc_load_params(&private, priv, 1);
     if (ret != 0) {
         wc_FreeRng(&rng);
         return ret;
     }
+    /* Set the random for use with blinding. */
     private.rng = &rng;
 
+    /* Initialize and load the public ECC key from peer's GnuTLS PK parameters.
+     */
     ret = ecc_load_params(&public, pub, 0);
     if (ret != 0) {
         wc_ecc_free(&private);
@@ -7294,6 +7866,7 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
         return ret;
     }
 
+    /* Check the public key is valid for the curve. */
     ret = wc_ecc_check_key(&public);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_check_key", ret);
@@ -7303,6 +7876,7 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
         return GNUTLS_E_PK_INVALID_PUBKEY;
     }
 
+    /* Allocate memory for the shared secret. */
     len = private.dp->size;
     out->data = gnutls_malloc(len);
     if (out->data == NULL) {
@@ -7315,25 +7889,47 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
 
     PRIVATE_KEY_UNLOCK();
 
+    /* Calculate the shared secret. */
     ret = wc_ecc_shared_secret(&private, &public, out->data, &len);
 
     PRIVATE_KEY_LOCK();
 
+    /* Random, private and public key no londer needed. */
     wc_ecc_free(&public);
     wc_ecc_free(&private);
     wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_shared_secret", ret);
+        /* Dispose of shared secret value buffer. */
         gnutls_free(out->data);
-        return GNUTLS_E_INTERNAL_ERROR;
+        /* Ensure shared secret value is empty on error. */
+        out->data = NULL;
+        out->size = 0;
+        return GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER;
     }
 
+    /* Set shared secret length. */
     out->size = len;
 
     return 0;
 }
 
 #ifdef HAVE_CURVE25519
+/**
+ * Derive shared secret from private key and peer's public key with X25519.
+ *
+ * @param [out] out    Shared secret.
+ * @param [in]  priv   Private key.
+ * @param [in]  pub    Peer's public key.
+ * @param [in]  nonce  Not used.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when nonce is NULL.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing a wolfSSL object fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY when public key is invalid.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     const gnutls_pk_params_st *priv, const gnutls_pk_params_st *pub,
     const gnutls_datum_t *nonce)
@@ -7348,11 +7944,13 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
 
     WGW_FUNC_ENTER();
 
+    /* Check nonce is not NULL. */
     if (nonce != NULL) {
         WGW_ERROR("Nonce is NULL");
         return GNUTLS_E_INVALID_REQUEST;
     }
 
+    /* Check the public key is valid. */
     ret = wc_curve25519_check_public(pub->raw_pub.data, pub->raw_pub.size,
         EC25519_LITTLE_ENDIAN);
     if (ret != 0) {
@@ -7360,14 +7958,14 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
         return GNUTLS_E_PK_INVALID_PUBKEY;
     }
 
-    /* Initialize X25519 private key */
+    /* Initialize X25519 private key. */
     ret = wc_curve25519_init(&private);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_init", ret);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
-    /* Initialize X25519 public key */
+    /* Initialize X25519 public key. */
     ret = wc_curve25519_init(&public);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_init", ret);
@@ -7375,6 +7973,7 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import the private key in little-endian order. */
     ret = wc_curve25519_import_private_ex(priv->raw_priv.data,
         priv->raw_priv.size, &private, EC25519_LITTLE_ENDIAN);
     if (ret != 0) {
@@ -7384,6 +7983,7 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Import the peer's public key in little-endian order. */
     ret = wc_curve25519_import_public_ex(pub->raw_pub.data, pub->raw_pub.size,
         &public, EC25519_LITTLE_ENDIAN);
     if (ret != 0) {
@@ -7391,14 +7991,6 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
         wc_curve25519_free(&public);
         wc_curve25519_free(&private);
         return GNUTLS_E_INTERNAL_ERROR;
-    }
-
-    out->data = gnutls_malloc(len);
-    if (out->data == NULL) {
-        WGW_ERROR("Allocating memory for shared key: %d", len);
-        wc_curve25519_free(&public);
-        wc_curve25519_free(&private);
-        return GNUTLS_E_MEMORY_ERROR;
     }
 
 #ifdef WOLFSSL_CURVE25519_BLINDING
@@ -7421,13 +8013,24 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     }
 #endif
 
+    /* Allocate memory for the shared secret. */
+    out->data = gnutls_malloc(len);
+    if (out->data == NULL) {
+        WGW_ERROR("Allocating memory for shared key: %d", len);
+        wc_curve25519_free(&public);
+        wc_curve25519_free(&private);
+        return GNUTLS_E_MEMORY_ERROR;
+    }
+
     PRIVATE_KEY_UNLOCK();
 
+    /* Calculate the shared secret. */
     ret = wc_curve25519_shared_secret_ex(&private, &public, out->data, &len,
         EC25519_LITTLE_ENDIAN);
 
     PRIVATE_KEY_LOCK();
 
+    /* Random, private and public key no londer needed. */
     wc_curve25519_free(&public);
     wc_curve25519_free(&private);
 #ifdef WOLFSSL_CURVE25519_BLINDING
@@ -7435,7 +8038,11 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
 #endif
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_shared_secret_ex", ret);
+        /* Dispose of shared secret value buffer. */
         gnutls_free(out->data);
+        /* Ensure shared secret value is empty on error. */
+        out->data = NULL;
+        out->size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
@@ -7446,6 +8053,21 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
 #endif
 
 #ifdef HAVE_CURVE448
+/**
+ * Derive shared secret from private key and peer's public key with X448.
+ *
+ * @param [out] out    Shared secret.
+ * @param [in]  priv   Private key.
+ * @param [in]  pub    Peer's public key.
+ * @param [in]  nonce  Not used.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when nonce is NULL.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing a wolfSSL object fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY when public key is invalid.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
     const gnutls_pk_params_st *priv, const gnutls_pk_params_st *pub,
     const gnutls_datum_t *nonce)
@@ -7457,6 +8079,7 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
 
     WGW_FUNC_ENTER();
 
+    /* Check nonce is not NULL. */
     if (nonce != NULL) {
         WGW_ERROR("Nonce is NULL");
         return GNUTLS_E_INVALID_REQUEST;
@@ -7484,6 +8107,7 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
+    /* Import the private key in little-endian order. */
     ret = wc_curve448_import_private_ex(priv->raw_priv.data,
         priv->raw_priv.size, &private, EC448_LITTLE_ENDIAN);
     if (ret != 0) {
@@ -7493,6 +8117,7 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Import the peer's public key in little-endian order. */
     ret = wc_curve448_import_public_ex(pub->raw_pub.data, pub->raw_pub.size,
         &public, EC448_LITTLE_ENDIAN);
     if (ret != 0) {
@@ -7502,6 +8127,7 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
+    /* Allocate memory for the shared secret. */
     out->data = gnutls_malloc(len);
     if (out->data == NULL) {
         WGW_ERROR("Allocating memory for shared key: %d", len);
@@ -7512,16 +8138,22 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
 
     PRIVATE_KEY_UNLOCK();
 
+    /* Calculate the shared secret. */
     ret = wc_curve448_shared_secret_ex(&private, &public, out->data, &len,
         EC448_LITTLE_ENDIAN);
 
     PRIVATE_KEY_LOCK();
 
+    /* Private and public key no londer needed. */
     wc_curve448_free(&public);
     wc_curve448_free(&private);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_shared_secret_ex", ret);
+        /* Dispose of shared secret value buffer. */
         gnutls_free(out->data);
+        /* Ensure shared secret value is empty on error. */
+        out->data = NULL;
+        out->size = 0;
         return GNUTLS_E_INTERNAL_ERROR;
     }
 
@@ -7531,6 +8163,22 @@ static int wolfssl_pk_derive_x448(gnutls_datum_t *out,
 }
 #endif
 
+/**
+ * Derive shared secret from private key and peer's public key.
+ *
+ * @param [out] out    Shared secret.
+ * @param [in]  priv   Private key.
+ * @param [in]  pub    Peer's public key.
+ * @param [in]  nonce  Not used.
+ * @return  0 on success.
+ * @return  GNUTLS_E_INVALID_REQUEST when nonce is NULL.
+ * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
+ * @return  GNUTLS_E_INTERNAL_ERROR when initializing a wolfSSL object fails.
+ * @return  GNUTLS_E_PK_INVALID_PUBKEY when public key is invalid.
+ * @return  GNUTLS_E_RECEIVED_ILLEGAL_PARAMETER when public key is invalid.
+ * @return  GNUTLS_E_MEMORY_ERROR when allocating dynamic memory fails.
+ * @return  GnuTLS error on other failure.
+ */
 static int wolfssl_pk_derive(gnutls_pk_algorithm_t algo, gnutls_datum_t *out,
     const gnutls_pk_params_st *priv, const gnutls_pk_params_st *pub,
     const gnutls_datum_t *nonce, unsigned int flags)
@@ -7539,25 +8187,31 @@ static int wolfssl_pk_derive(gnutls_pk_algorithm_t algo, gnutls_datum_t *out,
 
     WGW_FUNC_ENTER();
 
+    /* Use GnuTLS algorithm identifier. */
     switch (algo) {
         case GNUTLS_PK_DH:
+            /* Derive a secret with Diffie-Hellman. */
             ret = wolfssl_pk_derive_dh(out, priv, pub, nonce, flags);
             break;
         case GNUTLS_PK_EC:
+            /* Derive a secret with Elliptic Curve Diffie-Hellman. */
             ret = wolfssl_pk_derive_ecc(out, priv, pub, nonce);
             break;
 #ifdef HAVE_CURVE25519
         case GNUTLS_PK_ECDH_X25519:
+            /* Derive a secret with Elliptic Curve X25519. */
             ret = wolfssl_pk_derive_x25519(out, priv, pub, nonce);
             break;
 #endif
 #ifdef HAVE_CURVE448
         case GNUTLS_PK_ECDH_X448:
+            /* Derive a secret with Elliptic Curve X448. */
             ret = wolfssl_pk_derive_x448(out, priv, pub, nonce);
             break;
 #endif
 
         default:
+            /* Algorithm not supported. */
             WGW_ERROR("Algorithm not supported: %d", algo);
             return GNUTLS_E_INTERNAL_ERROR;
     }
@@ -7565,6 +8219,17 @@ static int wolfssl_pk_derive(gnutls_pk_algorithm_t algo, gnutls_datum_t *out,
     return ret;
 }
 
+/**
+ * Encapsulate a random secret using public key.
+ *
+ * This API is for ML-KEM.
+ *
+ * @param [in]  algo           GnuTLS PK algorithm.
+ * @param [out] ciphertext     Encapsulated secret.
+ * @param [out] shared_secret  Random secret that was encapsulated.
+ * @param [in]  pub            Public key.
+ * @return  GNUTLS_E_UNKNOWN_ALGORITHM when algorithm is not supported.
+ */
 static int wolfssl_pk_encaps(gnutls_pk_algorithm_t algo,
     gnutls_datum_t *ciphertext, gnutls_datum_t *shared_secret,
     const gnutls_datum_t *pub)
@@ -7576,9 +8241,22 @@ static int wolfssl_pk_encaps(gnutls_pk_algorithm_t algo,
     (void)shared_secret;
     (void)pub;
 
+    WGW_ERROR("Algorithm not supported: %d", algo);
+    /* No algorithms supported at this time. */
     return GNUTLS_E_UNKNOWN_ALGORITHM;
 }
 
+/**
+ * Decapsualtes ciphertext with private key to get shared secret.
+ *
+ * This API is for ML-KEM.
+ *
+ * @param [in]  algo           GnuTLS PK algorithm.
+ * @param [out] shared_secret  Random secret that was encapsulated.
+ * @param [in]  ciphertext     Encapsulated secret.
+ * @param [in]  priv           Private key.
+ * @return  GNUTLS_E_UNKNOWN_ALGORITHM when algorithm is not supported.
+ */
 static int wolfssl_pk_decaps(gnutls_pk_algorithm_t algo,
     gnutls_datum_t *shared_secret, const gnutls_datum_t *ciphertext,
     const gnutls_datum_t *priv)
@@ -7590,9 +8268,18 @@ static int wolfssl_pk_decaps(gnutls_pk_algorithm_t algo,
     (void)ciphertext;
     (void)priv;
 
+    WGW_ERROR("Algorithm not supported: %d", algo);
+    /* No algorithms supported at this time. */
     return GNUTLS_E_UNKNOWN_ALGORITHM;
 }
 
+/**
+ * Returns whether curve is supported.
+ *
+ * @param [in] pk  GnuTLS curve.
+ * @return  1 when curve supported.
+ * @return  0 when curve not supported.
+ */
 static int wolfssl_pk_curve_exists(gnutls_ecc_curve_t curve)
 {
     WGW_FUNC_ENTER();
@@ -7627,6 +8314,13 @@ static int wolfssl_pk_curve_exists(gnutls_ecc_curve_t curve)
     }
 }
 
+/**
+ * Returns whether public key algorithm is supported.
+ *
+ * @param [in] pk  GnuTLS public key algorithm.
+ * @return  1 when public key algorithm supported.
+ * @return  0 when public key algorithm not supported.
+ */
 static int wolfssl_pk_exists(gnutls_pk_algorithm_t pk)
 {
     WGW_FUNC_ENTER();
@@ -7657,6 +8351,13 @@ static int wolfssl_pk_exists(gnutls_pk_algorithm_t pk)
     }
 }
 
+/**
+ * Returns whether signature algorithm is supported.
+ *
+ * @param [in] sign  GnuTLS signature algorithm.
+ * @return  1 when signature algorithm supported.
+ * @return  0 when signature algorithm not supported.
+ */
 static int wolfssl_pk_sign_exists(gnutls_sign_algorithm_t sign)
 {
     WGW_FUNC_ENTER();
@@ -8129,8 +8830,9 @@ static int wolfssl_hkdf_extract(gnutls_mac_algorithm_t mac, const void *key,
         WGW_WOLFSSL_ERROR("wc_HKDF_Extract", ret);
 #if defined(HAVE_FIPS)
         return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#endif
+#else
         return GNUTLS_E_INTERNAL_ERROR;
+#endif
     }
 
     return 0;
