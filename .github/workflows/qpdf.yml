@@ -1,0 +1,102 @@
+name: qpdf Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        qpdf_ref: [ 'main', 'v11.3.0', 'v12.2.0' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install qpdf dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt install -y \
+            cmake zlib1g-dev libjpeg-dev
+
+      - name: Install build and test dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y autoconf libtool valgrind
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build qpdf at ${{ matrix.qpdf_ref }}
+        run: |
+          git clone https://github.com/qpdf/qpdf.git
+          cd qpdf
+          git checkout ${{ matrix.qpdf_ref }}
+
+      - name: Configure qpdf
+        working-directory: qpdf
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Make qpdf
+        working-directory: qpdf
+        run: |
+          cmake --build build -j"$(nproc)"
+
+      - name: Test qpdf
+        working-directory: qpdf
+        run: |
+          cd build
+          WGW_LOGGING=0 ctest --verbose
+
