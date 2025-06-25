@@ -1,0 +1,137 @@
+name: fwupd Test
+
+# START OF COMMON SECTION
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+# END OF COMMON SECTION
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        fwupd_ref: [ 'main', '1.9.26', '2.0.12' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Ensure make available (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install GnuTLS dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Install fwupd dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt install -y \
+            meson \
+            ninja-build \
+            git \
+            libgusb-dev \
+            libglib2.0-dev \
+            libxmlb-dev \
+            libsoup2.4-dev \
+            libarchive-dev \
+            libjson-glib-dev \
+            libpolkit-gobject-1-dev \
+            libsystemd-dev \
+            valgrind \
+            gobject-introspection \
+            gtk-doc-tools \
+            python3-pip \
+            libgpgme-dev \
+            valac \
+            libcurl4-gnutls-dev \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libpango1.0-dev \
+            libcairo2 \
+            libcairo2-dev \
+            libcairo-gobject2 \
+            python3-cairo \
+            python3-gi-cairo \
+            python3-gi \
+            gir1.2-pango-1.0 \
+            gir1.2-cairo-1.0 \
+            gir1.2-gtk-3.0 \
+            gnu-efi \
+            flashrom \
+            libflashrom-dev \
+            mingw-w64-tools \
+            libumockdev-dev
+
+      - name: Install build and test dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y autoconf libtool valgrind
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        run: |
+          echo "Running setup.sh..."
+          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          if [ $? -ne 0 ]; then
+            echo "Build failed"
+            exit 1
+          fi
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          if [ ! -d /opt/wolfssl ]; then
+            echo "/opt/wolfssl not found after setup"
+            exit 1
+          fi
+          echo "Check for GnuTLS installation..."
+          if [ ! -d /opt/gnutls ]; then
+            echo "/opt/gnutls not found after setup"
+            exit 1
+          fi
+          echo "Check for wrapper installation..."
+          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
+            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
+            exit 1
+          fi
+
+      - name: Build fwupd at ${{ matrix.fwupd_ref }}
+        run: |
+          git clone https://github.com/fwupd/fwupd.git
+          cd fwupd
+          git checkout ${{ matrix.fwupd_ref }}
+
+      - name: Configure fwupd
+        working-directory: fwupd
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          export PATH="$PATH:/opt/gnutls/bin"
+          meson setup builddir
+
+      - name: Make fwupd
+        working-directory: fwupd
+        run: |
+          export PATH="$PATH:/opt/gnutls/bin"
+          ninja -v -C builddir
+
+      - name: Test fwupd
+        working-directory: fwupd
+        run: |
+          meson test -C builddir --print-errorlogs
+
