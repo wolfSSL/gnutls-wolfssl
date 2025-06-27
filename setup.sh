@@ -7,6 +7,9 @@ fi
 if [ "$GNUTLS_INSTALL" = "" ]; then
     GNUTLS_INSTALL=/opt/gnutls
 fi
+if [ "$PROVIDER_PATH" = "" ]; then
+    PROVIDER_PATH=/opt/wolfssl-gnutls-wrapper
+fi
 
 # Check if FIPS mode is enabled via command line argument
 FIPS_MODE=0
@@ -156,7 +159,7 @@ cd ../
 
 cd ./wolfssl-gnutls-wrapper
 make
-sudo make install
+sudo make install PROVIDER_PATH="$PROVIDER_PATH"
 cd ../
 
 echo "Build completed successfully"
