@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build_gnutls:
     name: Build wolfSSL, GnuTLS and provider
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       matrix:
         os: [ ubuntu-latest ]

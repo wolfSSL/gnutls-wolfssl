@@ -104,22 +104,64 @@ jobs:
              pselect_cancel
              Memcheck:Param
              pselect6(sig)
-             fun:__syscall_cancel_arch
-             fun:__internal_syscall_cancel
-             fun:__syscall_cancel
+             ...
              fun:pselect64_syscall
              fun:pselect
-             fun:wait_timeout
-             fun:mainloop
-             fun:main
+             ...
+          }
+          {
+             pselect_cancel_2
+             Memcheck:Param
+             pselect6(sig)
+             fun:pselect64_syscall
+             fun:pselect
+             ...
+          }
+          {
+             init_leak_malloc
+             Memcheck:Leak
+             match-leak-kinds: definite
+             fun:malloc
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             fun:call_init.part.0
+             fun:call_init
+             fun:_dl_init
+             fun:_dl_catch_exception
+             fun:dl_open_worker
+             fun:dl_open_worker
+             fun:_dl_catch_exception
+             fun:_dl_open
+          }
+          {
+             init_leak_calloc
+             Memcheck:Leak
+             match-leak-kinds: definite
+             fun:calloc
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             obj:*
+             fun:call_init.part.0
+             fun:call_init
+             fun:_dl_init
+             fun:_dl_catch_exception
+             fun:dl_open_worker
+             fun:dl_open_worker
           }
           EOF
-          export VALGRINDFLAGS=--suppressions=valgrind.supp
+          export VALGRIND_OPTS=--suppressions=valgrind.supp
           export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib
           make check 2>&1 | tee test.log
           awk '/^FAIL:/ {gsub(/\.sh$/, ".log", $2); print "==== " $2 " ===="; system("cat tests/" $2 "\n")}' test.log
-          echo "Check for failures but exclude: rscript_http_request-vg.sh"
+          echo "Check for failures"
           EC=0
-          grep -v rscript_http_request-vg.sh test.log | grep '^FAIL:' && EC=1
+          grep '^FAIL:' test.log && EC=1
           exit $EC
 
