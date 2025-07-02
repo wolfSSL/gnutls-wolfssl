@@ -32,6 +32,7 @@ void __attribute__((constructor)) wolfssl_init(void) {
 }
 
 #ifdef ENABLE_WOLFSSL
+/************************ Module functions *****************************/
 
 /**
  * Module initialization
