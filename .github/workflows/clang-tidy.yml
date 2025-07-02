@@ -1,0 +1,54 @@
+name: wolfssl-gnutls-wrapper clang-tidy
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request: {}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang_tidy:
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install clang + bear (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang bear
+
+      - name: Install clang + bear (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew update
+          brew install llvm bear
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+          echo "SDKROOT=$(xcrun --show-sdk-path)" >> $GITHUB_ENV
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Build wrapper under Bear
+        run: |
+          ./setup.sh
+          cd wolfssl-gnutls-wrapper
+          make clean
+          bear -- make -j"$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
+
+      - name: Run clang-tidy
+        run: |
+          FILES=$(git -C wolfssl-gnutls-wrapper ls-files src/*.c tests/*.c | sed 's|^|wolfssl-gnutls-wrapper/|')
+          clang-tidy -p wolfssl-gnutls-wrapper $FILES

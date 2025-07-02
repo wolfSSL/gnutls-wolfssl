@@ -431,13 +431,20 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
 
     /* Set tag size for AEAD ciphers. */
     if (ctx->mode == GCM) {
+        WGW_LOG("cipher-init: GCM – tag size set to 16 bytes");
         ctx->tag_size = GCM_TAG_SIZE;
-    } else if (algorithm == GNUTLS_CIPHER_AES_128_CCM_8 ||
-               algorithm == GNUTLS_CIPHER_AES_256_CCM_8) {
-        ctx->tag_size = CCM_8_TAG_SIZE;
+
     } else if (ctx->mode == CCM) {
+        WGW_LOG("cipher-init: CCM – tag size set to 16 bytes");
         ctx->tag_size = CCM_TAG_SIZE;
+
+    } else if (algorithm == GNUTLS_CIPHER_AES_128_CCM_8 ||
+            algorithm == GNUTLS_CIPHER_AES_256_CCM_8) {
+        WGW_LOG("cipher-init: CCM-8 – tag size set to 8 bytes");
+        ctx->tag_size = CCM_8_TAG_SIZE;
+
     } else {
+        WGW_LOG("cipher-init: non-AEAD – tag size set to 0");
         ctx->tag_size = 0;
     }
 
@@ -5580,7 +5587,7 @@ static int wolfssl_pk_verify_rsa(const gnutls_datum_t *vdata,
         return GNUTLS_E_PK_SIG_VERIFY_FAILED;
     }
     /* Compare decrypted data with verification data. */
-    if (XMEMCMP(verify, vdata->data, ret)) {
+    if (XMEMCMP(verify, vdata->data, ret) != 0) {
         WGW_ERROR("Decrypted data doesn't match");
         return GNUTLS_E_PK_SIG_VERIFY_FAILED;
     }

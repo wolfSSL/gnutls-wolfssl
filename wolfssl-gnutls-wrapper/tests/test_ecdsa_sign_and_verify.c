@@ -4,19 +4,7 @@
 #include <gnutls/abstract.h>
 #include <gnutls/crypto.h>
 #include <dlfcn.h>
-
-void print_hex(const unsigned char *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02x", data[i]);
-        if ((i+1) % 16 == 0 && i != len - 1)
-            printf("\n");
-        else if ((i+1) % 8 == 0 && i != len - 1)
-            printf(" ");
-        else if (i != len - 1)
-            printf(" ");
-    }
-    printf("\n");
-}
+#include "test_util.h"
 
 int test_ecdsa_curve(gnutls_ecc_curve_t curve, const char *curve_name) {
     int ret;
@@ -104,8 +92,7 @@ int test_ecdsa_curve(gnutls_ecc_curve_t curve, const char *curve_name) {
     }
 
     printf("Data signature created (size: %d bytes)\n", signature.size);
-    printf("Data signature value:\n");
-    print_hex(signature.data, signature.size);
+    print_hex("Data signature value", signature.data, signature.size);
 
     printf("Verifying data signature...\n");
     ret = gnutls_pubkey_verify_data2(pubkey, sign_algo, 0, &data, &signature);
@@ -134,8 +121,7 @@ int test_ecdsa_curve(gnutls_ecc_curve_t curve, const char *curve_name) {
     hash.data = hash_buffer;
     hash.size = gnutls_hash_get_len(digest_algo);
 
-    printf("Hash value:\n");
-    print_hex(hash.data, hash.size);
+    print_hex("Hash value", hash.data, hash.size);
 
     /* Sign the hash */
     ret = gnutls_privkey_sign_hash(privkey, digest_algo, 0, &hash, &signature_hash);
@@ -148,8 +134,7 @@ int test_ecdsa_curve(gnutls_ecc_curve_t curve, const char *curve_name) {
     }
 
     printf("Hash signature created (size: %d bytes)\n", signature_hash.size);
-    printf("Hash signature value:\n");
-    print_hex(signature_hash.data, signature_hash.size);
+    print_hex("Hash signature value", signature_hash.data, signature_hash.size);
 
     /* Verify the hash signature */
     printf("Verifying hash signature...\n");
