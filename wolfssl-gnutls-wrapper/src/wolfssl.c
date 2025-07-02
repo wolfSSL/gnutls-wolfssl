@@ -162,7 +162,7 @@ enum {
 /** Maximum AES key size. */
 #define MAX_AES_KEY_SIZE    AES_256_KEY_SIZE
 /** Maximum authentication data. */
-#define MAX_AUTH_DATA       1024
+#define MAX_AUTH_DATA       4096
 /** Maximum plaintext to encrypt for GCM  */
 #define MAX_AES_GCM_PLAINTEXT ((1ULL << 36) - 32)
 /** Maximum RSA-PSS signature size */
