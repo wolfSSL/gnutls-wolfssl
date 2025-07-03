@@ -25,7 +25,11 @@ If the loader can’t find the libs, add the path to LD_LIBRARY_PATH (Linux) or 
 |-----|---------|------|
 | WOLFSSL_INSTALL | /opt/wolfssl | install prefix |
 | GNUTLS_INSTALL  | /opt/gnutls  | install prefix |
-| GNUTLS_FORCE_FIPS_MODE | – | set at runtime to enforce FIPS |
+| PROVIDER_PATH | /opt/wolfssl-gnutls-wrapper/ | install prefix|
+| GNUTLS_FORCE_FIPS_MODE | 0 | set to 1 at runtime to enforce FIPS |
+| WGW_LOGGING | 1 |By default wolfssl-gnutls-wrapper will show logging information. Set to 0 to turn off logging |
+| WGW_LOGFILE | - | By default wolfssl-gnutls-wrapper will log to stderr. This can be changed to stdout or a filename |
+
 
 ## Directory layout (after setup.sh has been run)
 ```
