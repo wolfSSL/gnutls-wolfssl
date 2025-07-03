@@ -4,19 +4,7 @@
 #include <gnutls/abstract.h>
 #include <gnutls/crypto.h>
 #include <dlfcn.h>
-
-void print_hex(const unsigned char *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02x", data[i]);
-        if ((i+1) % 16 == 0 && i != len - 1)
-            printf("\n");
-        else if ((i+1) % 8 == 0 && i != len - 1)
-            printf(" ");
-        else if (i != len - 1)
-            printf(" ");
-    }
-    printf("\n");
-}
+#include "test_util.h"
 
 int test_rsa_encrypt_decrypt(unsigned int bits) {
     int ret;
@@ -78,8 +66,7 @@ int test_rsa_encrypt_decrypt(unsigned int bits) {
     }
 
     printf("Encrypted data (size: %d bytes)\n", ciphertext.size);
-    printf("Encrypted value:\n");
-    print_hex(ciphertext.data, ciphertext.size);
+    print_hex("Encrypted value", ciphertext.data, ciphertext.size);
 
     /* Decrypt the data */
     printf("Decrypting data...\n");

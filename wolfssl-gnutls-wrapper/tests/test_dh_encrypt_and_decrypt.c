@@ -5,6 +5,7 @@
 #include <gnutls/crypto.h>
 #include <stdlib.h>
 #include <dlfcn.h>
+#include "test_util.h"
 
 /* NIST test vector AAD */
 const unsigned char aad_data[] = {
@@ -19,19 +20,6 @@ const unsigned char iv_data[12] = {
 /* HKDF parameters */
 const char hkdf_salt[] = "DH-Key-Derivation-Salt";
 const char hkdf_info[] = "AES-256-GCM-Encryption-Key";
-
-void print_hex(const unsigned char *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02x", data[i]);
-        if ((i+1) % 16 == 0 && i != len - 1)
-            printf("\n");
-        else if ((i+1) % 8 == 0 && i != len - 1)
-            printf(" ");
-        else if (i != len - 1)
-            printf(" ");
-    }
-    printf("\n");
-}
 
 int test_dh_encrypt_decrypt(unsigned int bits) {
     int ret;
@@ -157,8 +145,7 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
         }
 
         printf("Shared secret derived (size: %d bytes)\n", shared_key.size);
-        printf("Shared secret value:\n");
-        print_hex(shared_key.data, shared_key.size);
+        print_hex("Shared secret value", shared_key.data, shared_key.size);
 
         /* Derive AES key using HKDF */
         unsigned char prk[32]; /* Size based on SHA-256 output */
@@ -176,8 +163,7 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
             return 1;
         }
 
-        printf("HKDF-Extract PRK:\n");
-        print_hex(prk, sizeof(prk));
+        print_hex("HKDF-Extract PRK", prk, sizeof(prk));
 
         /* HKDF-Expand to get final key */
         unsigned char key_material[32]; /* 256 bits for AES-256 */
@@ -195,8 +181,7 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
             return 1;
         }
 
-        printf("Derived AES key:\n");
-        print_hex(key_material, sizeof(key_material));
+        print_hex("Derived AES key: ", key_material, sizeof(key_material));
 
         gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
 
@@ -281,10 +266,9 @@ int test_dh_encrypt_decrypt(unsigned int bits) {
         gnutls_cipher_deinit(encrypt_handle);
 
         printf("Data encrypted (size: %d bytes)\n", encrypted.size);
-        printf("Encrypted data:\n");
-        print_hex(encrypted.data, encrypted.size);
-        printf("Authentication tag:\n");
-        print_hex(tag, sizeof(tag));
+        print_hex("Encrypted data", encrypted.data, encrypted.size);
+        printf("Auth tag size (size: %lu bytes)\n", sizeof(tag));
+        print_hex("Authentication tag", tag, sizeof(tag));
 
         /********** DECRYPTION **********/
         /* Initialize cipher for decryption */

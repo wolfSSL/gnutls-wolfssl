@@ -5,6 +5,7 @@
 #include <gnutls/crypto.h>
 #include <stdlib.h>
 #include <dlfcn.h>
+#include "test_util.h"
 
 /* NIST test vector AAD */
 const unsigned char aad_data[] = {
@@ -20,19 +21,6 @@ const unsigned char iv_data[12] = {
 const char hkdf_salt[] = "ECDH-Key-Derivation-Salt";
 const char hkdf_info[] = "AES-256-GCM-Encryption-Key";
 
-void print_hex(const unsigned char *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02x", data[i]);
-        if ((i+1) % 16 == 0 && i != len - 1)
-            printf("\n");
-        else if ((i+1) % 8 == 0 && i != len - 1)
-            printf(" ");
-        else if (i != len - 1)
-            printf(" ");
-    }
-    printf("\n");
-}
-
 /* Get key size for standard NIST curves */
 int get_curve_bits(const char *curve_name) {
     if (strcmp(curve_name, "SECP256R1") == 0) {
@@ -46,19 +34,6 @@ int get_curve_bits(const char *curve_name) {
     }
 }
 
-/* Convert curve name to GnuTLS curve ID */
-gnutls_ecc_curve_t get_curve_id(const char *curve_name) {
-    if (strcmp(curve_name, "SECP256R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP256R1;
-    } else if (strcmp(curve_name, "SECP384R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP384R1;
-    } else if (strcmp(curve_name, "SECP521R1") == 0) {
-        return GNUTLS_ECC_CURVE_SECP521R1;
-    } else {
-        return GNUTLS_ECC_CURVE_INVALID;
-    }
-}
-
 int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name) {
     int ret;
     gnutls_privkey_t alice_privkey, bob_privkey;
@@ -69,7 +44,6 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     gnutls_datum_t data = { (unsigned char *)test_data, strlen(test_data) };
     unsigned char tag[16] = {0}; // 16 bytes authentication tag for GCM
     int curve_bits = get_curve_bits(curve_name);
-    gnutls_ecc_curve_t curve_id = get_curve_id(curve_name);
 
     printf("\n=== Testing ECDH encryption/decryption with %s ===\n", curve_name);
 
@@ -186,8 +160,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     }
 
     printf("Shared secret derived (size: %d bytes)\n", shared_key.size);
-    printf("Shared secret value:\n");
-    print_hex(shared_key.data, shared_key.size);
+    print_hex("Shared secret value: ", shared_key.data, shared_key.size);
 
     /* Derive AES key using HKDF */
 
@@ -207,8 +180,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    printf("HKDF-Extract PRK:\n");
-    print_hex(prk, sizeof(prk));
+    print_hex("HKDF-Extract PRK", prk, sizeof(prk));
 
     /* Step 2: HKDF-Expand to get final key */
     unsigned char key_material[32]; /* 256 bits for AES-256 */
@@ -226,8 +198,7 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
         return 1;
     }
 
-    printf("Derived AES key:\n");
-    print_hex(key_material, sizeof(key_material));
+    print_hex("Derived AES key: ", key_material, sizeof(key_material));
 
     gnutls_datum_t aes_key = { key_material, sizeof(key_material) };
 
@@ -312,10 +283,8 @@ int test_ecdh_encrypt_decrypt(gnutls_pk_algorithm_t algo, const char *curve_name
     gnutls_cipher_deinit(encrypt_handle);
 
     printf("Data encrypted (size: %d bytes)\n", encrypted.size);
-    printf("Encrypted data:\n");
-    print_hex(encrypted.data, encrypted.size);
-    printf("Authentication tag:\n");
-    print_hex(tag, sizeof(tag));
+    print_hex("Encrypted data", encrypted.data, encrypted.size);
+    print_hex("Authentication tag", tag, sizeof(tag));
 
     /********** DECRYPTION **********/
     /* Initialize cipher for decryption with same parameters */

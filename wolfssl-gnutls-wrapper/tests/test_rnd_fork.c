@@ -14,7 +14,6 @@
 
 int test_rnd_write(const char* filename, unsigned char* buf, size_t sz)
 {
-    int ret;
     FILE* fp;
 
     fp = fopen(filename, "w");
@@ -31,7 +30,6 @@ int test_rnd_write(const char* filename, unsigned char* buf, size_t sz)
 
 int test_rnd_read(const char* filename, unsigned char* buf, size_t sz)
 {
-    int ret;
     FILE* fp;
 
     fp = fopen(filename, "r");
@@ -40,7 +38,7 @@ int test_rnd_read(const char* filename, unsigned char* buf, size_t sz)
         return 1;
     }
 
-    sz = fread(buf, 1, sz, fp);
+    fread(buf, 1, sz, fp);
     fclose(fp);
 
     return 0;

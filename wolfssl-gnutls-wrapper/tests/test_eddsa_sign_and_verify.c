@@ -3,19 +3,7 @@
 #include <gnutls/gnutls.h>
 #include <gnutls/abstract.h>
 #include <gnutls/crypto.h>
-
-void print_hex(const unsigned char *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02x", data[i]);
-        if ((i+1) % 16 == 0 && i != len - 1)
-            printf("\n");
-        else if ((i+1) % 8 == 0 && i != len - 1)
-            printf(" ");
-        else if (i != len - 1)
-            printf(" ");
-    }
-    printf("\n");
-}
+#include "test_util.h"
 
 int test_eddsa_curve(const char *curve_name) {
     int ret;
@@ -92,8 +80,7 @@ int test_eddsa_curve(const char *curve_name) {
     }
 
     printf("Data signature created (size: %d bytes)\n", signature.size);
-    printf("Data signature value:\n");
-    print_hex(signature.data, signature.size);
+    print_hex("Data signature value", signature.data, signature.size);
 
     printf("Verifying data signature...\n");
     ret = gnutls_pubkey_verify_data2(pubkey, sign_algo, 0, &data, &signature);
