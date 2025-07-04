@@ -1,0 +1,83 @@
+name: Samba-libs Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_samba_libs:
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        # TODO: re-add target/latest refs once we have a reproducible env
+        samba_ref: [ 'master' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up build tool-chain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential pkg-config \
+               git \
+               libacl1-dev libldap2-dev libpam0g-dev \
+               attr krb5-user dnsutils \
+               gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+               libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+               liblmdb-dev libparse-yapp-perl libgpgme11-dev libjansson-dev libarchive-dev \
+               libdbus-1-dev python3-dnspython python3-markdown libpopt-dev heimdal-dev \
+               libtirpc-dev
+
+      - name: Build wolfSSL + GnuTLS provider
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl \
+            ./setup.sh
+
+      - name: Verify provider artefacts exist
+        run: |
+          test -d /opt/wolfssl                  || exit 1
+          test -d /opt/gnutls                   || exit 1
+          test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
+      - name: Clone Samba (master)
+        run: |
+          git clone --depth 1 --branch master \
+            https://gitlab.com/samba-team/samba.git samba
+
+      - name: Configure & build Samba-libs
+        working-directory: samba
+        env:
+          PKG_CONFIG_PATH: "/opt/gnutls/lib/pkgconfig"
+          CPPFLAGS: "-I/opt/gnutls/include"
+          LDFLAGS: "-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib"
+          LD_LIBRARY_PATH: "/opt/gnutls/lib"
+        run: |
+          SAMBA_PREFIX=/opt/samba
+          ./configure --prefix=$SAMBA_PREFIX --enable-selftest
+          make -j"$(nproc)"
+          sudo make install
+
+      - name: Allow Samba daemons to bind low ports
+        run: |
+          sudo apt-get -y install libcap2-bin
+          SAMBA_PREFIX=/opt/samba
+          sudo setcap cap_net_bind_service=+ep $(readlink -f $SAMBA_PREFIX/sbin/samba)
+
+      - name: Run quick-tests
+        working-directory: samba
+        env:
+          PKG_CONFIG_PATH: "/opt/gnutls/lib/pkgconfig"
+          CPPFLAGS: "-I/opt/gnutls/include"
+          LDFLAGS: "-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib"
+          LD_LIBRARY_PATH: "/opt/gnutls/lib"
+        run: |
+          make quicktest -j"$(nproc)"
