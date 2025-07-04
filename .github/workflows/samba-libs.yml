@@ -1,0 +1,102 @@
+name: Samba-libs Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_samba_libs:
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        samba_ref: [ 'master' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up build tool-chain
+        run: |
+          apt-get update
+          apt-get install -y sudo wget build-essential pkg-config \
+               git \
+               libacl1-dev libldap2-dev libpam0g-dev \
+               attr krb5-user dnsutils \
+               gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+               libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+               liblmdb-dev libparse-yapp-perl libgpgme11-dev libjansson-dev libarchive-dev \
+               libdbus-1-dev python3-dnspython python3-markdown libpopt-dev heimdal-dev \
+               libtirpc-dev
+          apt-get install -y \
+             libkrb5-dev libsasl2-dev libssl-dev libcap-dev \
+             libcups2-dev libavahi-client-dev libavahi-common-dev liburing-dev \
+             gdb libgpgme-dev
+          apt-get install -y acl attr autoconf bind9utils bison build-essential \
+               debhelper dnsutils docbook-xml docbook-xsl flex gdb libjansson-dev krb5-user \
+               libacl1-dev libaio-dev libarchive-dev libattr1-dev libblkid-dev libbsd-dev \
+               libcap-dev libcups2-dev libgpgme-dev libjson-perl \
+               libldap2-dev libncurses5-dev libpam0g-dev libparse-yapp-perl \
+               libpopt-dev libreadline-dev nettle-dev perl pkg-config \
+               python3-dev python3-dbg python3-cryptography python3-dnspython python3-gpg python3-markdown \
+               xsltproc zlib1g-dev liblmdb-dev lmdb-utils python3-pyasn1 python3-iso8601
+
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          echo "Running setup.sh..."
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
+      - name: Verify provider artefacts exist
+        run: |
+          test -d /opt/wolfssl                   || exit 1
+          test -d /opt/gnutls                    || exit 1
+          test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
+      - name: Clone Samba
+        run: |
+          git clone https://gitlab.com/samba-team/samba.git samba
+          cd samba
+          if [ "${{ matrix.samba_ref }}" != "master" ]; then
+            git checkout ${{ matrix.samba_ref }}
+          fi
+
+      - name: Configure & build Samba-libs
+        working-directory: samba
+        run: |
+          export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+$PKG_CONFIG_PATH:}/opt/gnutls/lib/pkgconfig"
+          export CPPFLAGS="-I/opt/gnutls/include ${CPPFLAGS:-}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/opt/gnutls/lib ${LDFLAGS:-}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          ./configure --enable-selftest
+          make -j"$(nproc)"
+
+      - name: Run quick-tests
+        working-directory: samba
+        run: |
+          export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+$PKG_CONFIG_PATH:}/opt/gnutls/lib/pkgconfig"
+          export CPPFLAGS="-I/opt/gnutls/include ${CPPFLAGS:-}"
+          export LDFLAGS="-L/opt/gnutls/lib -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/opt/gnutls/lib ${LDFLAGS:-}"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          make quicktest -j"$(nproc)"
