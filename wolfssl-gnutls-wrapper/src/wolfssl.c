@@ -162,7 +162,7 @@ enum {
 /** Maximum AES key size. */
 #define MAX_AES_KEY_SIZE    AES_256_KEY_SIZE
 /** Maximum authentication data. */
-#define MAX_AUTH_DATA       1024
+#define MAX_AUTH_DATA       4096
 /** Maximum plaintext to encrypt for GCM  */
 #define MAX_AES_GCM_PLAINTEXT ((1ULL << 36) - 32)
 /** Maximum RSA-PSS signature size */
@@ -213,10 +213,14 @@ struct wolfssl_cipher_ctx {
     size_t iv_size;
 
     /* For GCM mode. */
-    /** Authentication data to use. */
-    unsigned char auth_data[MAX_AUTH_DATA];
-    /** Size of authentication data to use. */
+    /** Authentication data to use (static, maximum 4096 bytes). */
+    unsigned char auth_data_static[MAX_AUTH_DATA];
+    /** Authentication data to use (allocated dynamically). */
+    unsigned char *auth_data_heap;
+    /** Size of authentication data to use (static). */
     size_t auth_data_size;
+    /** Size of authentication data to use (heap). */
+    size_t auth_alloc;
     /** Calculated authentication tag. */
     unsigned char tag[GCM_TAG_SIZE];
     /** Size of calculated authentication tag. */
@@ -371,6 +375,7 @@ static int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
     ctx->tag_set_ext = 0;
     ctx->algorithm = 0;
     ctx->data_size = 0;
+    ctx->auth_data_heap = NULL;
 
     ctx->algorithm = algorithm;
     ctx->mode = get_cipher_mode(algorithm);
@@ -783,7 +788,7 @@ static int wolfssl_cipher_getiv(void *_ctx, void *iv, size_t iv_size)
  * Process Additional Authenticated Data (AAD) for GCM mode
  *
  * @param [in, out] _ctx        Cipher context.
- * @param [in]       auth_data  Authentication data.
+ * @param [in]       auth_data Authentication data.
  * @param [in]       auth_size  Size of authentication data in bytes.
  * @return  0 on success.
  * @return  GNUTLS_E_INVALID_REQUEST when context not initialized.
@@ -802,12 +807,47 @@ static int wolfssl_cipher_auth(void *_ctx, const void *auth_data,
         return GNUTLS_E_INVALID_REQUEST;
     }
 
-    /* Check authentication data will fit in cache. */
-    if (ctx->auth_data_size + auth_size > sizeof(ctx->auth_data)) {
-        WGW_ERROR("Auth data too big: %ld + %ld > %ld", ctx->auth_data_size,
-            auth_size, sizeof(ctx->auth_data));
-        return GNUTLS_E_SHORT_MEMORY_BUFFER;
+    /* Check authentication data will fit in the static cache,
+     * switch to heap if it doesn't. */
+    if (ctx->auth_data_heap == NULL &&
+            ctx->auth_data_size + auth_size > sizeof(ctx->auth_data_static)) {
+        WGW_LOG("Auth data too big: %ld + %ld > %ld", ctx->auth_data_size,
+            auth_size, sizeof(ctx->auth_data_static));
+        WGW_LOG("Switching to dynamic allocation");
+
+        size_t new_sz = sizeof(ctx->auth_data_static);
+        while (new_sz < ctx->auth_data_size + auth_size)
+            new_sz *= 2;
+
+		ctx->auth_data_heap = gnutls_malloc(new_sz);
+		if (!ctx->auth_data_heap) {
+			WGW_ERROR("gnutls_malloc failed for auth_data_heap");
+			return GNUTLS_E_MEMORY_ERROR;
+		}
+		ctx->auth_alloc = new_sz;
+		XMEMCPY(ctx->auth_data_heap, ctx->auth_data_static,
+				ctx->auth_data_size);
+		WGW_LOG("Spilled AAD to heap (%zu bytes)", new_sz);
     }
+
+    /* We are already storing in the heap, we check
+     * if we need to grow it. */
+	if (ctx->auth_data_heap &&
+            ctx->auth_data_size + auth_size > ctx->auth_alloc) {
+        WGW_LOG("New auth data too big, reallocating");
+		size_t new_sz = ctx->auth_alloc;
+		while (new_sz < ctx->auth_data_size + auth_size)
+			new_sz *= 2;
+
+		unsigned char *p = gnutls_realloc(ctx->auth_data_heap, new_sz);
+		if (!p) {
+			WGW_ERROR("gnutls_realloc failed for auth_data_heap");
+			return GNUTLS_E_MEMORY_ERROR;
+		}
+		ctx->auth_data_heap = p;
+		ctx->auth_alloc     = new_sz;
+		WGW_LOG("Grew AAD heap to %zu bytes", new_sz);
+	}
 
     /* Streaming must be a multiple of block size except for last. */
     if ((ctx->auth_data_size % AES_BLOCK_SIZE) != 0) {
@@ -816,8 +856,11 @@ static int wolfssl_cipher_auth(void *_ctx, const void *auth_data,
     }
 
     /* Store AAD for later use in encrypt/decrypt operations. */
-    XMEMCPY(ctx->auth_data + ctx->auth_data_size, auth_data, auth_size);
-    ctx->auth_data_size += auth_size;
+	unsigned char *dst = ctx->auth_data_heap ?
+		ctx->auth_data_heap : ctx->auth_data_static;
+
+	XMEMCPY(dst + ctx->auth_data_size, auth_data, auth_size);
+	ctx->auth_data_size += auth_size;
 
     WGW_LOG("AAD added successfully");
     return 0;
@@ -882,7 +925,7 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
         unsigned char* ptr;
         unsigned char* encr;
 
-        WGW_LOG("Caching platintext");
+        WGW_LOG("Caching plaintext");
 
         ctx->enc = 1;
 
@@ -914,10 +957,13 @@ static int wolfssl_cipher_encrypt(void *_ctx, const void *src, size_t src_size,
             return GNUTLS_E_INVALID_REQUEST;
         }
 
+        unsigned char *aad = ctx->auth_data_heap ?
+                                 ctx->auth_data_heap : ctx->auth_data_static;
+
         /* Do encryption with the data we have. */
         ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, encr,
             ctx->data, ctx->data_size, ctx->iv, ctx->iv_size,
-            ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+            ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
             gnutls_free(encr);
@@ -1053,6 +1099,10 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         }
 
         WGW_LOG("wc_AesGcmDecrypt");
+
+        unsigned char *aad = ctx->auth_data_heap ?
+            ctx->auth_data_heap : ctx->auth_data_static;
+
         /* If caller hasn't set tag then we are creating it. */
         if (!ctx->tag_set_ext) {
             /* Encrypt the ciphertext to get the plaintext.
@@ -1060,7 +1110,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
              */
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
                 ctx->data_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+                ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
                 gnutls_free(decr);
@@ -1069,7 +1119,7 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
             /* Encrypt the plaintext to create the tag. */
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, decr,
                 ctx->data_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+                ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
                 gnutls_free(decr);
@@ -1078,10 +1128,11 @@ static int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
             /* A tag is now available. */
             ctx->tag_set = 1;
         }
+
         /* Do decryption with cipehtext, IV, authentication data and tag. */
         ret = wc_AesGcmDecrypt(&ctx->cipher.aes_ctx, decr,
             ctx->data, ctx->data_size, ctx->iv, ctx->iv_size,
-            ctx->tag, ctx->tag_size, ctx->auth_data, ctx->auth_data_size);
+            ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
             gnutls_free(decr);
@@ -1175,9 +1226,12 @@ static void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
         if (ctx->mode == GCM) {
             WGW_LOG("wc_AesGcmEncrypt");
 
+            unsigned char *aad = ctx->auth_data_heap ?
+                ctx->auth_data_heap : ctx->auth_data_static;
+
             /* Do authentication with no plaintext. */
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, NULL, NULL, 0, ctx->iv,
-                ctx->iv_size, ctx->tag, ctx->tag_size, ctx->auth_data,
+                ctx->iv_size, ctx->tag, ctx->tag_size, aad,
                 ctx->auth_data_size);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
@@ -1395,6 +1449,9 @@ static void wolfssl_cipher_deinit(void *_ctx)
         ctx->initialized = 0;
         ctx->enc_initialized = 0;
         ctx->dec_initialized = 0;
+        if (ctx->auth_data_heap) {
+            gnutls_free(ctx->auth_data_heap);
+        }
     }
 
     gnutls_free(ctx);
