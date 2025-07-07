@@ -11,26 +11,32 @@ UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
 	CFLAGS       = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -Werror
 	CFLAGS_DEBUG = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -Werror -g
-	LDFLAGS      = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
+	LDFLAGS      = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib \
+	              -Wl,-rpath,/opt/wolfssl/lib -Wl,--no-as-needed -Wl,-z,now
 endif
 
 ifeq ($(UNAME_S),Darwin)
 	CC           = clang
 	CFLAGS       = -DENABLE_WOLFSSL -fPIC -Wall -Wextra
 	CFLAGS_DEBUG = -DENABLE_WOLFSSL -fPIC -Wall -Wextra -g
-	LDFLAGS      = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib -Wl,-rpath,/opt/wolfssl/lib
+	LDFLAGS      = -shared -L/opt/gnutls/lib -L/opt/wolfssl/lib \
+	              -Wl,-rpath,/opt/wolfssl/lib
 endif
 
 LIBS = -lgnutls -lwolfssl -ldl
 
-WRAPPER_TARGET = libgnutls-wolfssl-wrapper.so
-WRAPPER_SRCS   = src/wolfssl.c
-WRAPPER_HDRS   = src/gnutls_compat.h src/wolfssl.h
+WRAPPER_TARGET := libgnutls-wolfssl-wrapper.so
+
+WRAPPER_SRCS   := $(wildcard src/*.c)
+WRAPPER_OBJS   := $(WRAPPER_SRCS:.c=.o)
 
 all: $(WRAPPER_TARGET)
 
-$(WRAPPER_TARGET): $(WRAPPER_SRCS) $(WRAPPER_HDRS)
-	$(CC) $(CFLAGS) $(INCLUDES) $(WRAPPER_SRCS) -o $@ $(LDFLAGS) $(LIBS)
+$(WRAPPER_TARGET): $(WRAPPER_OBJS)
+	$(CC) $(LDFLAGS) -o $@ $(WRAPPER_OBJS) $(LIBS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 install:
 	mkdir -p $(PROVIDER_PATH)/lib
@@ -46,4 +52,5 @@ test_fips:
 	(cd tests; make run_fips)
 
 clean:
-	rm -f $(WRAPPER_TARGET)
+	rm -f $(WRAPPER_TARGET) $(WRAPPER_OBJS)
+
