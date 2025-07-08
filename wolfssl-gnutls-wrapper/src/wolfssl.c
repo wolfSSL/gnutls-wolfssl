@@ -19,8 +19,6 @@
 
 /*
  * TODO
- *   o Consider using a global random. Creating a random each time may exhaust
- *     entropy.
  *   o Consider making bigint_t implementation use mp_int.
  */
 

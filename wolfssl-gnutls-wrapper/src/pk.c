@@ -4,6 +4,8 @@
 #include "pk.h"
 #include "logging.h"
 #include "mac.h"
+#include "random.h"
+#include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/ed25519.h>
 #include <wolfssl/wolfcrypt/ed448.h>
@@ -703,9 +705,12 @@ static int wolfssl_pk_encrypt_rsa(gnutls_datum_t *ciphertext,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Check whether RSA PKCS#1.5 encryption is allowed. */
     if (!_gnutls_config_is_rsa_pkcs1_encrypt_allowed()) {
@@ -713,17 +718,9 @@ static int wolfssl_pk_encrypt_rsa(gnutls_datum_t *ciphertext,
         return GNUTLS_E_UNSUPPORTED_ENCRYPTION_ALGORITHM;
     }
 
-    /* Initialize a new random for generating padding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize and load the public RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 0);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -735,16 +732,14 @@ static int wolfssl_pk_encrypt_rsa(gnutls_datum_t *ciphertext,
         /* Ensure output datum is empty on error. */
         ciphertext->size = 0;
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
     /* Encrypt using RSA PKCS#1 v1.5 padding */
     ret = wc_RsaPublicEncrypt(plaintext->data, plaintext->size,
-        ciphertext->data, ciphertext->size, &rsa, &rng);
-    /* No longer need RSA key or random. */
+        ciphertext->data, ciphertext->size, &rsa, &priv_rng);
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPublicEncrypt", ret);
         /* Dispose of allocated buffer for ciphertext. */
@@ -778,11 +773,14 @@ static int wolfssl_pk_encrypt_rsa_oaep(gnutls_datum_t *ciphertext,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
     int hash_type;
     int mgf;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Get the hash and MGF based on GnuTLS digest. */
     hash_type = get_hash_type((gnutls_mac_algorithm_t)
@@ -792,17 +790,9 @@ static int wolfssl_pk_encrypt_rsa_oaep(gnutls_datum_t *ciphertext,
         return ret;
     }
 
-    /* Initialize a new random for generating padding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize and load the public RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 0);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -814,18 +804,16 @@ static int wolfssl_pk_encrypt_rsa_oaep(gnutls_datum_t *ciphertext,
         /* Ensure output datum is empty on error. */
         ciphertext->size = 0;
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
     /* Encrypt using RSA PKCS#1 OAEP. */
     ret = wc_RsaPublicEncrypt_ex(plaintext->data, plaintext->size,
-        ciphertext->data, ciphertext->size, &rsa, &rng, WC_RSA_OAEP_PAD,
+        ciphertext->data, ciphertext->size, &rsa, &priv_rng, WC_RSA_OAEP_PAD,
         hash_type, mgf, params->spki.rsa_oaep_label.data,
         params->spki.rsa_oaep_label.size);
-    /* No longer need RSA key or random. */
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPublicEncrypt_ex", ret);
         /* Dispose of allocated buffer for ciphertext. */
@@ -918,12 +906,15 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
     unsigned char out[1024];
     unsigned char *plain;
     word32 plain_size;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Check whether RSA PKCS#1.5 encryption is allowed. */
     if (!_gnutls_config_is_rsa_pkcs1_encrypt_allowed()) {
@@ -931,27 +922,18 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
         return GNUTLS_E_UNSUPPORTED_ENCRYPTION_ALGORITHM;
     }
 
-    /* Initialize a new random for generating padding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize and load the private RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
 #if !defined(HAVE_FIPS)
     /* Set a random against the RSA key for blinding. */
-    ret = wc_RsaSetRNG(&rsa, &rng);
+    ret = wc_RsaSetRNG(&rsa, &priv_rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_RsaSetRNG", ret);
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_RANDOM_FAILED;
     }
 #endif
@@ -966,7 +948,6 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
             /* Ensure output datum is empty on error. */
             plaintext->size = 0;
             wc_FreeRsaKey(&rsa);
-            wc_FreeRng(&rng);
             return GNUTLS_E_MEMORY_ERROR;
         }
     }
@@ -986,9 +967,8 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need RSA key or random. */
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPrivateDecrypt", ret);
         if (alloc_plaintext) {
@@ -1036,7 +1016,6 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
     int hash_type;
     int mgf;
     unsigned char out[1024];
@@ -1044,6 +1023,10 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
     word32 plain_size;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Get the hash and MGF based on GnuTLS digest. */
     hash_type = get_hash_type((gnutls_mac_algorithm_t)
@@ -1053,27 +1036,18 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
         return ret;
     }
 
-    /* Initialize a new random for generating padding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize and load the private RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
 #if !defined(HAVE_FIPS)
     /* Set a random against the RSA key for blinding. */
-    ret = wc_RsaSetRNG(&rsa, &rng);
+    ret = wc_RsaSetRNG(&rsa, &priv_rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_RsaSetRNG", ret);
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_RANDOM_FAILED;
     }
 #endif
@@ -1088,7 +1062,6 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
             /* Ensure output datum is empty on error. */
             plaintext->size = 0;
             wc_FreeRsaKey(&rsa);
-            wc_FreeRng(&rng);
             return GNUTLS_E_MEMORY_ERROR;
         }
     }
@@ -1109,9 +1082,8 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need RSA key or random. */
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPublicDecrypt_ex", ret);
         if (alloc_plaintext) {
@@ -1277,26 +1249,17 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
 
     WGW_FUNC_ENTER();
 
-#ifdef WC_RNG_SEED_CB
-    /* Set the seed callback to get entropy. */
-    wc_SetSeed_Cb(wc_GenerateSeed);
-#endif
-
     /* Initialize a new random for blinding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
+
 
     /* Initialize and load the private RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -1306,7 +1269,6 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
     if (signature->data == NULL) {
         WGW_ERROR("Allocating memory for signature");
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -1314,13 +1276,12 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
 
     /* Decrypt using RSA PKCS#1 v1.5. */
     ret = wc_RsaSSL_Sign(vdata->data, vdata->size, signature->data,
-        signature->size, &rsa, &rng);
+        signature->size, &rsa, &priv_rng);
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need RSA key or random. */
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaSSL_Sign", ret);
         /* Dispose of allocated buffer for signature. */
@@ -1355,11 +1316,14 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
 {
     int ret;
     RsaKey rsa;
-    WC_RNG rng;
     int hash_type;
     int mgf;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Get the hash and MGF based on GnuTLS digest. */
     hash_type = get_hash_type((gnutls_mac_algorithm_t)
@@ -1369,17 +1333,10 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
         return ret;
     }
 
-    /* Initialize a new random for blinding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize and load the private RSA key from GnuTLS PK parameters. */
     ret = rsa_load_params(&rsa, params, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -1389,7 +1346,6 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
     if (signature->data == NULL) {
         WGW_ERROR("Allocating memory for signature");
         wc_FreeRsaKey(&rsa);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -1398,13 +1354,12 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
     /* Decrypt using RSA PKCS#1 PSS. */
     ret = wc_RsaPSS_Sign_ex(vdata->data, vdata->size, signature->data,
         signature->size, hash_type, mgf, sign_params->salt_size, &rsa,
-        &rng);
+        &priv_rng);
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need RSA key or random. */
+    /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPSS_Sign_ex", ret);
         /* Dispose of allocated buffer for signature. */
@@ -1440,22 +1395,17 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
 {
     int ret;
     ecc_key ecc;
-    WC_RNG rng;
     word32 len;
 
     WGW_FUNC_ENTER();
 
     /* Initialize a new random for blinding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize and load the private ECC key from GnuTLS PK parameters. */
     ret = ecc_load_params(&ecc, pk_params, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -1465,7 +1415,6 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
     if (signature->data == NULL) {
         WGW_ERROR("Allocating memory for signature");
         wc_ecc_free(&ecc);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -1488,13 +1437,12 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
 
     /* Sign hash using ECDSA. */
     ret = wc_ecc_sign_hash(vdata->data, vdata->size, signature->data, &len,
-        &rng, &ecc);
+        &priv_rng, &ecc);
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need ECC key or random. */
+    /* No longer need ECC key. */
     wc_ecc_free(&ecc);
-    wc_FreeRng(&rng);
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_sign_hash", ret);
         /* Dispose of allocated buffer for signature. */
@@ -2361,10 +2309,13 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     RsaKey rsa;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     WGW_LOG("bits: %d", bits);
 #if defined(HAVE_FIPS)
@@ -2380,30 +2331,20 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
 
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize RSA key */
     ret = wc_InitRsaKey(&rsa, NULL);
     if (ret != 0) {
         WGW_ERROR("wc_InitRsaKey failed with code %d", ret);
-        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Generate RSA key */
-    ret = wc_MakeRsaKey(&rsa, bits, WC_RSA_EXPONENT, &rng);
+    ret = wc_MakeRsaKey(&rsa, bits, WC_RSA_EXPONENT, &priv_rng);
 
     PRIVATE_KEY_LOCK();
 
-    /* Random number generator no longer needed. */
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_ERROR("RSA key generation failed with code %d", ret);
         wc_FreeRsaKey(&rsa);
@@ -2435,7 +2376,6 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     DhKey dh;
     unsigned char *priv;
     word32 privSz;
@@ -2444,17 +2384,14 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
 
     WGW_FUNC_ENTER();
 
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
+
 #ifdef WC_RNG_SEED_CB
     /* Set the seed callback to get entropy. */
     wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
-
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Convert private key size to public key size. */
     if (bits == 256) {
@@ -2476,7 +2413,6 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
         WGW_LOG("Get fixed parameters");
         ret = wolfssl_pk_generate_params_dh(bits, params);
         if (ret != 0) {
-            wc_FreeRng(&rng);
             return ret;
         }
     }
@@ -2484,7 +2420,6 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     WGW_LOG("Load DH parameters from params");
     ret = dh_load_params(&dh, params);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         wc_FreeDhKey(&dh);
         return ret;
     }
@@ -2498,7 +2433,6 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     priv = gnutls_malloc(privSz);
     if (priv == NULL) {
         WGW_ERROR("Allocating memory for private key: %d", privSz);
-        wc_FreeRng(&rng);
         wc_FreeDhKey(&dh);
         return GNUTLS_E_MEMORY_ERROR;
     }
@@ -2508,7 +2442,6 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     if (pub == NULL) {
         WGW_ERROR("Allocating memory for public key: %d", pubSz);
         gnutls_free(priv);
-        wc_FreeRng(&rng);
         wc_FreeDhKey(&dh);
         return GNUTLS_E_MEMORY_ERROR;
     }
@@ -2516,13 +2449,11 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate public/private key pair for DH. */
-    ret = wc_DhGenerateKeyPair(&dh, &rng, priv, &privSz, pub, &pubSz);
+    ret = wc_DhGenerateKeyPair(&dh, &priv_rng, priv, &privSz, pub, &pubSz);
 
     PRIVATE_KEY_LOCK();
 
-    /* No longer need random or DH key (private/public generated into buffers.
-     */
-    wc_FreeRng(&rng);
+    /* No longer need DH key (private/public generated into buffers). */
     wc_FreeDhKey(&dh);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_DhGenerateKeyPair", ret);
@@ -2565,12 +2496,15 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     ecc_key ecc;
     int curve_id;
     int curve_size;
 
     WGW_FUNC_ENTER();
+
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
+        return GNUTLS_E_RANDOM_FAILED;
 
     /* Get the curve id and size for GnuTLS curve. */
     ret = ecc_curve_to_id_size(curve, &curve_id, &curve_size);
@@ -2583,13 +2517,6 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     wc_SetSeed_Cb(wc_GenerateSeed);
 #endif
 
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
-        return GNUTLS_E_RANDOM_FAILED;
-    }
-
     /* Initialize ECC key */
     ret = wc_ecc_init(&ecc);
     if (ret != 0) {
@@ -2600,12 +2527,10 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate ECC key */
-    ret = wc_ecc_make_key_ex(&rng, curve_size, &ecc, curve_id);
+    ret = wc_ecc_make_key_ex(&priv_rng, curve_size, &ecc, curve_id);
 
     PRIVATE_KEY_LOCK();
 
-    /* Random number generator no longer needed. */
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_make_key_ex", ret);
         wc_ecc_free(&ecc);
@@ -2638,7 +2563,6 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     ed25519_key ed25519;
     word32 privSz = ED25519_PRV_KEY_SIZE;
     word32 pubSz = ED25519_PUB_KEY_SIZE;
@@ -2650,30 +2574,24 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
         return GNUTLS_ECC_CURVE_INVALID;
     }
 
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize Ed25519 key */
     ret = wc_ed25519_init(&ed25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_init", ret);
-        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed25519 key */
-    ret = wc_ed25519_make_key(&rng, ED25519_KEY_SIZE, &ed25519);
+    ret = wc_ed25519_make_key(&priv_rng, ED25519_KEY_SIZE, &ed25519);
 
     PRIVATE_KEY_LOCK();
 
-    /* Random number generator no longer needed. */
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed25519_make_key", ret);
         wc_ed25519_free(&ed25519);
@@ -2747,7 +2665,6 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     ed448_key ed448;
     word32 privSz = ED448_PRV_KEY_SIZE;
     word32 pubSz = ED448_PUB_KEY_SIZE;
@@ -2759,30 +2676,25 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
         return GNUTLS_ECC_CURVE_INVALID;
     }
 
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize Ed448 key */
     ret = wc_ed448_init(&ed448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_init", ret);
-        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed448 key */
-    ret = wc_ed448_make_key(&rng, ED448_KEY_SIZE, &ed448);
+    ret = wc_ed448_make_key(&priv_rng, ED448_KEY_SIZE, &ed448);
 
     PRIVATE_KEY_LOCK();
 
     /* Random number generator no longer needed. */
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ed448_make_key", ret);
         wc_ed448_free(&ed448);
@@ -2855,7 +2767,6 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     curve25519_key x25519;
     word32 privSz = CURVE25519_KEYSIZE;
     word32 pubSz = CURVE25519_PUB_KEY_SIZE;
@@ -2868,29 +2779,24 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
     }
 
     /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize X25519 key */
     ret = wc_curve25519_init(&x25519);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_init", ret);
-        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X25519 key */
-    ret = wc_curve25519_make_key(&rng, CURVE25519_KEYSIZE, &x25519);
+    ret = wc_curve25519_make_key(&priv_rng, CURVE25519_KEYSIZE, &x25519);
 
     PRIVATE_KEY_LOCK();
 
     /* Random number generator no longer needed. */
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_make_key", ret);
         wc_curve25519_free(&x25519);
@@ -2963,7 +2869,6 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
     gnutls_pk_params_st *params)
 {
     int ret;
-    WC_RNG rng;
     curve448_key x448;
     word32 privSz = CURVE448_KEY_SIZE;
     word32 pubSz = CURVE448_PUB_KEY_SIZE;
@@ -2975,30 +2880,25 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
         return GNUTLS_ECC_CURVE_INVALID;
     }
 
-    /* Initialize a new random for generation. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    /* Initialize a new random for blinding. */
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize X448 key */
     ret = wc_curve448_init(&x448);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_init", ret);
-        wc_FreeRng(&rng);
         return GNUTLS_E_CRYPTO_INIT_FAILED;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X448 key */
-    ret = wc_curve448_make_key(&rng, CURVE448_KEY_SIZE, &x448);
+    ret = wc_curve448_make_key(&priv_rng, CURVE448_KEY_SIZE, &x448);
 
     /* Random number generator no longer needed. */
     PRIVATE_KEY_LOCK();
 
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve448_make_key", ret);
         wc_curve448_free(&x448);
@@ -4004,7 +3904,6 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     int ret;
     ecc_key private;
     ecc_key public;
-    WC_RNG rng;
     word32 len;
 
     WGW_FUNC_ENTER();
@@ -4016,27 +3915,22 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     }
 
     /* Initialize a new random for blinding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    if (wolfssl_ensure_rng() != 0)
         return GNUTLS_E_RANDOM_FAILED;
-    }
 
     /* Initialize and load the private ECC key from GnuTLS PK parameters. */
     ret = ecc_load_params(&private, priv, 1);
     if (ret != 0) {
-        wc_FreeRng(&rng);
         return ret;
     }
     /* Set the random for use with blinding. */
-    private.rng = &rng;
+    private.rng = &priv_rng;
 
     /* Initialize and load the public ECC key from peer's GnuTLS PK parameters.
      */
     ret = ecc_load_params(&public, pub, 0);
     if (ret != 0) {
         wc_ecc_free(&private);
-        wc_FreeRng(&rng);
         return ret;
     }
 
@@ -4046,7 +3940,6 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
         WGW_WOLFSSL_ERROR("wc_ecc_check_key", ret);
         wc_ecc_free(&public);
         wc_ecc_free(&private);
-        wc_FreeRng(&rng);
         return GNUTLS_E_PK_INVALID_PUBKEY;
     }
 
@@ -4057,7 +3950,6 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
         WGW_ERROR("Allocating memory for shared key: %d", len);
         wc_ecc_free(&public);
         wc_ecc_free(&private);
-        wc_FreeRng(&rng);
         return GNUTLS_E_MEMORY_ERROR;
     }
 
@@ -4071,7 +3963,6 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     /* Random, private and public key no londer needed. */
     wc_ecc_free(&public);
     wc_ecc_free(&private);
-    wc_FreeRng(&rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_ecc_shared_secret", ret);
         /* Dispose of shared secret value buffer. */
@@ -4112,9 +4003,6 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     curve25519_key private;
     curve25519_key public;
     word32 len = CURVE25519_KEYSIZE;
-#ifdef WOLFSSL_CURVE25519_BLINDING
-    WC_RNG rng;
-#endif
 
     WGW_FUNC_ENTER();
 
@@ -4169,20 +4057,18 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
 
 #ifdef WOLFSSL_CURVE25519_BLINDING
     /* Initialize a new random for blinding. */
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        WGW_WOLFSSL_ERROR("wc_InitRng", ret);
+    if (wolfssl_ensure_rng() != 0) {
         wc_curve25519_free(&public);
         wc_curve25519_free(&private);
         return GNUTLS_E_RANDOM_FAILED;
     }
+
     /* Set random into private key. */
-    ret = wc_curve25519_set_rng(&private, &rng);
+    ret = wc_curve25519_set_rng(&private, &priv_rng);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_set_rng", ret);
         wc_curve25519_free(&public);
         wc_curve25519_free(&private);
-        wc_FreeRng(&rng);
         return GNUTLS_E_INTERNAL_ERROR;
     }
 #endif
@@ -4207,9 +4093,7 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     /* Random, private and public key no londer needed. */
     wc_curve25519_free(&public);
     wc_curve25519_free(&private);
-#ifdef WOLFSSL_CURVE25519_BLINDING
-    wc_FreeRng(&rng);
-#endif
+
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_curve25519_shared_secret_ex", ret);
         /* Dispose of shared secret value buffer. */
