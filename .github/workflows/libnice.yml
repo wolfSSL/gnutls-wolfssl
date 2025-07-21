@@ -58,7 +58,7 @@ jobs:
           export CPPFLAGS="-I/opt/gnutls/include ${CPPFLAGS}"
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib ${LDFLAGS}"
           export LD_LIBRARY_PATH="/opt/gnutls/lib:${LD_LIBRARY_PATH}"
-          LIB=$(find build-gnutls/nice -name 'libnice*.so*' | head -n1)
+          LIB=$(find build-gnutls -type f -executable -name 'libnice.so*' | head -n1)
           if [ -z "$LIB" ]; then
             echo "libnice shared library not found" >&2
             exit 1

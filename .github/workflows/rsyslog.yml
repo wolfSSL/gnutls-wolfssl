@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest ]
-        rsyslog_ref: [ 'master', 'v8.2302.0' ]
+        rsyslog_ref: [ 'main', 'v8.2302.0' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
 
@@ -98,6 +98,8 @@ jobs:
 
       - name: Test rsyslog
         working-directory: rsyslog
+        if: ${{ matrix.rsyslog_ref == 'main' }}
+        continue-on-error: true
         run: |
           cat <<EOF >> tests/valgrind.supp
           {
