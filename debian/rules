@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+
+FIPS_ARG :=
+
+ifneq (,$(filter fips,$(DEB_BUILD_PROFILES)))
+  FIPS_ARG := fips
+endif
+
+ifeq ($(FIPS),1)
+  FIPS_ARG := fips
+endif
+
+ifeq ($(shell [ -f $(CURDIR)/../fips.flag ] && cat $(CURDIR)/../fips.flag),1)
+  FIPS_ARG := fips
+endif
+
+%:
+	dh $@ --buildsystem=makefile
+
+override_dh_auto_configure:
+	:
+
+override_dh_auto_build:
+	:
+
+override_dh_auto_install:
+	./setup.sh $(FIPS_ARG)
+
+	mkdir -p $(CURDIR)/debian/tmp/opt
+	cp -a /opt/wolfssl                $(CURDIR)/debian/tmp/opt/
+	cp -a /opt/gnutls                 $(CURDIR)/debian/tmp/opt/
+	cp -a /opt/wolfssl-gnutls-wrapper $(CURDIR)/debian/tmp/opt/

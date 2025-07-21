@@ -1,0 +1,8 @@
+gnutls-wolfssl (0~git20250721-1) unstable; urgency=medium
+
+  * Initial native Debian packaging for the experimental wolfSSL-backed build.
+    - Builds three binary packages: wolfssl-custom, gnutls-wolfssl,
+      wolfssl-gnutls-wrapper.
+    - Installs under /opt to avoid clashing with system libraries.
+
+ -- Reda Chouk <reda@wolfssl.com>  Mon, 21 Jul 2025 12:00:00 +0000
