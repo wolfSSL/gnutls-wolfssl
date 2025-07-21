@@ -1,0 +1,32 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gnutls-wolfssl
+Source: https://github.com/wolfssl/gnutls-wolfssl
+
+Files: *
+Copyright: 2023-2025, wolfSSL Inc. and contributors
+           1999-2025, The GnuTLS Project and contributors
+License: LGPL-2.1+ and GPL-2+
+
+Files: wolfssl/*
+Copyright: 2023-2025, wolfSSL Inc.
+License: GPL-2+
+
+Files: gnutls/*
+Copyright: 1999-2025, Free Software Foundation, Inc.
+License: LGPL-2.1+
+
+Files: wolfssl-gnutls-wrapper/*
+Copyright: 2024-2025, wolfSSL Inc.
+License: MIT
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License version 2.
+
+License: LGPL-2.1+
+ This library is free software; you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License version 2.1.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files...

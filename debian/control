@@ -1,0 +1,52 @@
+Source: gnutls-wolfssl
+Section: libs
+Priority: optional
+Maintainer: Reda Chouk <reda@wolfssl.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ clang,
+ git,
+ autoconf,
+ automake,
+ libtool,
+ pkg-config,
+ gettext,
+ bison,
+ flex,
+ gperf,
+ libgmp-dev,
+ libunistring-dev,
+ nettle-dev,
+ libtasn1-dev,
+ libp11-kit-dev,
+ libtasn1-bin,
+ libev-dev,
+ texinfo,
+ gtk-doc-tools
+Standards-Version: 4.6.2
+Homepage: https://github.com/wolfssl/gnutls-wolfssl
+Rules-Requires-Root: no
+
+Package: wolfssl-custom
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Section: libs
+Description: wolfSSL TLS library (custom build, /opt prefix)
+ wolfSSL compiled with the extended algorithm set required by the
+ gnutls-wolfssl experiment.  Installs under /opt/wolfssl.
+
+Package: gnutls-wolfssl
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, wolfssl-custom (>= ${binary:Version})
+Section: libs
+Description: GnuTLS linked against wolfSSL (/opt prefix)
+ GnuTLS 3.x rebuilt to use wolfSSL as its cryptographic backend.
+ Installs under /opt/gnutls.
+
+Package: wolfssl-gnutls-wrapper
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, wolfssl-custom, gnutls-wolfssl
+Section: libs
+Description: Runtime shim between GnuTLS and wolfSSL
+ Thin provider / wrapper that allows applications to load the
+ wolfSSL-backed GnuTLS seamlessly.  Installs under /opt/wolfssl-gnutls-wrapper.
