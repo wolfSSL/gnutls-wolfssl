@@ -4,7 +4,7 @@ wolfssl-gnutls-wrapper/tests/test_*
 wolfssl-gnutls-wrapper/libgnutls-wolfssl-wrapper.*
 wolfssl-gnutls-wrapper/src/*.o
 gnutls
-wolfssl
+wolfssl*
 fips-v5-checkout
 /wolfssl-gnutls-wrapper/.cache/
 /wolfssl-gnutls-wrapper/compile_commands.json

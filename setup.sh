@@ -1,13 +1,13 @@
 #!/bin/bash
 set -e
 
-if [ "$WOLFSSL_INSTALL" = "" ]; then
+if [ -z "$WOLFSSL_INSTALL" ]; then
     WOLFSSL_INSTALL=/opt/wolfssl
 fi
-if [ "$GNUTLS_INSTALL" = "" ]; then
+if [ -z "$GNUTLS_INSTALL" ]; then
     GNUTLS_INSTALL=/opt/gnutls
 fi
-if [ "$PROVIDER_PATH" = "" ]; then
+if [ -z "$PROVIDER_PATH" ]; then
     PROVIDER_PATH=/opt/wolfssl-gnutls-wrapper
 fi
 
@@ -43,30 +43,36 @@ if [ "$OS" = "macos" ]; then
     export PATH="/usr/local/opt/bison/bin:/opt/homebrew/opt/bison/bin:$PATH"
 fi
 
-# Set up wolfSSL configuration flags
-WOLFSSL_COMMON_FLAGS=""
-
 if [ $FIPS_MODE -eq 1 ]; then
-    # FIPS-ready process for wolfSSL
-    echo "Setting up wolfSSL with FIPS-ready mode..."
+    echo "Setting up wolfSSL with FIPS‑ready mode..."
 
-    # Remove any existing wolfssl directory to ensure clean state
-    rm -rf wolfssl/ fips-v5-checkout/
+    if [ -n "$WOLFSSL_FIPS_BUNDLE" ]; then
+        # User provided a bundle directory – use it verbatim
+        if [ ! -d "$WOLFSSL_FIPS_BUNDLE" ]; then
+            echo "ERROR: WOLFSSL_FIPS_BUNDLE '$WOLFSSL_FIPS_BUNDLE' is not a directory."
+            exit 1
+        fi
+        echo "Using pre‑downloaded wolfSSL FIPS bundle at '$WOLFSSL_FIPS_BUNDLE'"
+        cd "$WOLFSSL_FIPS_BUNDLE"
+    else
+        # Fresh checkout & FIPS helper
+        rm -rf wolfssl/ fips-v5-checkout/
 
-    echo "Cloning wolfSSL repository for FIPS-ready build..."
-    git clone https://github.com/wolfssl/wolfssl.git
-    cd wolfssl
+        echo "Cloning wolfSSL repository for FIPS‑ready build..."
+        git clone https://github.com/wolfssl/wolfssl.git
+        cd wolfssl
 
-    echo "Running FIPS-ready preparation..."
-    ./fips-check.sh linuxv5.2.1 keep
+        echo "Running FIPS‑ready preparation..."
+        ./fips-check.sh linuxv5.2.1 keep
 
-    echo "Moving FIPS directory XXX-fips-test to ../fips-ready-checkout"
-    mv XXX-fips-test ../fips-v5-checkout
+        echo "Moving FIPS directory XXX-fips-test to ../fips-v5-checkout"
+        mv XXX-fips-test ../fips-v5-checkout
 
-    cd ..
-    rm -rf wolfssl/
+        cd ..
+        rm -rf wolfssl/
 
-    cd fips-v5-checkout
+        cd fips-v5-checkout
+    fi
 
     ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK' --enable-fips=v5 --enable-md5
 
@@ -118,10 +124,8 @@ autoreconf -fvi
 if [ "$OS" = "macos" ]; then
     echo "Configuring GnuTLS for macOS..."
 
-    # Base configuration options
     CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
 
-    # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
     fi
@@ -139,10 +143,8 @@ if [ "$OS" = "macos" ]; then
 else
     echo "Configuring GnuTLS for Linux..."
 
-    # Base configuration options
     CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
 
-    # Add FIPS mode if requested
     if [ $FIPS_MODE -eq 1 ]; then
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
     fi
