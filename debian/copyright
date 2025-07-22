@@ -5,11 +5,11 @@ Source: https://github.com/wolfssl/gnutls-wolfssl
 Files: *
 Copyright: 2023-2025, wolfSSL Inc. and contributors
            1999-2025, The GnuTLS Project and contributors
-License: LGPL-2.1+ and GPL-2+
+License: GPL-3+ and LGPL-2.1+
 
 Files: wolfssl/*
 Copyright: 2023-2025, wolfSSL Inc.
-License: GPL-2+
+License: GPL-3+
 
 Files: gnutls/*
 Copyright: 1999-2025, Free Software Foundation, Inc.
@@ -17,16 +17,35 @@ License: LGPL-2.1+
 
 Files: wolfssl-gnutls-wrapper/*
 Copyright: 2024-2025, wolfSSL Inc.
-License: MIT
+License: GPL-3+
 
+Files: debian/*
+Copyright: 2025, Reda Chouk <reda@wolfssl.com>
 License: GPL-2+
- This program is free software; you can redistribute it and/or modify it
- under the terms of the GNU General Public License version 2.
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 3 can be found in “/usr/share/common-licenses/GPL-3”.
 
 License: LGPL-2.1+
- This library is free software; you can redistribute it and/or modify it
- under the terms of the GNU Lesser General Public License version 2.1.
+ This library is free software: you can redistribute it and/or modify
+ it under the terms of the GNU Lesser General Public License as published
+ by the Free Software Foundation, either version 2.1 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the complete text of the GNU Lesser General Public
+ License version 2.1 can be found in “/usr/share/common-licenses/LGPL-2.1”.
 
-License: MIT
- Permission is hereby granted, free of charge, to any person obtaining a copy
- of this software and associated documentation files...
+License: GPL-2+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 2 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the complete text of the GNU General Public License
+ version 2 can be found in “/usr/share/common-licenses/GPL-2”.
