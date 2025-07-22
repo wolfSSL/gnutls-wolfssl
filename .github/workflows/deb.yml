@@ -1,0 +1,45 @@
+name: Deb packaging testing
+
+on:
+  push:
+    branches: [ "master", "main", "release/**" ]
+  pull_request: {}
+concurrency:
+  group: smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deb-testing:
+    runs-on: ubuntu-latest
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential devscripts debhelper-compat fakeroot clang \
+            autoconf automake libtool pkg-config gettext bison flex gperf \
+            libgmp-dev libunistring-dev nettle-dev libtasn1-dev libp11-kit-dev \
+            libev-dev gtk-doc-tools lintian libtasn1-bin
+
+      - name: Build .deb set (non-FIPS)
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Install built packages
+        run: |
+          sudo dpkg -i ../wolfssl-custom_*_amd64.deb \
+                      ../gnutls-wolfssl_*_amd64.deb  \
+                      ../wolfssl-gnutls-wrapper_*_amd64.deb
+          sudo ldconfig
+
+      - name: Wrapper-load smoke test
+        run: |
+          set -e
+          OUT=$(WGW_LOGGING=1 /opt/gnutls/bin/gnutls-cli --version 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q "ENTER: _gnutls_wolfssl_init" \
+            || { echo "::error ::wrapper not initialised – FAIL"; exit 1; }
