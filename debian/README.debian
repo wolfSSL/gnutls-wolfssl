@@ -1,0 +1,92 @@
+gnutls-wolfssl for Debian
+
+This source package builds three binary packages:
+	•	wolfssl-custom               – wolfSSL with the custom options required by GnuTLS
+	•	gnutls-wolfssl               – GnuTLS built to use wolfSSL as its crypto backend
+	•	wolfssl-gnutls-wrapper       – Runtime provider that links GnuTLS and wolfSSL,
+                                       effectively backend that takes care of the
+                                       cryptographic operations
+
+All files install under /opt/ so they never clash with the system
+libraries shipped by Debian or Ubuntu.
+
+===============================================================================
+
+Building the Packages
+
+1.	Install build-time dependencies:
+```
+sudo apt-get update
+sudo apt-get install -y
+build-essential devscripts debhelper-compat fakeroot clang
+autoconf automake libtool pkg-config gettext bison flex gperf
+libgmp-dev libunistring-dev nettle-dev libtasn1-dev libp11-kit-dev
+libev-dev gtk-doc-tools lintian
+```
+
+2.	Build non-FIPS (default):
+```
+dpkg-buildpackage -us -uc -b
+```
+
+Build FIPS flavour:
+
+```
+dpkg-buildpackage -us -uc -b -Pfips     # or  FIPS=1 dpkg-buildpackage -us -uc -b
+```
+
+3.	The .deb artefacts appear in the parent directory:
+
+```
+../wolfssl-custom_amd64.deb
+../gnutls-wolfsslamd64.deb
+../wolfssl-gnutls-wrapper_amd64.deb
+```
+
+The packaging script automatically removes any previous /opt installs
+at the start of every build, so no manual clean-up is required.
+
+===============================================================================
+
+Expected Runtime Output
+
+After installing the three packages, run
+
+```
+WGW_LOGGING=1 /opt/gnutls/bin/gnutls-cli
+```
+
+You should see the wrapper initialising and registering algorithms, for
+example:
+
+```
+wgw [  85]: ENTER: _gnutls_wolfssl_init
+wgw [ 869]: registering md5
+wgw [ 909]: registering sha384
+…
+wgw [1338]: registering AES-128-CBC
+wgw [ 118]: FIPS mode enabled in wolfSSL
+wgw [ 127]: FIPS mode enabled in GnuTLS
+```
+
+(The exact list varies between the non-FIPS and FIPS builds, but the
+“ENTER: _gnutls_wolfssl_init” line will always appear.)
+
+===============================================================================
+
+Installation paths:
+
+```
+/opt/wolfssl
+/opt/gnutls
+/opt/wolfssl-gnutls-wrapper
+```
+
+To rebuild with different wolfSSL or GnuTLS configure flags, edit
+“setup.sh” and rebuild the packages.
+This applies for the installation paths too (see README in https://github.com/wolfssl/gnutls-wolfssl)
+
+For project details see:
+https://github.com/wolfSSL/gnutls-wolfssl
+
+– wolfSSL support@wolfssl.com

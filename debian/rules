@@ -24,6 +24,8 @@ override_dh_auto_build:
 	:
 
 override_dh_auto_install:
+	-sudo rm -rf /opt/wolfssl /opt/gnutls /opt/wolfssl-gnutls-wrapper
+
 	./setup.sh $(FIPS_ARG)
 
 	mkdir -p $(CURDIR)/debian/tmp/opt
