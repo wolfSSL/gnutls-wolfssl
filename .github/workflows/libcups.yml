@@ -43,7 +43,22 @@ jobs:
             libssl-dev zlib1g-dev avahi-daemon libkrb5-dev libpam-dev libsystemd-dev \
             libusb-1.0-0-dev po4a
 
+      # Restore (and later save) the compiled tool-chain if it already exists
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          # Rebuild whenever setup.sh or any source dir changes
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
       - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           echo "Running setup.sh..."
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
@@ -63,15 +78,15 @@ jobs:
           git clone --recurse-submodules https://github.com/OpenPrinting/libcups.git
           cd libcups
           git checkout v3.0rc4
-          
+
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
-          
+
           ./configure --with-tls=gnutls --enable-debug --enable-debug-printfs \
             'LDFLAGS=-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib -L/opt/gnutls/lib' \
             'CPPFLAGS=-I/opt/gnutls/include -I/opt/gnutls/include'
-          
+
           make -j$(nproc)
           cd cups/
           make -j$(nproc) unittests
@@ -82,15 +97,15 @@ jobs:
           git clone https://github.com/OpenPrinting/cups.git
           cd cups
           git checkout v2.4.2
-          
+
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
-          
+
           ./configure --with-tls=gnutls --enable-debug --enable-debug-printfs \
             'LDFLAGS=-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib -L/opt/gnutls/lib' \
             'CPPFLAGS=-I/opt/gnutls/include -I/opt/gnutls/include'
-          
+
           make -j$(nproc)
           cd cups/
           make -j$(nproc) unittests
@@ -121,81 +136,81 @@ jobs:
           else
             TEST_DIR="cups/cups"
           fi
-          
+
           cd $TEST_DIR
-          
+
           # Run tests WITH provider
           echo "=== RUNNING TESTS WITH PROVIDER ==="
           export WGW_LOGGING=0
-          
+
           > /tmp/with_provider.log
-          
+
           if [ "${{ matrix.cups_version }}" == "latest" ]; then
             echo "--- testcreds with provider ---"
             ./testcreds client https://localhost:8443 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- testhash with provider ---"
             ./testhash 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- testjson with provider ---"
             ./testjson 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- testjwt with provider ---"
             ./testjwt 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- testoauth with provider ---"
             ./testoauth 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- tlscheck with provider ---"
             ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
             timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
           else
             echo "--- testcreds with provider ---"
             ./testcreds https://localhost:8443 2>&1 | tee -a /tmp/with_provider.log || true
-            
+
             echo "--- tlscheck with provider ---"
             ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
             timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/with_provider.log || true
           fi
-          
+
           WITH_FAILS=$(grep -c "FAIL" /tmp/with_provider.log | tr -d '\n' || echo "0")
-          
+
           # Run tests WITHOUT provider
           echo "=== RUNNING TESTS WITHOUT PROVIDER ==="
           export GNUTLS_NO_PROVIDER=1
-          
+
           > /tmp/without_provider.log
-          
+
           if [ "${{ matrix.cups_version }}" == "latest" ]; then
             echo "--- testcreds without provider ---"
             ./testcreds client https://localhost:8443 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- testhash without provider ---"
             ./testhash 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- testjson without provider ---"
             ./testjson 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- testjwt without provider ---"
             ./testjwt 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- testoauth without provider ---"
             ./testoauth 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- tlscheck without provider ---"
             ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
             timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
           else
             echo "--- testcreds without provider ---"
             ./testcreds https://localhost:8443 2>&1 | tee -a /tmp/without_provider.log || true
-            
+
             echo "--- tlscheck without provider ---"
             ./tlscheck --tls12 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
             timeout 10 ./tlscheck --tls13 --verbose 127.0.0.1 8443 2>&1 | tee -a /tmp/without_provider.log || true
           fi
-          
+
           WITHOUT_FAILS=$(grep -c "FAIL" /tmp/without_provider.log | tr -d '\n' || echo "0")
-          
+
           # Analyze results
           echo "=== FINAL RESULTS ==="
           echo "Failures with provider: $WITH_FAILS"

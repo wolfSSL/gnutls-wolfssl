@@ -39,11 +39,30 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      # Build only if cache was missed
+      - name: Build wolfssl/gnutls stack
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
 
       - name: Build wrapper under Bear
         run: |
-          ./setup.sh
           cd wolfssl-gnutls-wrapper
           make clean
           bear -- make -j"$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
@@ -52,3 +71,4 @@ jobs:
         run: |
           FILES=$(git -C wolfssl-gnutls-wrapper ls-files src/*.c tests/*.c | sed 's|^|wolfssl-gnutls-wrapper/|')
           clang-tidy -p wolfssl-gnutls-wrapper $FILES
+

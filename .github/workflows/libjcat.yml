@@ -32,22 +32,45 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
+
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
       - name: Install libjcat dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y gnutls-bin gobject-introspection gtk-doc-tools libgirepository1.0-dev libglib2.0-dev libglib2.0-dev-bin libgnutls28-dev libgpgme11-dev libjson-glib-dev pkg-config shared-mime-info valac ninja-build python3-venv meson
+          sudo apt-get install -y gnutls-bin gobject-introspection gtk-doc-tools \
+            libgirepository1.0-dev libglib2.0-dev libglib2.0-dev-bin libgnutls28-dev \
+            libgpgme11-dev libjson-glib-dev pkg-config shared-mime-info valac \
+            ninja-build python3-venv meson
+
+      # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
       - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
       - name: Check setup.sh output directories
         run: |
           test -d /opt/wolfssl || exit 1
           test -d /opt/gnutls || exit 1
           test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
       - name: Checkout libjcat at ${{ matrix.libjcat_ref }}
         run: |
           git clone https://github.com/hughsie/libjcat.git
@@ -55,6 +78,7 @@ jobs:
           if [ "${{ matrix.libjcat_ref }}" != "master" ]; then
             git checkout ${{ matrix.libjcat_ref }}
           fi
+
       - name: Configure and build libjcat
         working-directory: libjcat
         run: |
@@ -67,6 +91,7 @@ jobs:
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
           meson setup _build-custom -Db_coverage=false
           meson compile -C _build-custom
+
       - name: Test libjcat Build
         working-directory: libjcat
         run: |
