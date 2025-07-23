@@ -13,10 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEBIAN_FRONTEND: noninteractive
+
     steps:
+      # ───────────────────────── checkout ─────────────────────────
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # ───────────────────── tool-chain setup ─────────────────────
       - name: Install build tooling
         run: |
           sudo apt-get update
@@ -26,16 +29,37 @@ jobs:
             libgmp-dev libunistring-dev nettle-dev libtasn1-dev libp11-kit-dev \
             libev-dev gtk-doc-tools lintian libtasn1-bin
 
-      - name: Build .deb set (non-FIPS)
-        run: dpkg-buildpackage -us -uc -b
+      # ─────────── restore / save the .deb bundle ────────────
+      - name: Restore cached .deb bundle
+        id: cache-debs
+        uses: actions/cache@v4
+        with:
+          path: deb-cache
+          key: debs-${{ runner.os }}-${{ hashFiles(
+            'wolfssl/**',
+            'gnutls/**',
+            'wolfssl-gnutls-wrapper/**'
+          ) }}
+          restore-keys: |
+            debs-${{ runner.os }}-
 
+      # ───────────── build only on a cache miss ─────────────
+      - name: Build .deb set (non-FIPS)
+        if: steps.cache-debs.outputs.cache-hit != 'true'
+        run: |
+          dpkg-buildpackage -us -uc -b
+          mkdir -p deb-cache
+          mv ../*.deb deb-cache/
+
+      # ───────────── install the cached / new .debs ─────────────
       - name: Install built packages
         run: |
-          sudo dpkg -i ../wolfssl-custom_*_amd64.deb \
-                      ../gnutls-wolfssl_*_amd64.deb  \
-                      ../wolfssl-gnutls-wrapper_*_amd64.deb
+          sudo dpkg -i deb-cache/wolfssl-custom_*_amd64.deb \
+                      deb-cache/gnutls-wolfssl_*_amd64.deb  \
+                      deb-cache/wolfssl-gnutls-wrapper_*_amd64.deb
           sudo ldconfig
 
+      # ───────────── wrapper-load smoke test ─────────────
       - name: Wrapper-load smoke test
         run: |
           set -e
@@ -43,3 +67,4 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "ENTER: _gnutls_wolfssl_init" \
             || { echo "::error ::wrapper not initialised – FAIL"; exit 1; }
+
