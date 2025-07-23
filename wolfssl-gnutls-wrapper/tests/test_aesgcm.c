@@ -266,6 +266,122 @@ static int test_aesgcm_aead(gnutls_cipher_algorithm_t cipher,
     return 0;
 }
 
+/* ----------- BIG-AAD STRESS TEST (≥ 100 kB) ---------------- */
+static int test_aesgcm_big_aad(size_t aad_len)
+{
+    int ret;
+    gnutls_cipher_hd_t hd;
+    unsigned char *aad  = NULL;
+    unsigned char pt[16]  = {0};          /* 1-block dummy plaintext   */
+    unsigned char tag[16] = {0};
+    unsigned char iv[12]  = {0};          /* 96-bit nonce             */
+
+    /* 128-bit zero key */
+    gnutls_datum_t key = { (unsigned char *)key_128, sizeof(key_128) };
+
+    /* allocate and fill the big AAD */
+    aad = gnutls_malloc(aad_len);
+    if (!aad) { perror("malloc"); return 1; }
+    for (size_t i = 0; i < aad_len; i++)
+        aad[i] = (unsigned char)(i & 0xFF);        /* deterministic pattern */
+
+    /* init AES-128-GCM context */
+    ret = gnutls_cipher_init(&hd, GNUTLS_CIPHER_AES_128_GCM, &key,
+                             &(gnutls_datum_t){ iv, sizeof(iv) });
+    if (ret < 0) { print_gnutls_error("cipher_init", ret); goto out; }
+
+    /* supply the giant AAD in a single call */
+    ret = gnutls_cipher_add_auth(hd, aad, aad_len);
+    if (ret < 0) { print_gnutls_error("add_auth", ret); goto out_free; }
+
+    /* encrypt the dummy plaintext (content is irrelevant here) */
+    ret = gnutls_cipher_encrypt(hd, pt, sizeof(pt));
+    if (ret < 0) { print_gnutls_error("encrypt", ret); goto out_free; }
+
+    /* force tag generation – this calls wc_AesGcmEncrypt/Decrypt under the hood */
+    ret = gnutls_cipher_tag(hd, tag, sizeof(tag));
+    if (ret < 0) { print_gnutls_error("tag", ret); goto out_free; }
+
+    printf("AES-GCM with %zu-byte AAD succeeded\n", aad_len);
+    ret = 0;
+
+out_free:
+    gnutls_cipher_deinit(hd);
+out:
+    gnutls_free(aad);
+    return ret;
+}
+
+/* --- encrypt-then-decrypt with huge AAD (spills + realloc both ways) ---- */
+static int test_aesgcm_big_aad_chunks_encdec(void)
+{
+    int ret;
+    gnutls_cipher_hd_t enc_hd = NULL, dec_hd = NULL;
+    unsigned char iv[12]   = {0};
+    unsigned char pt[16]   = {0};             /* dummy 16-byte plaintext */
+    unsigned char ct[16]   = {0};
+    unsigned char tag[16]  = {0};
+    gnutls_datum_t key = { (unsigned char *)key_128, sizeof(key_128) };
+
+    /* three AAD chunks: 2 KiB (stay static) + 4 KiB (spill) + 64 KiB (realloc) */
+    const size_t c1 = 2048, c2 = 4096, c3 = 65536;
+    unsigned char *aad1 = gnutls_malloc(c1);
+    unsigned char *aad2 = gnutls_malloc(c2);
+    unsigned char *aad3 = gnutls_malloc(c3);
+    if (!aad1 || !aad2 || !aad3) { perror("malloc"); return 1; }
+    memset(aad1, 0x11, c1); memset(aad2, 0x22, c2); memset(aad3, 0x33, c3);
+
+    /* ---------- ENCRYPT ---------- */
+    ret = gnutls_cipher_init(&enc_hd, GNUTLS_CIPHER_AES_128_GCM,
+                             &key, &(gnutls_datum_t){ iv, sizeof(iv) });
+    if (ret < 0) { print_gnutls_error("enc init", ret); goto out; }
+
+    if ((ret = gnutls_cipher_add_auth(enc_hd, aad1, c1)) < 0 ||
+        (ret = gnutls_cipher_add_auth(enc_hd, aad2, c2)) < 0 ||
+        (ret = gnutls_cipher_add_auth(enc_hd, aad3, c3)) < 0) {
+        print_gnutls_error("enc add_auth", ret); goto out;
+    }
+
+    if ((ret = gnutls_cipher_encrypt(enc_hd, pt, sizeof(pt))) < 0) {
+        print_gnutls_error("encrypt", ret); goto out;
+    }
+    memcpy(ct, pt, sizeof(ct));           /* ciphertext now in ct */
+
+    if ((ret = gnutls_cipher_tag(enc_hd, tag, sizeof(tag))) < 0) {
+        print_gnutls_error("get tag", ret); goto out;
+    }
+    gnutls_cipher_deinit(enc_hd); enc_hd = NULL;
+
+    /* ---------- DECRYPT (same huge AAD pattern) ---------- */
+    ret = gnutls_cipher_init(&dec_hd, GNUTLS_CIPHER_AES_128_GCM,
+                             &key, &(gnutls_datum_t){ iv, sizeof(iv) });
+    if (ret < 0) { print_gnutls_error("dec init", ret); goto out; }
+
+    if ((ret = gnutls_cipher_add_auth(dec_hd, aad1, c1)) < 0 ||
+        (ret = gnutls_cipher_add_auth(dec_hd, aad2, c2)) < 0 ||
+        (ret = gnutls_cipher_add_auth(dec_hd, aad3, c3)) < 0) {
+        print_gnutls_error("dec add_auth", ret); goto out;
+    }
+
+    if ((ret = gnutls_cipher_tag(dec_hd, tag, sizeof(tag))) < 0) {
+        print_gnutls_error("set tag", ret); goto out;
+    }
+
+    if ((ret = gnutls_cipher_decrypt(dec_hd, ct, sizeof(ct))) < 0) {
+        print_gnutls_error("decrypt", ret); goto out;
+    }
+
+    gnutls_cipher_deinit(dec_hd); dec_hd = NULL;
+    printf("Encrypt + decrypt spill/realloc test succeeded\n");
+    ret = 0;
+
+out:
+    if (enc_hd) gnutls_cipher_deinit(enc_hd);
+    if (dec_hd) gnutls_cipher_deinit(dec_hd);
+    gnutls_free(aad1); gnutls_free(aad2); gnutls_free(aad3);
+    return ret;
+}
+
 int main(void) {
     int ret;
 
@@ -300,6 +416,12 @@ int main(void) {
         ret = test_aesgcm_aead(GNUTLS_CIPHER_AES_256_GCM, key_256,
             sizeof(key_256), ciphertext_256_data, sizeof(ciphertext_256_data));
     }
+	if (ret == 0) {
+		ret = test_aesgcm_big_aad(131072);
+	}
+	if (ret == 0) {
+		ret = test_aesgcm_big_aad_chunks_encdec();
+	}
     if (ret == 0) {
         printf("Test completed.\n");
     }
