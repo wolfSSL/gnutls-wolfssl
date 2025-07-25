@@ -1,0 +1,102 @@
+name: VTE Build and Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vte_build_test:
+    name: VTE Build Test
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        vte_ref: [ 'master', '0.70.6']
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Install core build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential sudo
+
+      - name: Install GnuTLS build dependencies
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools \
+            nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev \
+            libp11-kit-dev libunbound-dev wget
+
+      - name: Restore cached gnutls-wolfssl tool-chain
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl/**', 'gnutls/**', 'wolfssl-gnutls-wrapper/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Build GnuTLS with wolfSSL provider
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls \
+          WOLFSSL_INSTALL=/opt/wolfssl \
+          ./setup.sh
+
+      - name: Verify /opt output
+        run: |
+          test -d /opt/gnutls/lib || { echo "GnuTLS not found"; exit 1; }
+          test -f /opt/gnutls/lib/libgnutls.so || { echo "libgnutls.so missing"; exit 1; }
+
+      - name: Install VTE build dependencies
+        run: |
+          sudo apt-get install -y \
+            libsystemd-dev libgtk-4-dev valac libgirepository1.0-dev \
+            liblz4-dev python3-pip python3-setuptools \
+            libglib2.0-dev libpcre2-dev libfribidi-dev \
+            libgtk-3-dev libicu-dev gettext git \
+            libtool autoconf automake meson ninja-build pkg-config
+
+      - name: Checkout VTE at ${{ matrix.vte_ref }}
+        run: |
+          git clone https://github.com/GNOME/vte.git
+          cd vte
+          if [ "${{ matrix.vte_ref }}" != "master" ]; then
+            git checkout ${{ matrix.vte_ref }}
+          fi
+
+      - name: Configure and build VTE
+        working-directory: vte
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          meson setup _build -Dgnutls=true -Dgtk4=false
+          ninja -C _build
+
+      - name: Verify VTE is linked against the custom GnuTLS
+        working-directory: vte/_build
+        run: |
+          lib=$(find src -maxdepth 1 -name 'libvte-2.91*.so*' | head -n 1)
+          echo "Checking linkage for $lib"
+          ldd "$lib" | grep gnutls
+          if ! ldd "$lib" | grep -q '/opt/gnutls/lib/libgnutls.so'; then
+          echo "::error::VTE is NOT linked against /opt/gnutls/lib/libgnutls.so"
+          exit 1
+          fi
+
+      - name: Test VTE build
+        working-directory: vte
+        run: ninja -C _build test --verbose
