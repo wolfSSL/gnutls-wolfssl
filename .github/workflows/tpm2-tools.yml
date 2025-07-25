@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -35,40 +35,44 @@ jobs:
             libunistring-dev libp11-kit-dev libunbound-dev bison python3-yaml \
             libcurl4-openssl-dev libdbus-1-dev libcmocka-dev expect xxd pandoc \
             libssl-dev libgmp-dev libjson-c-dev libtss2-dev swtpm autoconf-archive
-      
+
+      # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
       - name: Build wolfSSL, wrapper and GnuTLS
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
-      
+
       - name: Check setup.sh output directories
         run: |
-          echo "Check for wolfSSL installation..."
-          if [ ! -d /opt/wolfssl ]; then
-            echo "/opt/wolfssl not found after setup"
-            exit 1
-          fi
-          echo "Check for GnuTLS installation..."
-          if [ ! -d /opt/gnutls ]; then
-            echo "/opt/gnutls not found after setup"
-            exit 1
-          fi
-          echo "Check for wrapper installation..."
-          if [ ! -d /opt/wolfssl-gnutls-wrapper/lib ]; then
-            echo "/opt/wolfssl-gnutls-wrapper/lib not found after setup"
-            exit 1
-          fi
-      
-      - name: Build curl (GnuTLS backend)
+          test -d /opt/wolfssl || { echo "/opt/wolfssl not found"; exit 1; }
+          test -d /opt/gnutls || { echo "/opt/gnutls not found"; exit 1; }
+          test -d /opt/wolfssl-gnutls-wrapper/lib || { echo "/opt/wolfssl-gnutls-wrapper/lib not found"; exit 1; }
+
+      - name: Package /opt/gnutls and /opt/wolfssl
         run: |
-          export MAKEFLAGS="-j$(nproc)"
-          git clone --branch curl-8_4_0 https://github.com/curl/curl
-          cd curl
-          autoreconf -fi
-          ./configure --with-gnutls=/opt/gnutls --prefix=/opt/curl
-          make
-          sudo make install
-          sudo ldconfig
-      
+          sudo tar -C /opt -czf gnutls-wolfssl.tar.gz gnutls wolfssl wolfssl-gnutls-wrapper
+
+      - name: Build curl from curl-7_88_1
+        uses: wolfSSL/actions-build-autotools-project@v1
+        with:
+          repository: curl/curl
+          path: curl
+          ref: curl-7_88_1
+          configure: --with-gnutls=/opt/gnutls
+          check: false
+
       - name: Build tpm2-tss
         run: |
           export MAKEFLAGS="-j$(nproc)"
@@ -84,7 +88,7 @@ jobs:
           make
           sudo make install
           sudo ldconfig
-      
+
       - name: Build tpm2-abrmd
         run: |
           export MAKEFLAGS="-j$(nproc)"
@@ -101,28 +105,22 @@ jobs:
           make
           sudo make install
           sudo ldconfig
-      
+
       - name: Build IBM swtpm2 simulator
         run: |
           git clone https://github.com/kgoldman/ibmswtpm2.git
           make -C ibmswtpm2/src -j"$(nproc)"
           sudo install -m755 ibmswtpm2/src/tpm_server /usr/local/bin
           echo "/usr/local/bin" >> $GITHUB_PATH
-      
+
       - name: Build tpm2-tools
         run: |
           export MAKEFLAGS="-j$(nproc)"
           git clone https://github.com/tpm2-software/tpm2-tools
           cd tpm2-tools
-          
-          # Checkout the appropriate version
           if [ "${{ matrix.tpm2_tools_version }}" != "master" ]; then
-            echo "Checking out tag ${{ matrix.tpm2_tools_version }}"
             git checkout ${{ matrix.tpm2_tools_version }}
-          else
-            echo "Using master branch"
           fi
-          
           ./bootstrap
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/curl/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           export CPPFLAGS="-I/opt/gnutls/include -I/opt/curl/include${CPPFLAGS:+ $CPPFLAGS}"
@@ -132,7 +130,7 @@ jobs:
           make
           sudo make install
           sudo ldconfig
-      
+
       - name: Verify linkage
         run: |
           for bin in /usr/local/bin/tpm2_getcap /usr/local/bin/tss2 /usr/local/lib/libtss2-fapi.so; do
@@ -143,7 +141,7 @@ jobs:
             ldd "$bin" | grep -q "libgnutls.so.30 => /opt/gnutls/lib/libgnutls.so.30" ||
             { echo "❌ Wrong linkage detected in $bin"; exit 1; }
           done
-      
+
       - name: Run complete test-suite
         run: |
           cd tpm2-tools
@@ -154,5 +152,5 @@ jobs:
           export GNUTLS_DEBUG_LEVEL=5
           export WGW_LOGGING=1
           export TEST_REGENERATE_OUTPUT=1
-
           make check
+

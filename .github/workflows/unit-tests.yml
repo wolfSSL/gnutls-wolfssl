@@ -1,14 +1,15 @@
 name: wolfssl-gnutls-wrapper Unit Tests
+
 # START OF COMMON SECTION
 on:
   push:
     branches: [ 'master', 'main', 'release/**' ]
   pull_request: {}
-  # This triggers on pull requests into any branch
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 # END OF COMMON SECTION
+
 jobs:
   make_check:
     name: make check
@@ -21,42 +22,83 @@ jobs:
           - "GNUTLS_NO_PROVIDER=1"
       fail-fast: false
     runs-on: ${{ matrix.os }}
-# Main run (Linux and macos)
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Install dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
-      - name: run tests (no fips)
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      # Build only if cache was missed
+      - name: Build wolfssl/gnutls stack
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
-          BUILD_RESULT=0
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
+      - name: Run unit tests
+        run: |
           TEST_RESULT=0
-          ./setup.sh || BUILD_RESULT=$?
           cd wolfssl-gnutls-wrapper
           ${{ matrix.provider }} make test || TEST_RESULT=$?
-          if [ "$BUILD_RESULT" -ne 0 ] || [ "$TEST_RESULT" -ne 0 ]; then
-            echo "Build or test failed: BUILD_RESULT=$BUILD_RESULT, TEST_RESULT=$TEST_RESULT"
+          if [ "$TEST_RESULT" -ne 0 ]; then
+            echo "Tests failed: TEST_RESULT=$TEST_RESULT"
             exit 1
           fi
 
-# Valgrind run (linux only)
   run_valgrind:
     name: Run Valgrind Tests
     timeout-minutes: 30
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Install Valgrind and dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y valgrind gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
-      - name: Run setup
-        run: ./setup.sh
+          sudo apt-get install -y valgrind gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+
+      # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      # Build only if cache was missed
+      - name: Build wolfssl/gnutls stack
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
       - name: Run Valgrind tests
         run: |
           cd wolfssl-gnutls-wrapper/tests/
           make run_valgrind
+
