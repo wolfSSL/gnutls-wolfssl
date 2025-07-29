@@ -22,36 +22,61 @@ jobs:
     steps:
       - name: Checkout gnutls-wolfssl repository
         uses: actions/checkout@v4
+
       - name: Setup Python 3.11 for older libcamera
         if: matrix.libcamera_ref == 'v0.0.3'
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
+
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev libjpeg-dev
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            libjpeg-dev
+
       - name: Install libcamera dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y cmake meson ninja-build pkg-config python3-ply python3-jinja2 python3-yaml libyaml-dev libgtest-dev
+          sudo apt-get install -y cmake meson ninja-build pkg-config python3-ply \
+            python3-jinja2 python3-yaml libyaml-dev libgtest-dev
+
       - name: Install Python dependencies for v0.0.3
         if: matrix.libcamera_ref == 'v0.0.3'
         run: |
           python -m pip install ply jinja2 pyyaml
+
+      # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
       - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
       - name: Check setup.sh output directories
         run: |
           test -d /opt/wolfssl || exit 1
           test -d /opt/gnutls || exit 1
           test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
+
       - name: Checkout libcamera at ${{ matrix.libcamera_ref }}
         run: |
           git clone https://git.libcamera.org/libcamera/libcamera.git
@@ -59,6 +84,7 @@ jobs:
           if [ "${{ matrix.libcamera_ref }}" != "master" ]; then
             git checkout ${{ matrix.libcamera_ref }}
           fi
+
       - name: Configure and build libcamera
         working-directory: libcamera
         run: |
@@ -68,6 +94,7 @@ jobs:
           export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
           meson setup build -Dtest=true
           meson compile -C build
+
       - name: Run unit-tests that don’t need hardware
         working-directory: libcamera/build
         run: |
@@ -96,3 +123,4 @@ jobs:
               'message' 'signal-threads' 'threads' 'timer-thread' 'unique-fd' \
               'utils' 'vector' 'yaml-parser' 'event-dispatcher' 'timer'
           fi
+

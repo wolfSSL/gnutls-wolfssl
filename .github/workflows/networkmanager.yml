@@ -42,11 +42,27 @@ jobs:
           libpolkit-agent-1-dev libslang2-dev libsub-override-perl libdbus-1-dev ppp ppp-dev mobile-broadband-provider-info \
           libteam-dev libteam5 libyaml-perl po-debconf libaudit-dev libudev-dev libsystemd-dev libmm-glib-dev libjansson-dev dhcpcd5 dnsmasq-base libpsl-dev libreadline-dev valac
 
+    # ──────────────────────── cache the tool-chain ─────────────────────────
+    - name: Restore cached gnutls-wolfssl
+      id: cache-gnutls
+      uses: actions/cache@v4
+      with:
+        path: |
+          /opt/gnutls
+          /opt/wolfssl
+          /opt/wolfssl-gnutls-wrapper
+        key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+        restore-keys: |
+          gnutls-wolfssl-${{ runner.os }}-
+
+    # ───────────────── build the forked GnuTLS stack (if needed) ───────────
     - name: Build forked GnuTLS stack
+      if: steps.cache-gnutls.outputs.cache-hit != 'true'
       run: |
         LOGGING=0 GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
         test -d /opt/gnutls && test -d /opt/wolfssl
 
+    # ───────────────────────────── curl build ──────────────────────────────
     - name: Build curl 7.88.1 (GnuTLS backend)
       run: |
         git clone --branch curl-7_88_1 https://github.com/curl/curl
@@ -58,6 +74,7 @@ jobs:
         sudo make install
         sudo ldconfig
 
+    # ────────────────────── NetworkManager build & test ────────────────────
     - name: Clone NetworkManager ${{ matrix.nm_version }}
       run: |
         git clone https://github.com/NetworkManager/NetworkManager
@@ -119,8 +136,8 @@ jobs:
         if [ "${{ matrix.nm_version }}" != "1.42.4" ]; then
           ninja -C build-gnutls test
         else
-          # Skipped on CI because the GitHub Actions kernel lacks the VRF/Team modules and QoS-mapping support that platform/test-link-linux expects, so the test aborts with “Unknown device type / xgress QoS mapping assertion.
-          # Doesn't test any TLS/Crypto capabilities.
+       # Skipped on CI because the GitHub Actions kernel lacks the VRF/Team modules and QoS-mapping support that platform/test-link-linux expects, so the test aborts with “Unknown device type / xgress QoS mapping assertion.
+       # Doesn't test any TLS/Crypto capabilities.
           cd build-gnutls
           all_tests=$(meson test --list 2>/dev/null)
           test_list=$(printf '%s\n' "$all_tests" \
