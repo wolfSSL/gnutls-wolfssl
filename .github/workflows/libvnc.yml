@@ -1,0 +1,118 @@
+name: libvnc (client/server) test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  libvnc_build_test:
+    name: libvnc build test
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+        libvnc_ref: [ 'master', 'LibVNCServer-0.9.14' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout gnutls-wolfssl repository
+        uses: actions/checkout@v4
+
+      - name: Install core build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential sudo
+
+      - name: Install GnuTLS build dependencies
+        run: |
+          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools \
+            nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev \
+            libp11-kit-dev libunbound-dev wget
+
+      - name: Restore cached gnutls-wolfssl tool-chain
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl/**', 'gnutls/**', 'wolfssl-gnutls-wrapper/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Build GnuTLS with wolfSSL provider
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls \
+          WOLFSSL_INSTALL=/opt/wolfssl \
+          ./setup.sh
+
+      - name: Verify /opt output
+        run: |
+          test -d /opt/gnutls/lib || { echo "GnuTLS not found"; exit 1; }
+          test -f /opt/gnutls/lib/libgnutls.so || { echo "libgnutls.so missing"; exit 1; }
+
+      - name: Install libvncserver build dependencies
+        run: |
+          sudo apt update
+          sudo apt install libsdl2-dev liblzo2-dev libssl-dev \
+          libgcrypt-dev mingw-w64-x86-64-dev binutils-mingw-w64-x86-64 \
+          gcc-mingw-w64-x86-64 wine
+
+      - name: Checkout libvnc at ${{ matrix.libvnc_ref }}
+        run: |
+          git clone https://github.com/LibVNC/libvncserver.git
+          cd libvncserver
+          if [ "${{ matrix.libvnc_ref }}" != "master" ]; then
+            git checkout ${{ matrix.libvnc_ref }}
+          fi
+
+      - name: Configure and build libvncserver
+        working-directory: libvncserver
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
+          mkdir build
+          cd build
+          cmake -DWITH_OPENSSL=OFF -DWITH_GNUTLS=ON  -DWITH_GCRYPT=ON   ..
+          cmake --build .
+
+      - name: Verify libvnc* links against custom GnuTLS
+        working-directory: libvncserver/build
+        run: |
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
+
+          for lib in libvncclient.so libvncserver.so; do
+            echo ">>> ldd for $lib:"
+            ldd "./$lib"
+
+            if ! ldd "./$lib" | grep -q '/opt/gnutls/lib/libgnutls.so.30'; then
+              echo "✖ $lib is NOT using custom GnuTLS"
+              exit 1
+            fi
+
+            echo "✔ $lib is using custom GnuTLS"
+          done
+
+      - name: Test libvnc build
+        working-directory: libvncserver/build
+        run: |
+          export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
+          export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
+          export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
+          cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll test/
+          ctest -C Debug --output-on-failure
