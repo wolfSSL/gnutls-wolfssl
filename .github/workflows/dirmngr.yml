@@ -1,0 +1,144 @@
+name: dirmngr Test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    name: Build wolfSSL + GnuTLS, then GnuPG ${{ matrix.gnupg_ref }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      matrix:
+        gnupg_ref: [ 'master', 'gnupg-2.2.41' ]
+      fail-fast: false
+
+    steps:
+      - name: Checkout gnutls-wolfssl
+        uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool \
+                                  gettext texinfo pkg-config wget gnulib \
+                                  autopoint gperf gtk-doc-tools nettle-dev \
+                                  clang libtasn1-bin libtasn1-6-dev \
+                                  libunistring-dev libp11-kit-dev libunbound-dev
+
+      - name: Restore cached wolfSSL/GnuTLS
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            /opt/gnutls
+            /opt/wolfssl
+            /opt/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl/**', 'gnutls/**', 'wolfssl-gnutls-wrapper/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Build wolfSSL + GnuTLS (setup.sh)
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+
+      - name: Check tool-chain directories
+        run: |
+          test -d /opt/wolfssl                  || { echo "wolfSSL missing"; exit 1; }
+          test -d /opt/gnutls                   || { echo "GnuTLS missing"; exit 1; }
+          test -d /opt/wolfssl-gnutls-wrapper/lib || { echo "Wrapper missing"; exit 1; }
+
+      - name: Build gpgrt libraries (libgpg-error, libgcrypt, libassuan, libksba, nPth)
+        run: |
+          set -e
+          JOBS=$(nproc)
+          PREFIX=/usr/local
+          mkdir -p ~/src && cd ~/src
+
+          build() {
+            NAME=$1 VER=$2 URL=$3
+            test -f "${NAME}-${VER}.tar.bz2" || wget -q "$URL"
+            tar xf "${NAME}-${VER}.tar.bz2"
+            cd "${NAME}-${VER}"
+            ./configure --prefix=$PREFIX
+            make -j$JOBS
+            sudo make install
+            cd ..
+          }
+
+          pkg-config --exists --atleast-version=1.51 gpg-error || \
+            build libgpg-error 1.51 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.51.tar.bz2
+
+          pkg-config --exists --atleast-version=1.11.0 gcrypt || \
+            build libgcrypt 1.11.1 https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.11.1.tar.bz2
+
+          if [ "${{ matrix.gnupg_ref }}" = "gnupg-2.2.41" ]; then
+            build libassuan 2.5.5 https://gnupg.org/ftp/gcrypt/libassuan/libassuan-2.5.5.tar.bz2
+          else
+            pkg-config --exists --atleast-version=3.0.0 assuan || \
+              build libassuan 3.0.2 https://gnupg.org/ftp/gcrypt/libassuan/libassuan-3.0.2.tar.bz2
+          fi
+
+          pkg-config --exists --atleast-version=1.6.3 ksba   || \
+            build libksba 1.6.3 https://gnupg.org/ftp/gcrypt/libksba/libksba-1.6.3.tar.bz2
+
+          pkg-config --exists --atleast-version=1.2 npth      || \
+            build npth 1.6 https://gnupg.org/ftp/gcrypt/npth/npth-1.6.tar.bz2
+
+          sudo ldconfig
+
+      - name: Checkout GnuPG ${{ matrix.gnupg_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: gpg/gnupg
+          ref: ${{ matrix.gnupg_ref }}
+          path: gnupg
+
+      - name: Configure & build GnuPG
+        run: |
+          export PATH=/usr/local/bin:$PATH
+          export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/opt/gnutls/lib/pkgconfig
+          export CPPFLAGS="-I/usr/local/include -I/opt/gnutls/include"
+          export LDFLAGS="-L/usr/local/lib -L/opt/gnutls/lib -Wl,-rpath,/usr/local/lib -Wl,-rpath,/opt/gnutls/lib"
+          export LD_LIBRARY_PATH=/usr/local/lib:/opt/gnutls/lib
+
+          cd gnupg
+          ./autogen.sh --force
+
+          CONFIG_FLAGS="--enable-maintainer-mode \
+                        --prefix=$HOME/gnupg-test-${{ matrix.gnupg_ref }} \
+                        --disable-g13 --disable-gpgtar \
+                        --disable-wks-tools --disable-doc \
+                        --disable-gpgsm --disable-scdaemon \
+                        --enable-dirmngr --enable-all-tests"
+
+          # omit --disable-ntbtls and add --disable-ldap only for 2.2.41 build
+          if [ "${{ matrix.gnupg_ref }}" != "gnupg-2.2.41" ]; then
+            CONFIG_FLAGS="$CONFIG_FLAGS --disable-ntbtls --disable-ldap"
+          fi
+
+          ./configure $CONFIG_FLAGS CFLAGS="$CPPFLAGS" LDFLAGS="$LDFLAGS"
+          make -j"$(nproc)"
+
+      - name: Run dirmngr tests
+        run: |
+          export PREFIX_GNUTLS=/opt/gnutls
+          export PREFIX_LOCAL=/usr/local
+
+          export PATH=$PREFIX_LOCAL/bin:$PATH
+          export PKG_CONFIG_PATH=$PREFIX_LOCAL/lib/pkgconfig:$PREFIX_GNUTLS/lib/pkgconfig
+          export CPPFLAGS="-I$PREFIX_LOCAL/include -I$PREFIX_GNUTLS/include"
+          export LDFLAGS="-L$PREFIX_LOCAL/lib -L$PREFIX_GNUTLS/lib \
+                          -Wl,-rpath,$PREFIX_LOCAL/lib -Wl,-rpath,$PREFIX_GNUTLS/lib"
+
+          export LD_LIBRARY_PATH=/usr/local/lib:/opt/gnutls/lib
+          cd gnupg/dirmngr
+          make check
