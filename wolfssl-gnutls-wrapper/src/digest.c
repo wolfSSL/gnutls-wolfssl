@@ -21,7 +21,9 @@ struct wolfssl_hash_ctx {
     /** All supported hash algorithm wolfSSL objects. */
     union {
         /** wolfSSL MD5 object.  */
+#if !defined(NO_MD5)
         wc_Md5    md5;
+#endif
         /** wolfSSL SHA-1 object.  */
         wc_Sha    sha;
         /** wolfSSL SHA-224 object.  */
@@ -87,7 +89,9 @@ static int wolfssl_digest_init_alg(struct wolfssl_hash_ctx *ctx)
 
     /* initialize the wolfSSL digest object */
     if (algorithm == GNUTLS_DIG_MD5) {
+#if !defined(NO_MD5)
         ret = wc_InitMd5(&ctx->obj.md5);
+#endif
     } else if (algorithm == GNUTLS_DIG_SHA1) {
         ret = wc_InitSha(&ctx->obj.sha);
     } else if (algorithm == GNUTLS_DIG_SHA224) {
@@ -194,7 +198,9 @@ static int wolfssl_digest_hash(void *_ctx, const void *text, size_t textsize)
 
         /* Update the wolfSSL digest object with data */
         if (ctx->algorithm == GNUTLS_DIG_MD5) {
+#if !defined(NO_MD5)
             ret = wc_Md5Update(&ctx->obj.md5, (const byte*)text, size);
+#endif
         } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
             ret = wc_ShaUpdate(&ctx->obj.sha, (const byte*)text, size);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA224) {
@@ -262,6 +268,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
 
     /* Finalize the digest and get the result. */
     if (ctx->algorithm == GNUTLS_DIG_MD5) {
+#if !defined(NO_MD5)
         WGW_LOG("Outputting Md5");
         /* Make sure the output buffer is large enough. */
         if (digestsize < WC_MD5_DIGEST_SIZE) {
@@ -269,6 +276,7 @@ static int wolfssl_digest_output(void *_ctx, void *digest, size_t digestsize)
             return GNUTLS_E_SHORT_MEMORY_BUFFER;
         }
         ret = wc_Md5Final(&ctx->obj.md5, (byte*)digest);
+#endif
     } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
         WGW_LOG("Outputting Sha1");
         /* Make sure the output buffer is large enough. */
@@ -364,7 +372,9 @@ static void wolfssl_digest_deinit(void *_ctx)
     if (ctx && ctx->initialized) {
         /* Free the wolfSSL digest object. */
         if (ctx->algorithm == GNUTLS_DIG_MD5) {
+#if !defined(NO_MD5)
             wc_Md5Free(&ctx->obj.md5);
+#endif
         } else if (ctx->algorithm == GNUTLS_DIG_SHA1) {
             wc_ShaFree(&ctx->obj.sha);
         } else if (ctx->algorithm == GNUTLS_DIG_SHA224) {
@@ -865,6 +875,7 @@ int wolfssl_digest_register(void)
     WGW_FUNC_ENTER();
 
     /* register md5 if it's supported */
+#if !defined(NO_MD5)
     if (wolfssl_digest_supported[GNUTLS_DIG_MD5]) {
         WGW_LOG("registering md5");
         ret = gnutls_crypto_single_digest_register(
@@ -874,6 +885,13 @@ int wolfssl_digest_register(void)
             return ret;
         }
     }
+#else
+    /* Mark MD5 as insecure for signatures */
+    gnutls_digest_set_secure(GNUTLS_DIG_MD5, 0);
+
+    /* Disable explicit RSA-MD5 signature algorithm */
+    gnutls_sign_set_secure(GNUTLS_SIGN_RSA_MD5, 0);
+#endif
     /* register sha1 if it's supported */
     if (wolfssl_digest_supported[GNUTLS_DIG_SHA1]) {
         WGW_LOG("registering sha1");

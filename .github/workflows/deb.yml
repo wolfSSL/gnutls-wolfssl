@@ -24,17 +24,30 @@ jobs:
             build-essential devscripts debhelper-compat fakeroot clang \
             autoconf automake libtool pkg-config gettext bison flex gperf \
             libgmp-dev libunistring-dev nettle-dev libtasn1-dev libp11-kit-dev \
-            libev-dev gtk-doc-tools lintian libtasn1-bin
+            libev-dev gtk-doc-tools lintian libtasn1-bin git texinfo
 
-      - name: Build .deb set (non-FIPS)
+      - name: Build & install wolfSSL (non-FIPS)
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/wolfssl/wolfssl.git
+          cd wolfssl
+          ./autogen.sh
+          ./configure CC=clang \
+            --enable-cmac --with-eccminsz=192 --enable-ed25519 --enable-ed448 --enable-md5 \
+            --enable-curve25519 --enable-curve448 \
+            --enable-aesccm --enable-aesxts --enable-aescfb \
+            --enable-keygen --enable-shake128 --enable-shake256 \
+            'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK -DHAVE_FFDHE_Q -DHAVE_FFDHE_6144 -DHAVE_FFDHE_8192 -DWOLFSSL_ECDSA_DETERMINISTIC_K -DWOLFSSL_VALIDATE_ECC_IMPORT -DRSA_MIN_SIZE=1024'
+          make -j"$(nproc)"
+          sudo make deb
+          sudo dpkg -i libwolfssl_*.deb libwolfssl-dev_*.deb
+
+      - name: Build .deb set (gnutls-wolfssl non-FIPS)
         run: dpkg-buildpackage -us -uc -b
 
-      - name: Install built packages
+      - name: Install built packages (needed for the smoke test)
         run: |
-          sudo dpkg -i ../wolfssl-custom_*_amd64.deb \
-                      ../gnutls-wolfssl_*_amd64.deb  \
-                      ../wolfssl-gnutls-wrapper_*_amd64.deb
-          sudo ldconfig
+          sudo dpkg -i ../gnutls-wolfssl_*.deb ../wolfssl-gnutls-wrapper_*.deb || sudo apt-get -f install -y
 
       - name: Wrapper-load smoke test
         run: |

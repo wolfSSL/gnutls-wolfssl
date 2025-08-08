@@ -30,6 +30,23 @@ get_os() {
 OS=$(get_os)
 echo "Detected OS: $OS"
 
+detect_system_wolfssl() {
+    command -v pkg-config >/dev/null 2>&1 || return 1
+    pkg-config --exists wolfssl || return 1
+}
+
+USE_SYSTEM_WOLFSSL=0
+if detect_system_wolfssl; then
+    USE_SYSTEM_WOLFSSL=1
+    echo "Found system wolfSSL via pkg-config: $(pkg-config --modversion wolfssl 2>/dev/null || echo unknown)"
+    # If we end up using system wolfSSL, make WOLFSSL_INSTALL point to its prefix
+    if command -v pkg-config >/dev/null 2>&1; then
+        # e.g. /usr/lib/x86_64-linux-gnu -> /usr
+        WOLFSSL_INSTALL="${WOLFSSL_INSTALL:-$(pkg-config --variable=libdir wolfssl 2>/dev/null | sed 's#/lib.*##')}"
+    fi
+    : "${WOLFSSL_INSTALL:=/usr}"
+fi
+
 if [ "$OS" = "macos" ]; then
     echo "Installing macOS dependencies..."
     brew update
@@ -44,65 +61,72 @@ if [ "$OS" = "macos" ]; then
 fi
 
 if [ $FIPS_MODE -eq 1 ]; then
-    echo "Setting up wolfSSL with FIPS‑ready mode..."
-
-    if [ -n "$WOLFSSL_FIPS_BUNDLE" ]; then
-        # User provided a bundle directory – use it verbatim
-        if [ ! -d "$WOLFSSL_FIPS_BUNDLE" ]; then
-            echo "ERROR: WOLFSSL_FIPS_BUNDLE '$WOLFSSL_FIPS_BUNDLE' is not a directory."
-            exit 1
-        fi
-        echo "Using pre‑downloaded wolfSSL FIPS bundle at '$WOLFSSL_FIPS_BUNDLE'"
-        cd "$WOLFSSL_FIPS_BUNDLE"
+    if [ "$USE_SYSTEM_WOLFSSL" -eq 1 ]; then
+        echo "Using system wolfSSL. Skipping wolfSSL build."
     else
-        # Fresh checkout & FIPS helper
-        rm -rf wolfssl/ fips-v5-checkout/
+        echo "Setting up wolfSSL with FIPS-ready mode..."
 
-        echo "Cloning wolfSSL repository for FIPS‑ready build..."
-        git clone https://github.com/wolfssl/wolfssl.git
-        cd wolfssl
+        if [ -n "$WOLFSSL_FIPS_BUNDLE" ]; then
+            # User provided a bundle directory – use it verbatim
+            if [ ! -d "$WOLFSSL_FIPS_BUNDLE" ]; then
+                echo "ERROR: WOLFSSL_FIPS_BUNDLE '$WOLFSSL_FIPS_BUNDLE' is not a directory."
+                exit 1
+            fi
+            echo "Using pre-downloaded wolfSSL FIPS bundle at '$WOLFSSL_FIPS_BUNDLE'"
+            cd "$WOLFSSL_FIPS_BUNDLE"
+        else
+            # Fresh checkout & FIPS helper
+            rm -rf wolfssl/ fips-v5-checkout/
 
-        echo "Running FIPS‑ready preparation..."
-        ./fips-check.sh linuxv5.2.1 keep
+            echo "Cloning wolfSSL repository for FIPS-ready build..."
+            git clone https://github.com/wolfssl/wolfssl.git
+            cd wolfssl
 
-        echo "Moving FIPS directory XXX-fips-test to ../fips-v5-checkout"
-        mv XXX-fips-test ../fips-v5-checkout
+            echo "Running FIPS-ready preparation..."
+            ./fips-check.sh linuxv5.2.1 keep
 
-        cd ..
-        rm -rf wolfssl/
+            echo "Moving FIPS directory XXX-fips-test to ../fips-v5-checkout"
+            mv XXX-fips-test ../fips-v5-checkout
 
-        cd fips-v5-checkout
+            cd ..
+            rm -rf wolfssl/
+
+            cd fips-v5-checkout
+        fi
+
+        ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK -DNO_MD5' --enable-fips=v5
+
+        make
+
+        echo "Running FIPS hash verification..."
+        ./fips-hash.sh
+
+        make
+
+        echo "Running FIPS checks..."
+        make check
+
+        sudo make install
+        cd ../
     fi
-
-    ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --enable-aesccm --enable-aescfb --enable-keygen 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_PUBLIC_FFDHE -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK' --enable-fips=v5 --enable-md5
-
-    make
-
-    echo "Running FIPS hash verification..."
-    ./fips-hash.sh
-
-    make
-
-    echo "Running FIPS checks..."
-    make check
-
-    sudo make install
-    cd ../
-
 else
-    if [ ! -d "wolfssl" ]; then
-        echo "Cloning wolfSSL repository..."
-        git clone --depth=1 https://github.com/wolfssl/wolfssl.git
+    if [ "$USE_SYSTEM_WOLFSSL" -eq 1 ]; then
+        echo "Using system wolfSSL. Skipping wolfSSL build."
+    else
+        if [ ! -d "wolfssl" ]; then
+            echo "Cloning wolfSSL repository..."
+            git clone --depth=1 https://github.com/wolfssl/wolfssl.git
+        fi
+
+        cd ./wolfssl
+        ./autogen.sh
+
+        ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --with-eccminsz=192 --enable-ed25519 --enable-ed448 --enable-md5 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK -DHAVE_FFDHE_Q -DHAVE_FFDHE_6144 -DHAVE_FFDHE_8192 -DWOLFSSL_ECDSA_DETERMINISTIC_K -DWOLFSSL_VALIDATE_ECC_IMPORT -DRSA_MIN_SIZE=1024'
+
+        make
+        sudo make install
+        cd ../
     fi
-
-    cd ./wolfssl
-    ./autogen.sh
-
-    ./configure --prefix=$WOLFSSL_INSTALL/ CC=clang --enable-cmac --with-eccminsz=192 --enable-ed25519 --enable-ed448 --enable-md5 --enable-curve25519 --enable-curve448 --enable-aesccm --enable-aesxts --enable-aescfb --enable-keygen --enable-shake128 --enable-shake256 'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK -DHAVE_FFDHE_Q -DHAVE_FFDHE_6144 -DHAVE_FFDHE_8192 -DWOLFSSL_ECDSA_DETERMINISTIC_K -DWOLFSSL_VALIDATE_ECC_IMPORT -DRSA_MIN_SIZE=1024'
-
-    make
-    sudo make install
-    cd ../
 fi
 
 if [ ! -d "gnutls" ]; then
@@ -161,7 +185,7 @@ cd ../
 
 cd ./wolfssl-gnutls-wrapper
 make
-sudo make install PROVIDER_PATH="$PROVIDER_PATH"
+sudo make install PROVIDER_PATH="$PROVIDER_PATH" GNUTLS_INSTALL="$GNUTLS_INSTALL" WOLFSSL_INSTALL="$WOLFSSL_INSTALL"
 cd ../
 
 echo "Build completed successfully"

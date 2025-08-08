@@ -1,7 +1,6 @@
 gnutls-wolfssl for Debian
 
 This source package builds three binary packages:
-	•	wolfssl-custom               – wolfSSL with the custom options required by GnuTLS
 	•	gnutls-wolfssl               – GnuTLS built to use wolfSSL as its crypto backend
 	•	wolfssl-gnutls-wrapper       – Runtime provider that links GnuTLS and wolfSSL,
                                        effectively backend that takes care of the
@@ -32,13 +31,18 @@ dpkg-buildpackage -us -uc -b
 Build FIPS flavour:
 
 ```
-dpkg-buildpackage -us -uc -b -Pfips     # or  FIPS=1 dpkg-buildpackage -us -uc -b
+dpkg-buildpackage -us -uc -b -Pfips
+```
+
+or
+
+```
+FIPS=1 dpkg-buildpackage -us -uc -b
 ```
 
 3.	The .deb artefacts appear in the parent directory:
 
 ```
-../wolfssl-custom_amd64.deb
 ../gnutls-wolfsslamd64.deb
 ../wolfssl-gnutls-wrapper_amd64.deb
 ```
@@ -90,3 +94,4 @@ For project details see:
 https://github.com/wolfSSL/gnutls-wolfssl
 
 – wolfSSL support@wolfssl.com
+
