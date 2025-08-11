@@ -22,30 +22,23 @@ Build-Depends:
  libtasn1-bin,
  libev-dev,
  texinfo,
- gtk-doc-tools
+ gtk-doc-tools,
+ libwolfssl
 Standards-Version: 4.6.2
 Homepage: https://github.com/wolfssl/gnutls-wolfssl
 Rules-Requires-Root: no
 
-Package: wolfssl-custom
+Package: gnutls-wolfssl
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Section: libs
-Description: wolfSSL TLS library (custom build, /opt prefix)
- wolfSSL compiled with the extended algorithm set required by the
- gnutls-wolfssl experiment.  Installs under /opt/wolfssl.
-
-Package: gnutls-wolfssl
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, wolfssl-custom (>= ${binary:Version})
-Section: libs
 Description: GnuTLS linked against wolfSSL (/opt prefix)
  GnuTLS 3.x rebuilt to use wolfSSL as its cryptographic backend.
- Installs under /opt/gnutls.
+ Installs under /opt/gnutls (To prevent conflicts).
 
 Package: wolfssl-gnutls-wrapper
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, wolfssl-custom, gnutls-wolfssl
+Depends: ${shlibs:Depends}, ${misc:Depends}, gnutls-wolfssl, libwolfssl
 Section: libs
 Description: Runtime shim between GnuTLS and wolfSSL
  Thin provider / wrapper that allows applications to load the

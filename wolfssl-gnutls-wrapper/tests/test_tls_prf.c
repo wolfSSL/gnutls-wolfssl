@@ -91,9 +91,10 @@ static int test_tls_prf(gnutls_mac_algorithm_t mac_alg,
 
 int main(void)
 {
-    int ret;
+    int ret = 0;
     unsigned char buf[256];
     unsigned char output[64];
+    int fips_mode;
 
     memset(buf, 0xa5, sizeof(buf));
 
@@ -104,8 +105,12 @@ int main(void)
         return 1;
     }
 
-    ret = test_tls_prf(GNUTLS_MAC_MD5_SHA1, expected_md5_sha1,
-        sizeof(expected_md5_sha1));
+    /* Check if FIPS mode is enabled */
+    fips_mode = gnutls_fips140_mode_enabled();
+    if (fips_mode == 0) {
+        ret = test_tls_prf(GNUTLS_MAC_MD5_SHA1, expected_md5_sha1,
+                sizeof(expected_md5_sha1));
+    }
     if (ret == 0) {
         ret = test_tls_prf(GNUTLS_MAC_SHA256, expected_sha256,
             sizeof(expected_sha256));
