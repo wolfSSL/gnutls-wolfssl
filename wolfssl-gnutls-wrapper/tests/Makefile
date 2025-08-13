@@ -7,16 +7,17 @@ UNAME_S := $(shell uname -s)
 GNUTLS_PREFIX  := $(if $(GNUTLS_INSTALL),$(GNUTLS_INSTALL),/opt/gnutls)
 PROVIDER_PATH  := $(if $(PROVIDER_PATH),$(PROVIDER_PATH),/opt/wolfssl-gnutls-wrapper)
 
-# Make pkg-config see a custom /opt gnutls, if present
-export PKG_CONFIG_PATH := $(GNUTLS_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+# Use a *scoped* pkg-config for GnuTLS only (no global fallback).
+# PKG_CONFIG_LIBDIR overrides default search dirs so we don't touch system /usr.
+GNUTLS_PKGCONF := PKG_CONFIG_LIBDIR=$(GNUTLS_PREFIX)/lib/pkgconfig $(PKGCONF)
 
-# Detect pkg-config availability of gnutls
-HAVE_PC_GNUTLS := $(shell $(PKGCONF) --exists gnutls && echo yes || echo no)
+# Detect pkg-config availability of gnutls (ONLY under GNUTLS_PREFIX)
+HAVE_PC_GNUTLS := $(shell $(GNUTLS_PKGCONF) --exists gnutls && echo yes || echo no)
 
 ifeq ($(HAVE_PC_GNUTLS),yes)
-  GNUTLS_CFLAGS := $(shell $(PKGCONF) --cflags gnutls)
-  GNUTLS_LIBS   := $(shell $(PKGCONF) --libs   gnutls)
-  GNUTLS_LIBDIR := $(shell $(PKGCONF) --variable=libdir gnutls)
+  GNUTLS_CFLAGS := $(shell $(GNUTLS_PKGCONF) --cflags gnutls)
+  GNUTLS_LIBS   := $(shell $(GNUTLS_PKGCONF) --libs   gnutls)
+  GNUTLS_LIBDIR := $(shell $(GNUTLS_PKGCONF) --variable=libdir gnutls)
 else
   GNUTLS_CFLAGS := -I$(GNUTLS_PREFIX)/include -I$(GNUTLS_PREFIX)/include/gnutls
   GNUTLS_LIBS   := -L$(GNUTLS_PREFIX)/lib -lgnutls

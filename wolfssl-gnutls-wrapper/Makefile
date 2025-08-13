@@ -5,12 +5,13 @@ CC ?= gcc
 GNUTLS_PREFIX := $(if $(GNUTLS_INSTALL),$(GNUTLS_INSTALL),/opt/gnutls)
 WOLFSSL_PREFIX := $(if $(WOLFSSL_INSTALL),$(WOLFSSL_INSTALL),/opt/wolfssl)
 
-# Make sure pkg-config can see a custom /opt gnutls, if present
-export PKG_CONFIG_PATH := $(GNUTLS_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
+# Use a dedicated pkg-config path ONLY for GnuTLS detection (no global lookup)
+GNUTLS_PKGCONF := PKG_CONFIG_PATH=$(GNUTLS_PREFIX)/lib/pkgconfig $(PKGCONF)
 
 # Detect availability of pkg-config .pc files
 HAVE_PC_WOLFSSL := $(shell $(PKGCONF) --exists wolfssl && echo yes || echo no)
-HAVE_PC_GNUTLS  := $(shell $(PKGCONF) --exists gnutls  && echo yes || echo no)
+# Only check under GNUTLS_PREFIX; do NOT use global gnutls
+HAVE_PC_GNUTLS  := $(shell $(GNUTLS_PKGCONF) --exists gnutls && echo yes || echo no)
 
 # Flags from pkg-config (prefer), otherwise fall back to /opt/* paths
 ifeq ($(HAVE_PC_WOLFSSL),yes)
@@ -24,9 +25,9 @@ else
 endif
 
 ifeq ($(HAVE_PC_GNUTLS),yes)
-  GNUTLS_CFLAGS := $(shell $(PKGCONF) --cflags gnutls)
-  GNUTLS_LIBS   := $(shell $(PKGCONF) --libs   gnutls)
-  GNUTLS_LIBDIR := $(shell $(PKGCONF) --variable=libdir gnutls)
+  GNUTLS_CFLAGS := $(shell $(GNUTLS_PKGCONF) --cflags gnutls)
+  GNUTLS_LIBS   := $(shell $(GNUTLS_PKGCONF) --libs   gnutls)
+  GNUTLS_LIBDIR := $(shell $(GNUTLS_PKGCONF) --variable=libdir gnutls)
 else
   GNUTLS_CFLAGS := -I$(GNUTLS_PREFIX)/include
   GNUTLS_LIBS   := -L$(GNUTLS_PREFIX)/lib -lgnutls
