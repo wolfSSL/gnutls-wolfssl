@@ -63,4 +63,3 @@ jobs:
         run: |
           FILES=$(git -C wolfssl-gnutls-wrapper ls-files src/*.c tests/*.c | sed 's|^|wolfssl-gnutls-wrapper/|')
           clang-tidy -p wolfssl-gnutls-wrapper $FILES
-
