@@ -11,6 +11,8 @@ concurrency:
 jobs:
   deb-testing:
     runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -19,12 +21,13 @@ jobs:
 
       - name: Install build tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          apt-get update
+          apt-get install -y --no-install-recommends \
             build-essential devscripts debhelper-compat fakeroot clang \
             autoconf automake libtool pkg-config gettext bison flex gperf \
             libgmp-dev libunistring-dev nettle-dev libtasn1-dev libp11-kit-dev \
-            libev-dev gtk-doc-tools lintian libtasn1-bin git texinfo
+            libev-dev gtk-doc-tools lintian libtasn1-bin git texinfo sudo git \
+            wget
 
       - name: Build & install wolfSSL (non-FIPS)
         run: |

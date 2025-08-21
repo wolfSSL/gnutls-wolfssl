@@ -22,6 +22,8 @@ jobs:
         cups_version: [ 'latest', 'target' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -29,13 +31,13 @@ jobs:
 
       - name: Install build essentials
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential sudo
 
       - name: Install GnuTLS dependencies
         run: |
           sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
-            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev git wget
 
       - name: Install CUPS dependencies
         run: |
@@ -129,6 +131,7 @@ jobs:
           echo "TLS server started successfully with PID $SERVER_PID"
 
       - name: Run tests and analyze results
+        shell: bash
         run: |
           # Determine test directory
           if [ "${{ matrix.cups_version }}" == "latest" ]; then
@@ -137,6 +140,7 @@ jobs:
             TEST_DIR="cups/cups"
           fi
 
+          echo $TEST_DIR
           cd $TEST_DIR
 
           # Run tests WITH provider
@@ -235,3 +239,4 @@ jobs:
             echo "Test Result: FAILURE"
           fi
           echo "=================="
+

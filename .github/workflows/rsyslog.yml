@@ -22,6 +22,8 @@ jobs:
         rsyslog_ref: [ 'main', 'v8.2302.0' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -30,8 +32,8 @@ jobs:
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential sudo wget git
 
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
@@ -42,9 +44,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get install -y build-essential pkg-config libestr-dev libfastjson-dev zlib1g-dev uuid-dev libhiredis-dev uuid-dev flex bison
-          sudo apt-get install -y libdbi-dev libmysqlclient-dev postgresql-client libpq-dev libnet-dev librdkafka-dev libpcre3-dev libtokyocabinet-dev libglib2.0-dev libmongo-client-dev
+          sudo apt-get install -y libdbi-dev libmariadb-dev-compat postgresql-client libpq-dev libnet-dev librdkafka-dev libpcre3-dev libtokyocabinet-dev libglib2.0-dev libmongo-client-dev
           sudo apt-get install -y libcurl4-gnutls-dev
-          sudo pip install docutils
+          apt-get install -y python3-pip
+          pip3 install --break-system-packages docutils
 
       - name: Install build and test dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'

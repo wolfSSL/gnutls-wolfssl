@@ -16,6 +16,8 @@ jobs:
         os: [ ubuntu-latest ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout repository
@@ -24,15 +26,15 @@ jobs:
       - name: Install clang + bear (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang bear
+          apt-get update
+          apt-get install -y clang bear sudo wget git
 
       - name: Install dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
-            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev clang-tidy
 
       # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
       - name: Restore cached gnutls-wolfssl
@@ -61,6 +63,6 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          FILES=$(git -C wolfssl-gnutls-wrapper ls-files src/*.c tests/*.c | sed 's|^|wolfssl-gnutls-wrapper/|')
+          FILES=$(find wolfssl-gnutls-wrapper/src wolfssl-gnutls-wrapper/tests -name "*.c" -type f)
           clang-tidy -p wolfssl-gnutls-wrapper $FILES
 

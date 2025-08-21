@@ -14,6 +14,8 @@ jobs:
   build_and_test:
     name: Build wolfSSL + GnuTLS, then GnuPG ${{ matrix.gnupg_ref }}
     runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
     timeout-minutes: 40
     strategy:
       matrix:
@@ -26,12 +28,12 @@ jobs:
 
       - name: Install build prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential autoconf automake libtool \
+          apt-get update
+          apt-get install -y build-essential autoconf automake libtool \
                                   gettext texinfo pkg-config wget gnulib \
                                   autopoint gperf gtk-doc-tools nettle-dev \
                                   clang libtasn1-bin libtasn1-6-dev \
-                                  libunistring-dev libp11-kit-dev libunbound-dev
+                                  libunistring-dev libp11-kit-dev libunbound-dev sudo wget git
 
       - name: Restore cached wolfSSL/GnuTLS
         id: cache-gnutls

@@ -20,6 +20,8 @@ jobs:
         libnice_ref: [ 'master', '0.1.22', '0.1.21' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - uses: actions/checkout@v4
@@ -39,8 +41,8 @@ jobs:
 
       - name: Install build prerequisites
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev meson cmake meson ninja-build pkg-config python3-ply python3-jinja2 python3-yaml libyaml-dev libgtest-dev libglib2.0-dev
+          apt-get update
+          apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev meson cmake meson ninja-build pkg-config python3-ply python3-jinja2 python3-yaml libyaml-dev libgtest-dev libglib2.0-dev sudo wget git
 
       - name: Build custom GnuTLS (wolfSSL provider)
         if: steps.cache-gnutls.outputs.cache-hit != 'true'

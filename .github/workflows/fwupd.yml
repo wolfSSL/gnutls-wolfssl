@@ -22,6 +22,8 @@ jobs:
         fwupd_ref: [ 'main', '1.9.26', '2.0.12' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -30,8 +32,8 @@ jobs:
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential sudo wget git
 
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
@@ -45,11 +47,16 @@ jobs:
           sudo apt install -y \
             meson ninja-build git libgusb-dev libglib2.0-dev libxmlb-dev \
             libsoup2.4-dev libarchive-dev libjson-glib-dev libpolkit-gobject-1-dev \
-            libsystemd-dev valgrind gobject-introspection gtk-doc-tools python3-pip \
+            libsystemd-dev valgrind gobject-introspection libgirepository1.0-dev gtk-doc-tools python3-pip \
             libgpgme-dev valac libcurl4-gnutls-dev libpango-1.0-0 libpangocairo-1.0-0 \
             libpango1.0-dev libcairo2 libcairo2-dev libcairo-gobject2 python3-cairo \
             python3-gi-cairo python3-gi gir1.2-pango-1.0 gir1.2-cairo-1.0 gir1.2-gtk-3.0 \
             gnu-efi flashrom libflashrom-dev mingw-w64-tools libumockdev-dev
+          sudo apt-get install -y python3-pip
+          sudo apt-get install -y policykit-1 libpolkit-agent-1-dev gettext itstool
+          sudo apt-get install -y libzstd-dev zstd
+          pip3 install --break-system-packages jinja2 packaging typogrify
+          pip3 install --break-system-packages --upgrade meson
 
       - name: Install build and test dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
@@ -89,6 +96,18 @@ jobs:
           git clone https://github.com/fwupd/fwupd.git
           cd fwupd
           git checkout ${{ matrix.fwupd_ref }}
+
+      - name: Patch fwupd tests for Debian Bookworm compatibility
+        if: matrix.fwupd_ref != '1.9.26'
+        working-directory: fwupd
+        run: |
+          # GLib in Debian Bookworm emits WARNING for invalid properties while
+          # Ubuntu's GLib emits CRITICAL. Same behavior, different log level.
+          # Adjust test expectations to match Debian's GLib.
+          # This gets applied only for the latest version and the latest main branch,
+          # target version remains untouched since it's using the correct older version
+          # of glib that matches the one on debian:bookworm.
+          sed -i 's/GLib-GObject-CRITICAL/GLib-GObject-WARNING/g' libfwupd/fwupd-self-test.c
 
       - name: Configure fwupd
         working-directory: fwupd

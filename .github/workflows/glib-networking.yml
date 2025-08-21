@@ -22,6 +22,8 @@ jobs:
         glib-networking_ref: [ 'master', '2.74.0', '2.80.1' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -30,13 +32,13 @@ jobs:
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential
 
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev sudo wget git
 
       - name: Install glib-networking dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'

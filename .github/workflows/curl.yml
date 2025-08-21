@@ -22,6 +22,8 @@ jobs:
         curl_ref: [ 'master', 'curl-7_88_1', 'curl-8_4_0' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout repository
@@ -30,19 +32,19 @@ jobs:
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential
 
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          apt-get update
+          apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev sudo wget git
 
       - name: Install curl test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install nghttp2 libpsl5 libpsl-dev python3-impacket
+          sudo apt-get install -y nghttp2 libpsl5 libpsl-dev python3-impacket
 
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
@@ -96,4 +98,6 @@ jobs:
 
       - name: Test curl
         working-directory: curl
-        run: WGW_LOGGING=0 make -j $(nproc) test-ci
+        run: |
+          export USER=root
+          WGW_LOGGING=0 make -j $(nproc) test-ci
