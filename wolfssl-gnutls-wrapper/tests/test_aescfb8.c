@@ -139,11 +139,19 @@ static int test_aescfb8(gnutls_cipher_algorithm_t cipher,
 int main(void)
 {
     int ret;
+    int fips_mode;
 
     /* Initialize GnuTLS */
     if ((ret = gnutls_global_init()) < 0) {
         print_gnutls_error("initializing GnuTLS", ret);
         return 1;
+    }
+
+    /* Check if FIPS mode is enabled */
+    fips_mode = gnutls_fips140_mode_enabled();
+    if (fips_mode != 0) {
+        printf("This test can be run only when FIPS140 mode is not enabled\n");
+        return 0; /* Skip test */
     }
 
     ret = test_aescfb8(GNUTLS_CIPHER_AES_128_CFB8, key_128, sizeof(key_128),
