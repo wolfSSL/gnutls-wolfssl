@@ -54,7 +54,8 @@ jobs:
             gstreamer1.0-libav \
             gnulib autopoint gperf gtk-doc-tools nettle-dev \
             clang libtasn1-bin libtasn1-6-dev libunistring-dev \
-            libp11-kit-dev libunbound-dev wget gtk-doc-tools libswscale-dev libswresample-dev
+            libp11-kit-dev libunbound-dev wget gtk-doc-tools libswscale-dev libswresample-dev \
+            nasm
 
       # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
@@ -92,7 +93,6 @@ jobs:
             --disable-openssl \
             --enable-gnutls \
             --enable-encoder=mpeg4 \
-            --disable-x86asm \
             --enable-shared
           make -j"$(nproc)" && make install
 
