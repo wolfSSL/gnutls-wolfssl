@@ -20,6 +20,8 @@ jobs:
         libvnc_ref: [ 'master', 'LibVNCServer-0.9.14' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -27,14 +29,14 @@ jobs:
 
       - name: Install core build tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential sudo
+          apt-get update
+          apt-get install -y build-essential sudo
 
       - name: Install GnuTLS build dependencies
         run: |
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools \
+          apt-get install -y gnulib autopoint gperf gtk-doc-tools \
             nettle-dev clang libtasn1-bin libtasn1-6-dev libunistring-dev \
-            libp11-kit-dev libunbound-dev wget
+            libp11-kit-dev libunbound-dev wget sudo git cmake
 
       - name: Restore cached gnutls-wolfssl tool-chain
         id: cache-gnutls
@@ -63,7 +65,7 @@ jobs:
       - name: Install libvncserver build dependencies
         run: |
           sudo apt update
-          sudo apt install libsdl2-dev liblzo2-dev libssl-dev \
+          sudo apt install -y libsdl2-dev liblzo2-dev libssl-dev \
           libgcrypt-dev mingw-w64-x86-64-dev binutils-mingw-w64-x86-64 \
           gcc-mingw-w64-x86-64 wine
 

@@ -13,6 +13,8 @@ concurrency:
 jobs:
   nm-wolfssl-gnutls:
     runs-on: ubuntu-22.04
+    container:
+      image: debian:bookworm
     timeout-minutes: 60
 
     strategy:
@@ -29,8 +31,8 @@ jobs:
 
     - name: Install build dependencies
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install --yes --no-install-recommends \
+        apt-get update -qq
+        apt-get install --yes --no-install-recommends \
           autoconf automake libtool m4 pkg-config build-essential git \
           meson ninja-build gettext clang gperf gnulib autopoint gtk-doc-tools \
           nettle-dev libtasn1-bin libtasn1-6-dev libunistring-dev libnvme-dev \
@@ -40,7 +42,7 @@ jobs:
           libfile-stripnondeterminism-perl libglib2.0-doc \
           libnewt-dev libnl-3-dev libnl-cli-3-200 libnl-nf-3-200 libgirepository1.0-dev \
           libpolkit-agent-1-dev libslang2-dev libsub-override-perl libdbus-1-dev ppp ppp-dev mobile-broadband-provider-info \
-          libteam-dev libteam5 libyaml-perl po-debconf libaudit-dev libudev-dev libsystemd-dev libmm-glib-dev libjansson-dev dhcpcd5 dnsmasq-base libpsl-dev libreadline-dev valac
+          libteam-dev libteam5 libyaml-perl po-debconf libaudit-dev libudev-dev libsystemd-dev libmm-glib-dev libjansson-dev dhcpcd5 dnsmasq-base libpsl-dev libreadline-dev valac sudo git wget
 
     # ──────────────────────── cache the tool-chain ─────────────────────────
     - name: Restore cached gnutls-wolfssl

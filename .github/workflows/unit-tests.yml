@@ -22,6 +22,8 @@ jobs:
           - "GNUTLS_NO_PROVIDER=1"
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+        image: debian:bookworm
 
     steps:
       - name: Checkout repository
@@ -30,9 +32,9 @@ jobs:
       - name: Install dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
-            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          apt-get update
+          apt-get install -y git gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev wget libunistring-dev libp11-kit-dev libunbound-dev sudo
 
       # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
       - name: Restore cached gnutls-wolfssl
@@ -67,6 +69,8 @@ jobs:
     name: Run Valgrind Tests
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    container:
+        image: debian:bookworm
 
     steps:
       - name: Checkout repository
@@ -74,9 +78,9 @@ jobs:
 
       - name: Install Valgrind and dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y valgrind gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
-            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          apt-get update
+          apt-get install -y valgrind git wget gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev sudo
 
       # ─────────────── cache the wolfssl/gnutls tool-chain ────────────────
       - name: Restore cached gnutls-wolfssl

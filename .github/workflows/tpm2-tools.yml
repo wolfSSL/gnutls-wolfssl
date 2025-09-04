@@ -12,7 +12,10 @@ concurrency:
 
 jobs:
   tpm2-wolfssl-gnutls-integration:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+      options: --security-opt seccomp=unconfined
     timeout-minutes: 60
     strategy:
       matrix:
@@ -28,14 +31,16 @@ jobs:
       
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
+          apt-get update -qq
+          apt-get install -y sudo wget git
           sudo apt-get install --yes --no-install-recommends \
             autoconf automake libtool m4 pkg-config build-essential git \
             meson ninja-build gettext clang gperf gnulib autopoint \
             gtk-doc-tools nettle-dev libtasn1-bin libtasn1-6-dev \
             libunistring-dev libp11-kit-dev libunbound-dev bison python3-yaml \
             libcurl4-openssl-dev libdbus-1-dev libcmocka-dev expect xxd pandoc \
-            libssl-dev libgmp-dev libjson-c-dev libtss2-dev swtpm autoconf-archive
+            libssl-dev libgmp-dev libjson-c-dev libltdl-dev libtss2-dev swtpm autoconf-archive \
+            uuid-dev iproute2 libglib2.0-dev dbus-x11
       
       - name: Build wolfSSL, wrapper and GnuTLS
         run: |

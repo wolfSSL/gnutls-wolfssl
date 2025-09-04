@@ -22,6 +22,8 @@ jobs:
         libjcat_ref: [ 'master', '0.2.3', '0.2.0' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
+    container:
+      image: debian:bookworm
 
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -30,14 +32,15 @@ jobs:
       - name: Ensure make available (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          apt-get update
+          apt-get install -y build-essential
 
       - name: Install GnuTLS dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
-            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev
+          apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            sudo wget git
 
       - name: Install libjcat dependencies (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
@@ -84,7 +87,7 @@ jobs:
         run: |
           mkdir -p ~/.venvs
           python3 -m venv ~/.venvs/meson-056
-          source ~/.venvs/meson-056/bin/activate
+          . ~/.venvs/meson-056/bin/activate
           pip install 'meson==0.56.0'
           export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
@@ -95,5 +98,5 @@ jobs:
       - name: Test libjcat Build
         working-directory: libjcat
         run: |
-          source ~/.venvs/meson-056/bin/activate
+          . ~/.venvs/meson-056/bin/activate
           meson test -C _build-custom --verbose
