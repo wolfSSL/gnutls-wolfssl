@@ -59,3 +59,13 @@ jobs:
           echo "$OUT"
           echo "$OUT" | grep -q "ENTER: _gnutls_wolfssl_init" \
             || { echo "::error ::wrapper not initialised – FAIL"; exit 1; }
+
+      - name: Run unit tests
+        run: |
+          TEST_RESULT=0
+          cd wolfssl-gnutls-wrapper
+          ${{ matrix.provider }} make test || TEST_RESULT=$?
+          if [ "$TEST_RESULT" -ne 0 ]; then
+            echo "Tests failed: TEST_RESULT=$TEST_RESULT"
+            exit 1
+          fi
