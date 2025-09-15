@@ -43,7 +43,7 @@ jobs:
             'CFLAGS=-DWOLFSSL_PUBLIC_ASN -DHAVE_FFDHE_3072 -DHAVE_FFDHE_4096 -DWOLFSSL_DH_EXTRA -DWOLFSSL_PSS_SALT_LEN_DISCOVER -DWOLFSSL_PUBLIC_MP -DWOLFSSL_RSA_KEY_CHECK -DHAVE_FFDHE_Q -DHAVE_FFDHE_6144 -DHAVE_FFDHE_8192 -DWOLFSSL_ECDSA_DETERMINISTIC_K -DWOLFSSL_VALIDATE_ECC_IMPORT -DRSA_MIN_SIZE=1024'
           make -j"$(nproc)"
           sudo make deb
-          sudo dpkg -i libwolfssl_*.deb libwolfssl-dev_*.deb
+          sudo dpkg -i ../libwolfssl_*.deb ../libwolfssl-dev_*.deb ../libwolfssl-dbgsym_*.deb
 
       - name: Build .deb set (gnutls-wolfssl non-FIPS)
         run: dpkg-buildpackage -us -uc -b
