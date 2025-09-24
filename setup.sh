@@ -78,12 +78,17 @@ if [ $FIPS_MODE -eq 1 ]; then
             # Fresh checkout & FIPS helper
             rm -rf wolfssl/ fips-v5-checkout/
 
+            echo "Cloning fips-src"
+            git clone git@github.com:wolfSSL/fips-src.git
+
             echo "Cloning wolfSSL repository for FIPS-ready build..."
             git clone https://github.com/wolfssl/wolfssl.git
             cd wolfssl
 
-            echo "Running FIPS-ready preparation..."
-            ./fips-check.sh linuxv5.2.1 keep
+            echo "Running FIPS-v5.2.4 preparation..."
+            cp ../fips-src/fips-check-PILOT.sh .
+            chmod +x fips-check-PILOT.sh
+            ./fips-check-PILOT.sh v5.2.4 keep
 
             echo "Moving FIPS directory XXX-fips-test to ../fips-v5-checkout"
             mv XXX-fips-test ../fips-v5-checkout
