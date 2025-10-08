@@ -285,7 +285,7 @@ int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
         ctx->dec_initialized = 1;
 
         if (ctx->mode == SIV) {
-						ctx->siv_synth = gnutls_malloc(AES_BLOCK_SIZE);
+						ctx->siv_synth = gnutls_malloc(WC_AES_BLOCK_SIZE);
 						if (!ctx->siv_synth) {
                 gnutls_free(ctx);
 								return GNUTLS_E_MEMORY_ERROR;
@@ -356,6 +356,7 @@ int wolfssl_cipher_init(gnutls_cipher_algorithm_t algorithm, void **_ctx,
  */
 int get_cipher_key_size(gnutls_cipher_algorithm_t algorithm)
 {
+    WGW_FUNC_ENTER();
     switch (algorithm) {
         case GNUTLS_CIPHER_AES_128_CBC:
         case GNUTLS_CIPHER_AES_128_GCM:
@@ -387,9 +388,9 @@ int get_cipher_key_size(gnutls_cipher_algorithm_t algorithm)
     #endif
     #ifdef WOLFSSL_AES_COUNTER
        case GNUTLS_CIPHER_AES_128_SIV:
-            return AES_128_KEY_SIZE;
+            return AES_128_KEY_SIZE * 2;
        case GNUTLS_CIPHER_AES_256_SIV:
-            return AES_256_KEY_SIZE;
+            return AES_256_KEY_SIZE * 2;
     #endif
         default:
             return 0;
@@ -1192,7 +1193,7 @@ void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
 /* Routine that does a shift and xor of the input buffer
  * and stores the result inside the output buffer.
  * Routine copied from the wolfcrypt/src/cmac.c source code*/
-static void ShiftAndXorRb(byte* out, byte* in)
+void ShiftAndXorRb(byte* out, byte* in)
 {
     int i, j, xorRb;
     int mask = 0, last = 0;
@@ -1250,7 +1251,15 @@ void xorbuf(void* buf, const void* mask, word32 count)
 
         tpb.bp = b;
         tpm.bp = m;
+        /* Work around false positives from linuxkm CONFIG_FORTIFY_SOURCE. */
+        #if defined(WOLFSSL_LINUXKM) && defined(CONFIG_FORTIFY_SOURCE)
+            PRAGMA_GCC_DIAG_PUSH;
+            PRAGMA_GCC("GCC diagnostic ignored \"-Wmaybe-uninitialized\"")
+        #endif
         XorWords(&tpb.wp, &tpm.wp, count >> WOLFSSL_WORD_SIZE_LOG2);
+        #if defined(WOLFSSL_LINUXKM) && defined(CONFIG_FORTIFY_SOURCE)
+            PRAGMA_GCC_DIAG_POP;
+        #endif
         b = tpb.bp;
         m = tpm.bp;
         count &= (WOLFSSL_WORD_SIZE - 1);
@@ -1271,7 +1280,15 @@ void xorbuf(void* buf, const void* mask, word32 count)
 
         tpb.bp = b;
         tpm.bp = m;
+        /* Work around false positives from linuxkm CONFIG_FORTIFY_SOURCE. */
+        #if defined(WOLFSSL_LINUXKM) && defined(CONFIG_FORTIFY_SOURCE)
+            PRAGMA_GCC_DIAG_PUSH;
+            PRAGMA_GCC("GCC diagnostic ignored \"-Wmaybe-uninitialized\"")
+        #endif
         XorWords(&tpb.wp, &tpm.wp, count >> WOLFSSL_WORD_SIZE_LOG2);
+        #if defined(WOLFSSL_LINUXKM) && defined(CONFIG_FORTIFY_SOURCE)
+            PRAGMA_GCC_DIAG_POP;
+        #endif
         b = tpb.bp;
         m = tpm.bp;
         count &= (WOLFSSL_WORD_SIZE - 1);
@@ -1283,20 +1300,43 @@ void xorbuf(void* buf, const void* mask, word32 count)
     }
 }
 
-/* section 2.4 of RFC 5297 */
-static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocSize,
-            const byte* nonce, word32 nonceSz, const byte* data,
-                word32 dataSz, byte* out) {
+typedef struct AesSivAssoc {
+    const byte* assoc;
+    word32 assocSz;
+} AesSivAssoc;
 
+/* section 2.4 of RFC 5297 */
+static WARN_UNUSED_RESULT int S2V(
+    const byte* key, word32 keySz, const AesSivAssoc* assoc, word32 numAssoc,
+    const byte* nonce, word32 nonceSz, const byte* data,
+    word32 dataSz, byte* out)
+{
+#ifdef WOLFSSL_SMALL_STACK
+    byte* tmp[3] = {NULL, NULL, NULL};
+    int i;
+    Cmac* cmac;
+#else
     byte tmp[3][WC_AES_BLOCK_SIZE];
     Cmac cmac[1];
+#endif
     word32 macSz = WC_AES_BLOCK_SIZE;
     int ret = 0;
     byte tmpi = 0;
     word32 ai;
     word32 zeroBytes;
 
-    if ((assocSize > 126) || ((nonceSz > 0) && (assocSize > 125))) {
+#ifdef WOLFSSL_SMALL_STACK
+    for (i = 0; i < 3; ++i) {
+        tmp[i] = (byte*)XMALLOC(WC_AES_BLOCK_SIZE, NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        if (tmp[i] == NULL) {
+            ret = MEMORY_E;
+            break;
+        }
+    }
+    if (ret == 0)
+#endif
+
+    if ((numAssoc > 126) || ((nonceSz > 0) && (numAssoc > 125))) {
         /* See RFC 5297 Section 7. */
         WGW_LOG("Maximum number of ADs (including the nonce) for AES SIV is"
                     " 126.");
@@ -1308,17 +1348,19 @@ static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocS
         XMEMSET(tmp[2], 0, WC_AES_BLOCK_SIZE);
 
         ret = wc_AesCmacGenerate(tmp[0], &macSz, tmp[1], WC_AES_BLOCK_SIZE,
-                                 (byte*)key, keySz);
+                                 key, keySz);
     }
 
     if (ret == 0) {
         /* Loop over authenticated associated data AD1..ADn */
-        for (ai = 0; ai < assocSize; ++ai) {
+        for (ai = 0; ai < numAssoc; ++ai) {
             ShiftAndXorRb(tmp[1-tmpi], tmp[tmpi]);
-            ret = wc_AesCmacGenerate(tmp[tmpi], &macSz, &assoc[ai],
-                                     assocSize, (byte*)key, keySz);
-            if (ret != 0)
+            ret = wc_AesCmacGenerate(tmp[tmpi], &macSz, assoc[ai].assoc,
+                                     assoc[ai].assocSz, key, keySz);
+            if (ret != 0) {
+                WGW_WOLFSSL_ERROR("wc_AesCmacGenerate", ret);
                 break;
+            }
             xorbuf(tmp[1-tmpi], tmp[tmpi], WC_AES_BLOCK_SIZE);
             tmpi = (byte)(1 - tmpi);
         }
@@ -1327,7 +1369,7 @@ static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocS
         if ((ret == 0) && (nonceSz > 0)) {
             ShiftAndXorRb(tmp[1-tmpi], tmp[tmpi]);
             ret = wc_AesCmacGenerate(tmp[tmpi], &macSz, nonce,
-                                     nonceSz, (byte*)key, keySz);
+                                     nonceSz, key, keySz);
             if (ret == 0) {
                 xorbuf(tmp[1-tmpi], tmp[tmpi], WC_AES_BLOCK_SIZE);
             }
@@ -1343,11 +1385,24 @@ static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocS
 
     if (ret == 0) {
         if (dataSz >= WC_AES_BLOCK_SIZE) {
+
+        #ifdef WOLFSSL_SMALL_STACK
+            cmac = (Cmac*)XMALLOC(sizeof(Cmac), NULL, DYNAMIC_TYPE_CMAC);
+            if (cmac == NULL) {
+                ret = MEMORY_E;
+            }
             if (ret == 0)
+        #endif
             {
+            #ifdef WOLFSSL_CHECK_MEM_ZERO
+                /* Aes part is checked by wc_AesFree. */
+                wc_MemZero_Add("wc_AesCmacGenerate cmac",
+                    ((unsigned char *)cmac) + sizeof(Aes),
+                    sizeof(Cmac) - sizeof(Aes));
+            #endif
                 xorbuf(tmp[0], data + (dataSz - WC_AES_BLOCK_SIZE),
-                        WC_AES_BLOCK_SIZE);
-                ret = wc_InitCmac(cmac, (byte*)key, keySz, WC_CMAC_AES, NULL);
+                       WC_AES_BLOCK_SIZE);
+                ret = wc_InitCmac(cmac, key, keySz, WC_CMAC_AES, NULL);
                 if (ret == 0) {
                     ret = wc_CmacUpdate(cmac, data, dataSz - WC_AES_BLOCK_SIZE);
                 }
@@ -1358,6 +1413,11 @@ static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocS
                     ret = wc_CmacFinal(cmac, out, &macSz);
                 }
             }
+        #ifdef WOLFSSL_SMALL_STACK
+            XFREE(cmac, NULL, DYNAMIC_TYPE_CMAC);
+        #elif defined(WOLFSSL_CHECK_MEM_ZERO)
+            wc_MemZero_Check(cmac, sizeof(Cmac));
+        #endif
         }
         else {
             XMEMCPY(tmp[2], data, dataSz);
@@ -1368,10 +1428,18 @@ static int S2V(const word32* key, word32 keySz, const byte* assoc, size_t assocS
             }
             ShiftAndXorRb(tmp[1], tmp[0]);
             xorbuf(tmp[1], tmp[2], WC_AES_BLOCK_SIZE);
-            ret = wc_AesCmacGenerate(out, &macSz, tmp[1], WC_AES_BLOCK_SIZE,
-                    (byte*)key, keySz);
+            ret = wc_AesCmacGenerate(out, &macSz, tmp[1], WC_AES_BLOCK_SIZE, key,
+                                     keySz);
         }
     }
+
+#ifdef WOLFSSL_SMALL_STACK
+    for (i = 0; i < 3; ++i) {
+        if (tmp[i] != NULL) {
+            XFREE(tmp[i], NULL, DYNAMIC_TYPE_TMP_BUFFER);
+        }
+    }
+#endif
 
     return ret;
 }
@@ -1451,6 +1519,13 @@ int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
         unsigned char siv_tmp[WC_AES_BLOCK_SIZE];
         int ret = 0;
         size_t keySz = ctx->original_key_sz;
+        unsigned char tmp_encr[plain_size];
+				AesSivAssoc ad;
+        word32 numAssoc;
+
+				ad.assoc = auth;
+				ad.assocSz = auth_size;
+        numAssoc = 1U;
 
 				if (keySz != 32 && keySz != 48 && keySz != 64) {
 						WGW_LOG("Bad key size. Must be 256, 384, or 512 bits.");
@@ -1462,8 +1537,8 @@ int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
          * in this case we use the first half of the key for the S2V for CMAC
          * which is the encryption side of things.
          * */
-        ret = S2V((word32 *)ctx->original_key, keySz / 2,
-                (byte*)auth, auth_size, nonce,
+        ret = S2V(ctx->original_key, keySz / 2,
+                &ad, numAssoc, nonce,
                 nonce_size, plain, plain_size, siv_tmp);
         if (ret != 0) {
             WGW_LOG("Error during S2V compute for AES-SIV");
@@ -1476,7 +1551,7 @@ int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
 						siv_tmp[12] &= 0x7f;
 						siv_tmp[8] &= 0x7f;
 						ret = wc_AesSetKey(&ctx->cipher.aes_ctx,
-                    (byte*)(ctx->original_key + keySz / 2),
+                    ctx->original_key + keySz / 2,
                     keySz / 2, siv_tmp,
 										AES_ENCRYPTION);
 						if (ret != 0) {
@@ -1484,7 +1559,7 @@ int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
                 return GNUTLS_E_ENCRYPTION_FAILED;
 						}
 						else {
-								ret = wc_AesCtrEncrypt(&ctx->cipher.aes_ctx, encr,
+								ret = wc_AesCtrEncrypt(&ctx->cipher.aes_ctx, tmp_encr,
                         plain, plain_size);
 								if (ret != 0) {
 										WGW_LOG("AES-CTR encryption failed.");
@@ -1492,6 +1567,12 @@ int wolfssl_cipher_aead_encrypt(void *_ctx, const void *nonce,
 								}
 						}
 				}
+
+        /* gnutls expects the final cipher text to be siv followed by the
+         * cipher text, while wolfssl separates these two and puts siv into a
+         * separate buffer pointer, we need to merge them for compatibility. */
+        XMEMCPY(encr, ctx->siv_synth, WC_AES_BLOCK_SIZE);
+        XMEMCPY(encr + WC_AES_BLOCK_SIZE, tmp_encr, encr_size - WC_AES_BLOCK_SIZE);
     }
 #endif
     else {
@@ -1581,19 +1662,29 @@ int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
         unsigned char siv_tmp[WC_AES_BLOCK_SIZE];
         int ret = 0;
         size_t keySz = ctx->original_key_sz;
+				AesSivAssoc assoc;
+        word32 numAssoc;
+
+				assoc.assoc = auth;
+				assoc.assocSz = auth_size;
+        numAssoc = 1U;
 
 				if (ret == 0 && keySz != 32 && keySz != 48 && keySz != 64) {
 						WGW_LOG("Bad key size. Must be 256, 384, or 512 bits.");
 						return GNUTLS_E_INVALID_REQUEST;
 				}
 
+        /* gnutls expects the final cipher text to be siv followed by the
+         * cipher text, while wolfssl separates these two and puts siv into a
+         * separate buffer pointer, we need to split them for compatibility. */
+        XMEMCPY(ctx->siv_synth, encr, WC_AES_BLOCK_SIZE);
         XMEMCPY(siv_tmp, ctx->siv_synth, WC_AES_BLOCK_SIZE);
 
-				if (ret == 0 && plain_size > 0) {
+				if (ret == 0 && encr_size > 0) {
 						siv_tmp[12] &= 0x7f;
 						siv_tmp[8] &= 0x7f;
 						ret = wc_AesSetKey(&ctx->cipher.aes_ctx,
-                    (byte*)(ctx->original_key + keySz / 2),
+                    ctx->original_key + keySz / 2,
                     keySz / 2, siv_tmp,
 										AES_ENCRYPTION);
 						if (ret != 0) {
@@ -1601,10 +1692,10 @@ int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
                 return GNUTLS_E_ENCRYPTION_FAILED;
 						}
 						else {
-								ret = wc_AesCtrEncrypt(&ctx->cipher.aes_ctx, (byte*)encr,
-                        plain, plain_size);
+								ret = wc_AesCtrEncrypt(&ctx->cipher.aes_ctx, plain,
+                        encr + WC_AES_BLOCK_SIZE, encr_size);
 								if (ret != 0) {
-										WGW_LOG("AES-CTR encryption failed.");
+										WGW_LOG("AES-CTR decryption failed.");
                     return GNUTLS_E_ENCRYPTION_FAILED;
 								}
 						}
@@ -1614,18 +1705,18 @@ int wolfssl_cipher_aead_decrypt(void *_ctx, const void *nonce,
          * in this case we use the first half of the key for the S2V for CMAC
          * which is the encryption/decryption side of things.
          * */
-        ret = S2V((word32 *)ctx->original_key, keySz / 2,
-                (byte*)auth, auth_size, nonce,
+        ret = S2V(ctx->original_key, keySz / 2,
+                &assoc, numAssoc, nonce,
                 nonce_size, plain, plain_size, siv_tmp);
         if (ret != 0) {
             WGW_LOG("Error during S2V compute for AES-SIV");
             return GNUTLS_E_ENCRYPTION_FAILED;
         }
 
-        if (XMEMCMP(ctx->siv_synth, siv_tmp, WC_AES_BLOCK_SIZE) != 0) {
-            WGW_LOG("Computed SIV doesn't match received SIV.");
+				if (XMEMCMP(ctx->siv_synth, siv_tmp, WC_AES_BLOCK_SIZE) != 0) {
+						WGW_LOG("Computed SIV doesn't match received SIV.");
             return GNUTLS_E_ENCRYPTION_FAILED;
-        }
+				}
 
         return 0;
     }
