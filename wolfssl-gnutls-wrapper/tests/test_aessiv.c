@@ -93,7 +93,7 @@ static int test_aessiv_a1_aead(void)
     }
 
     /********** DECRYPTION TEST **********/
-    /* Decrypt using AES-256-SIV AEAD */
+    /* Decrypt using AES-128-SIV AEAD */
     if ((ret = gnutls_aead_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_128_SIV, &key_datum)) < 0) {
         print_gnutls_error("initializing AEAD cipher for decryption", ret);
         return 1;
@@ -204,7 +204,7 @@ static int test_aessiv_a2_aead(void)
     memset(decrypted, 0, sizeof(decrypted));
 
     /********** ENCRYPTION TEST **********/
-    /* Encrypt using AES-256-SIV AEAD */
+    /* Encrypt using AES-128-SIV AEAD */
     if ((ret = gnutls_aead_cipher_init(&encrypt_handle, GNUTLS_CIPHER_AES_128_SIV, &key_datum)) != 0) {
         print_gnutls_error("initializing AEAD cipher for encryption", ret);
         return 1;
@@ -231,7 +231,7 @@ static int test_aessiv_a2_aead(void)
     }
 
     /********** DECRYPTION TEST **********/
-    /* Decrypt using AES-256-SIV AEAD */
+    /* Decrypt using AES-128-SIV AEAD */
     if ((ret = gnutls_aead_cipher_init(&decrypt_handle, GNUTLS_CIPHER_AES_128_SIV, &key_datum)) < 0) {
         print_gnutls_error("initializing AEAD cipher for decryption", ret);
         return 1;
