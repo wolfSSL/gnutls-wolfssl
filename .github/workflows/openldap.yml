@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest ]
-        openldap_ref: [ 'master', 'OPENLDAP_REL_ENG_2_5_13', 'OPENLDAP_REL_ENG_2_6_9' ]
+        openldap_ref: [ 'master', 'OPENLDAP_REL_ENG_2_5_13', 'OPENLDAP_REL_ENG_2_6_7', 'OPENLDAP_REL_ENG_2_6_9' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     container:
