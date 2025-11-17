@@ -18,34 +18,52 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        os: [ ubuntu-latest ]
-        wget_ref: [ 'master', 'v1.21.3', 'v1.21.4', 'v1.24.5' ]
+        include:
+          - os: ubuntu-latest
+            wget_ref: 'master'
+            use_container: true
+          - os: ubuntu-latest
+            wget_ref: 'v1.21.3'
+            use_container: true
+          - os: ubuntu-24.04
+            wget_ref: 'v1.21.4'
+            use_container: false
+          - os: ubuntu-latest
+            wget_ref: 'v1.24.5'
+            use_container: true
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    container:
-      image: debian:bookworm
+    container: ${{ matrix.use_container && 'debian:bookworm' || '' }}
 
     steps:
       - name: Checkout gnutls-wolfssl repository
         uses: actions/checkout@v4
 
-      - name: Ensure make available (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Ensure make available
+        if: matrix.use_container == true
         run: |
           apt-get update
           apt-get install -y build-essential
 
-      - name: Install GnuTLS dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install GnuTLS dependencies
+        if: matrix.use_container == true
         run: |
           apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
             libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
             sudo wget git flex
 
-      - name: Install wget dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install wget dependencies
+        if: matrix.use_container == true
         run: |
           sudo apt-get install -y autoconf-archive libhttp-daemon-perl
+
+      - name: Install dependencies on native Ubuntu
+        if: matrix.use_container == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            wget git flex autoconf-archive libhttp-daemon-perl
 
       # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
@@ -102,7 +120,7 @@ jobs:
 
       # Get python 3.11 for old versions of wget
       - name: Install pyenv dependencies
-        if: matrix.wget_ref == 'v1.21.3'
+        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
         run: |
           sudo apt-get update
           sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
@@ -111,7 +129,7 @@ jobs:
             libffi-dev liblzma-dev
 
       - name: Install pyenv
-        if: matrix.wget_ref == 'v1.21.3'
+        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
         run: |
           curl https://pyenv.run | bash
 
@@ -119,7 +137,7 @@ jobs:
         working-directory: wget
         run: |
           # If Python 3.11 needed, reinitialize pyenv
-          if [ "${{ matrix.wget_ref }}" = "v1.21.3" ]; then
+          if [[ "${{ matrix.wget_ref }}" = "v1.21.3" || "${{ matrix.wget_ref }}" = "v1.21.4" ]]; then
             export PYENV_ROOT="$HOME/.pyenv"
             export PATH="$PYENV_ROOT/bin:$PATH"
             eval "$(pyenv init --path)"
