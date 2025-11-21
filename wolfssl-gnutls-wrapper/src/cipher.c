@@ -993,11 +993,11 @@ int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
             return GNUTLS_E_INVALID_REQUEST;
         }
 
-	/* Handle 0-byte finalization call, common in cipher APIs for flushing/padding */
-	if (src_size == 0) {
-	   WGW_LOG("Zero-byte decrypt call (finalization), returning success");
-	   return 0;
-	}
+        /* Handle 0-byte finalization call, common in cipher APIs for flushing/padding */
+        if (src_size == 0) {
+            WGW_LOG("Zero-byte decrypt call (finalization), returning success");
+            return 0;
+        }
 
 
         /* Always use the decryption context for decryption operations */
