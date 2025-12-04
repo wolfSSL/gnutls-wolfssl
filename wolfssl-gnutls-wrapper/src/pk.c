@@ -1790,14 +1790,18 @@ static int wolfssl_pk_verify_rsa_pss(const gnutls_datum_t *vdata,
 static int parse_der_length(const byte* sig_data, word32 sig_len,
         word32* idx, word32* len)
 {
-    if (*idx >= sig_len) return -1;
+    if (*idx >= sig_len)
+        return -1;
 
     *len = sig_data[(*idx)++];
 
     if (*len & 0x80) {
         /* Long form length */
         word32 num_bytes = *len & 0x7F;
-        if (num_bytes > 4 || *idx + num_bytes > sig_len) return -1;
+
+        if (num_bytes == 0 || num_bytes > 4 || *idx + num_bytes > sig_len)
+            return -1;
+
         *len = 0;
         while (num_bytes--) {
             *len = (*len << 8) | sig_data[(*idx)++];
@@ -1833,7 +1837,8 @@ static int parse_lenient_der_ecdsa_signature(const byte* sig_data, word32 sig_le
     }
 
     /* Parse SEQUENCE length */
-    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0) return -1;
+    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0)
+        return -1;
 
     /* Parse first INTEGER (r) tag */
     if (idx >= sig_len || sig_data[idx++] != 0x02) {
@@ -1842,7 +1847,8 @@ static int parse_lenient_der_ecdsa_signature(const byte* sig_data, word32 sig_le
     }
 
     /* Parse r length */
-    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0) return -1;
+    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0)
+        return -1;
 
     /* Skip leading zero byte if present (sign byte) */
     if (len <= 0)
@@ -1868,7 +1874,8 @@ static int parse_lenient_der_ecdsa_signature(const byte* sig_data, word32 sig_le
     }
 
     /* Parse s length */
-    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0) return -1;
+    if (parse_der_length(sig_data, sig_len, &idx, &len) != 0)
+        return -1;
 
     /* Skip leading zero byte if present (sign byte) */
     if (len > 0 && idx < sig_len && sig_data[idx] == 0x00) {
