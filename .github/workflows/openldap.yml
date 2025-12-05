@@ -1,78 +1,112 @@
 name: OpenLDAP Test
-
 # START OF COMMON SECTION
 on:
   push:
     branches: [ 'master', 'main', 'release/**' ]
   pull_request:
     branches: [ '*' ]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 # END OF COMMON SECTION
-
 jobs:
   build_gnutls:
     name: Build wolfSSL, GnuTLS and provider
     timeout-minutes: 30
     strategy:
       matrix:
-        os: [ ubuntu-latest ]
-        openldap_ref: [ 'master', 'OPENLDAP_REL_ENG_2_5_13', 'OPENLDAP_REL_ENG_2_6_9' ]
+        include:
+          - os: ubuntu-latest
+            openldap_ref: 'master'
+            use_container: true
+          - os: ubuntu-latest
+            openldap_ref: 'OPENLDAP_REL_ENG_2_5_13'
+            use_container: true
+          - os: ubuntu-24.04
+            openldap_ref: 'OPENLDAP_REL_ENG_2_6_7'
+            use_container: false
+          - os: ubuntu-latest
+            openldap_ref: 'OPENLDAP_REL_ENG_2_6_9'
+            use_container: true
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    container:
-      image: debian:bookworm
-
+    container: ${{ matrix.use_container && 'debian:bookworm' || '' }}
     steps:
       - name: Checkout gnutls-wolfssl repository
         uses: actions/checkout@v4
-
-      - name: Ensure make available (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Ensure make available
+        if: matrix.use_container == true
         run: |
           apt-get update
           apt-get install -y build-essential
-
-      - name: Install GnuTLS dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install GnuTLS dependencies
+        if: matrix.use_container == true
         run: |
           apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
             libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev sudo \
-            git wget
+            git wget automake libtool
 
-      - name: Install OpenLDAP dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install OpenLDAP dependencies
+        if: matrix.use_container == true
         run: |
           sudo apt-get install -y libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit \
             libargon2-dev groff-base libltdl-dev
 
-      # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
+      - name: Install dependencies on native Ubuntu
+        if: matrix.use_container == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            git wget libsasl2-dev libsasl2-modules libsasl2-modules-gssapi-mit \
+            libargon2-dev groff-base libltdl-dev automake libtool
+
+      - name: Prepare cache directories (native runner)
+        if: matrix.use_container == false
+        run: |
+          sudo mkdir -p /opt/gnutls /opt/wolfssl /opt/wolfssl-gnutls-wrapper
+          sudo chown -R $USER:$USER /opt/gnutls /opt/wolfssl /opt/wolfssl-gnutls-wrapper
+
+     # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
         uses: actions/cache@v4
         with:
           path: |
-            /opt/gnutls
-            /opt/wolfssl
-            /opt/wolfssl-gnutls-wrapper
-          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+            ${{ matrix.use_container && '/opt/gnutls' || '~/cache/gnutls' }}
+            ${{ matrix.use_container && '/opt/wolfssl' || '~/cache/wolfssl' }}
+            ${{ matrix.use_container && '/opt/wolfssl-gnutls-wrapper' || '~/cache/wolfssl-gnutls-wrapper' }}
+          key: gnutls-wolfssl-${{ runner.os }}-${{ matrix.use_container }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
           restore-keys: |
-            gnutls-wolfssl-${{ runner.os }}-
+            gnutls-wolfssl-${{ runner.os }}-${{ matrix.use_container }}-
+
+      - name: Copy cache to /opt (native runner only)
+        if: matrix.use_container == false && steps.cache-gnutls.outputs.cache-hit == 'true'
+        run: |
+          sudo mkdir -p /opt
+          sudo cp -a ~/cache/gnutls /opt/
+          sudo cp -a ~/cache/wolfssl /opt/
+          sudo cp -a ~/cache/wolfssl-gnutls-wrapper /opt/
 
       - name: Build GnuTLS with wolfSSL provider using setup.sh script
         if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           echo "Running setup.sh..."
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          # For native runner: also save to cache location
+          if [[ "${{ matrix.use_container }}" == "false" ]]; then
+            mkdir -p ~/cache
+            sudo cp -a /opt/gnutls ~/cache/
+            sudo cp -a /opt/wolfssl ~/cache/
+            sudo cp -a /opt/wolfssl-gnutls-wrapper ~/cache/
+            sudo chown -R $(id -u):$(id -g) ~/cache
+          fi
 
       - name: Check setup.sh output directories
         run: |
           test -d /opt/wolfssl || { echo "/opt/wolfssl missing"; exit 1; }
           test -d /opt/gnutls || { echo "/opt/gnutls missing"; exit 1; }
           test -d /opt/wolfssl-gnutls-wrapper/lib || { echo "/opt/wolfssl-gnutls-wrapper/lib missing"; exit 1; }
-
       - name: Build OpenLDAP at ${{ matrix.openldap_ref }}
         run: |
           git clone https://git.openldap.org/openldap/openldap.git
@@ -80,13 +114,38 @@ jobs:
           if [ "${{ matrix.openldap_ref }}" != "master" ]; then
             git checkout ${{ matrix.openldap_ref }}
           fi
-
       - name: Configure OpenLDAP
         working-directory: openldap
         run: |
           export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
           export CPPFLAGS=-I/opt/gnutls/include
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib"
+          if [[ "${{ matrix.openldap_ref }}" = "OPENLDAP_REL_ENG_2_6_7" ]]; then
+          ./configure \
+          ac_cv_func_memcmp_working=yes \
+          lt_cv_dlopen_self=yes \
+          --with-yielding-select=yes \
+          --enable-dynamic \
+          --enable-crypt \
+          --with-tls=gnutls \
+          --with-cyrus-sasl \
+          --enable-otp \
+          --with-argon2=libargon2 \
+          --enable-argon2 \
+          --enable-ppolicy \
+          --enable-remoteauth \
+          --prefix=/opt/openldap \
+          --enable-modules \
+          --enable-ipv6 \
+          --enable-asyncmeta=mod \
+          --enable-mdb=yes \
+          --enable-ldap=mod \
+          --enable-meta=mod \
+          --enable-null=mod \
+          --enable-passwd=mod \
+          --enable-proxycache=mod \
+          --enable-dnssrv=mod
+          else
           ./configure \
             --with-tls=gnutls \
             --with-cyrus-sasl \
@@ -97,13 +156,12 @@ jobs:
             --enable-remoteauth \
             --prefix=/opt/openldap \
             --enable-modules
-
+          fi
       - name: Build OpenLDAP
         working-directory: openldap
         run: |
           make depend
           make
-
       - name: Test OpenLDAP
         working-directory: openldap
         run: |

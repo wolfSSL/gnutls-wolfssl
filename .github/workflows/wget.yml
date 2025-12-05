@@ -18,53 +18,84 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        os: [ ubuntu-latest ]
-        wget_ref: [ 'master', 'v1.21.3', 'v1.24.5' ]
+        include:
+          - os: ubuntu-latest
+            wget_ref: 'master'
+            use_container: true
+          - os: ubuntu-latest
+            wget_ref: 'v1.21.3'
+            use_container: true
+          - os: ubuntu-24.04
+            wget_ref: 'v1.21.4'
+            use_container: false
+          - os: ubuntu-latest
+            wget_ref: 'v1.24.5'
+            use_container: true
       fail-fast: false
     runs-on: ${{ matrix.os }}
-    container:
-      image: debian:bookworm
+    container: ${{ matrix.use_container && 'debian:bookworm' || '' }}
 
     steps:
       - name: Checkout gnutls-wolfssl repository
         uses: actions/checkout@v4
 
-      - name: Ensure make available (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Ensure make available
+        if: matrix.use_container == true
         run: |
           apt-get update
           apt-get install -y build-essential
-
-      - name: Install GnuTLS dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install GnuTLS dependencies
+        if: matrix.use_container == true
         run: |
           apt-get install -y gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
             libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
             sudo wget git flex
-
-      - name: Install wget dependencies (Ubuntu only)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install wget dependencies
+        if: matrix.use_container == true
         run: |
           sudo apt-get install -y autoconf-archive libhttp-daemon-perl
+      - name: Install dependencies on native Ubuntu
+        if: matrix.use_container == false
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            wget git flex autoconf-archive libhttp-daemon-perl
 
-      # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
+     # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
         uses: actions/cache@v4
         with:
           path: |
-            /opt/gnutls
-            /opt/wolfssl
-            /opt/wolfssl-gnutls-wrapper
-          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+            ${{ matrix.use_container && '/opt/gnutls' || '~/cache/gnutls' }}
+            ${{ matrix.use_container && '/opt/wolfssl' || '~/cache/wolfssl' }}
+            ${{ matrix.use_container && '/opt/wolfssl-gnutls-wrapper' || '~/cache/wolfssl-gnutls-wrapper' }}
+          key: gnutls-wolfssl-${{ runner.os }}-${{ matrix.use_container }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
           restore-keys: |
-            gnutls-wolfssl-${{ runner.os }}-
+            gnutls-wolfssl-${{ runner.os }}-${{ matrix.use_container }}-
+
+      - name: Copy cache to /opt (native runner only)
+        if: matrix.use_container == false && steps.cache-gnutls.outputs.cache-hit == 'true'
+        run: |
+          sudo mkdir -p /opt
+          sudo cp -a ~/cache/gnutls /opt/
+          sudo cp -a ~/cache/wolfssl /opt/
+          sudo cp -a ~/cache/wolfssl-gnutls-wrapper /opt/
 
       - name: Build GnuTLS with wolfSSL provider using setup.sh script
         if: steps.cache-gnutls.outputs.cache-hit != 'true'
         run: |
           echo "Running setup.sh..."
           GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          # For native runner: also save to cache location
+          if [[ "${{ matrix.use_container }}" == "false" ]]; then
+            mkdir -p ~/cache
+            sudo cp -a /opt/gnutls ~/cache/
+            sudo cp -a /opt/wolfssl ~/cache/
+            sudo cp -a /opt/wolfssl-gnutls-wrapper ~/cache/
+            sudo chown -R $(id -u):$(id -g) ~/cache
+          fi
 
       - name: Check setup.sh output directories
         run: |
@@ -74,7 +105,6 @@ jobs:
           test -d /opt/gnutls || exit 1
           echo "Check for wrapper installation..."
           test -d /opt/wolfssl-gnutls-wrapper/lib || exit 1
-
       - name: Build wget at ${{ matrix.wget_ref }}
         uses: actions/checkout@v4
         with:
@@ -93,33 +123,39 @@ jobs:
           git clone https://github.com/coreutils/gnulib gnulib
           ./bootstrap
           autoreconf -fi
-          ./configure --with-ssl=gnutls --with-libgnutls-prefix=/opt/gnutls
-
+          if [[ "${{ matrix.wget_ref }}" = "v1.21.4" ]]; then
+            ./configure --with-ssl=gnutls --with-libgnutls-prefix=/opt/gnutls \
+            --without-libssl-prefix \
+            --disable-rpath \
+            --with-ssl=gnutls \
+            --enable-pcre \
+            --with-zlib \
+            --enable-ipv6
+          else
+            ./configure --with-ssl=gnutls --with-libgnutls-prefix=/opt/gnutls
+          fi
       - name: Make wget
         working-directory: wget
         run: |
           make -j $(nproc)
-
       # Get python 3.11 for old versions of wget
       - name: Install pyenv dependencies
-        if: matrix.wget_ref == 'v1.21.3'
+        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
         run: |
           sudo apt-get update
           sudo apt-get install -y make build-essential libssl-dev zlib1g-dev \
             libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
             libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
             libffi-dev liblzma-dev
-
       - name: Install pyenv
-        if: matrix.wget_ref == 'v1.21.3'
+        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
         run: |
           curl https://pyenv.run | bash
-
       - name: Test wget
         working-directory: wget
         run: |
           # If Python 3.11 needed, reinitialize pyenv
-          if [ "${{ matrix.wget_ref }}" = "v1.21.3" ]; then
+          if [[ "${{ matrix.wget_ref }}" = "v1.21.3" || "${{ matrix.wget_ref }}" = "v1.21.4" ]]; then
             export PYENV_ROOT="$HOME/.pyenv"
             export PATH="$PYENV_ROOT/bin:$PATH"
             eval "$(pyenv init --path)"
@@ -127,6 +163,11 @@ jobs:
             pyenv install 3.11.9
             pyenv global 3.11.9
             python --version
+          fi
+          # To make /opt/gnutls visible to the test binaries, LD_LIBRARY_PATH
+          # is needed since we disable rpath for v1.21.4.
+          if [[ "${{ matrix.wget_ref }}" = "v1.21.4" ]]; then
+          export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib:$LD_LIBRARY_PATH
           fi
           make check
           find . -name '*.log' | xargs grep wgw

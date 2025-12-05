@@ -1,0 +1,112 @@
+name: wireshark test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-24.04 ]
+        wireshark_ref: [ 'master', 'v4.2.12', 'v4.6.0' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            wget git flex autoconf-archive libhttp-daemon-perl ninja-build
+
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/cache/gnutls
+            ~/cache/wolfssl
+            ~/cache/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Copy cache to /opt
+        if: steps.cache-gnutls.outputs.cache-hit == 'true'
+        run: |
+          sudo mkdir -p /opt
+          sudo cp -a ~/cache/gnutls /opt/
+          sudo cp -a ~/cache/wolfssl /opt/
+          sudo cp -a ~/cache/wolfssl-gnutls-wrapper /opt/
+          echo "Cache restored successfully"
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache miss - running setup.sh..."
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          # Save to cache location
+          mkdir -p ~/cache
+          sudo cp -a /opt/gnutls ~/cache/
+          sudo cp -a /opt/wolfssl ~/cache/
+          sudo cp -a /opt/wolfssl-gnutls-wrapper ~/cache/
+          sudo chown -R $(id -u):$(id -g) ~/cache
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          ls -la /opt/wolfssl || { echo "/opt/wolfssl not found"; exit 1; }
+          echo "Check for GnuTLS installation..."
+          ls -la /opt/gnutls || { echo "/opt/gnutls not found"; exit 1; }
+          echo "Check for wrapper installation..."
+          ls -la /opt/wolfssl-gnutls-wrapper/lib || { echo "/opt/wolfssl-gnutls-wrapper/lib not found"; exit 1; }
+
+      - name: Clone wireshark
+        run: |
+          git clone https://github.com/wireshark/wireshark.git
+
+      - name: Setup and build wireshark
+        working-directory: wireshark
+        run: |
+          if [[ "${{ matrix.wireshark_ref }}" != "master" ]]; then
+            git checkout ${{ matrix.wireshark_ref }}
+          fi
+          sudo ./tools/debian-setup.sh
+          sudo ./tools/debian-setup.sh --install-deb-deps
+          sudo ./tools/debian-setup.sh --install-test-deps
+          mkdir build && cd build
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          cmake -G Ninja .. \
+          -DENABLE_PCAP=ON \
+          -DENABLE_GNUTLS=ON \
+          -DENABLE_CAP=ON \
+          -DENABLE_SBC=ON \
+          -DENABLE_NETLINK=ON \
+          -DBUILD_mmdbresolve=OFF \
+          -DBUILD_randpktdump=OFF \
+          -DBUILD_androiddump=OFF \
+          -DBUILD_dcerpcidl2wrs=OFF \
+          -DENABLE_QT5=OFF \
+          -DBUILD_wireshark=OFF
+          ninja
+          ninja test-programs
+
+      - name: Test Wireshark (TLS related tests only)
+        working-directory: wireshark
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          cd build
+          pytest ../test/suite_decryption.py -v -s

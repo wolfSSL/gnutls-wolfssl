@@ -1,0 +1,122 @@
+name: xmlsec test
+
+on:
+  push:
+    branches: [ 'master', 'main', 'release/**' ]
+  pull_request:
+    branches: [ '*' ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_gnutls:
+    name: Build wolfSSL, GnuTLS and provider
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ ubuntu-24.04 ]
+        xmlsec_ref: [ 'master', '1.3.4', '1.3.9' ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
+            libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
+            wget git flex autoconf-archive libhttp-daemon-perl ninja-build automake \
+            autoconf libtool libtool-bin gcc \
+            libxml2 libxml2-dev libxslt1.1 libxslt1-dev \
+            help2man man2html gtk-doc-tools \
+            libltdl7 libltdl-dev
+
+      - name: Restore cached gnutls-wolfssl
+        id: cache-gnutls
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/cache/gnutls
+            ~/cache/wolfssl
+            ~/cache/wolfssl-gnutls-wrapper
+          key: gnutls-wolfssl-${{ runner.os }}-${{ hashFiles('setup.sh', 'wolfssl-gnutls-wrapper/**', 'wolfssl/**', 'gnutls/**') }}
+          restore-keys: |
+            gnutls-wolfssl-${{ runner.os }}-
+
+      - name: Copy cache to /opt
+        if: steps.cache-gnutls.outputs.cache-hit == 'true'
+        run: |
+          sudo mkdir -p /opt
+          sudo cp -a ~/cache/gnutls /opt/
+          sudo cp -a ~/cache/wolfssl /opt/
+          sudo cp -a ~/cache/wolfssl-gnutls-wrapper /opt/
+          echo "Cache restored successfully"
+
+      - name: Build GnuTLS with wolfSSL provider using setup.sh script
+        if: steps.cache-gnutls.outputs.cache-hit != 'true'
+        run: |
+          echo "Cache miss - running setup.sh..."
+          GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
+          # Save to cache location
+          mkdir -p ~/cache
+          sudo cp -a /opt/gnutls ~/cache/
+          sudo cp -a /opt/wolfssl ~/cache/
+          sudo cp -a /opt/wolfssl-gnutls-wrapper ~/cache/
+          sudo chown -R $(id -u):$(id -g) ~/cache
+
+      - name: Check setup.sh output directories
+        run: |
+          echo "Check for wolfSSL installation..."
+          ls -la /opt/wolfssl || { echo "/opt/wolfssl not found"; exit 1; }
+          echo "Check for GnuTLS installation..."
+          ls -la /opt/gnutls || { echo "/opt/gnutls not found"; exit 1; }
+          echo "Check for wrapper installation..."
+          ls -la /opt/wolfssl-gnutls-wrapper/lib || { echo "/opt/wolfssl-gnutls-wrapper/lib not found"; exit 1; }
+
+      - name: Clone xmlsec
+        run: |
+          git clone https://github.com/lsh123/xmlsec.git
+
+      - name: Setup and build xmlsec
+        working-directory: xmlsec
+        run: |
+          if [[ "${{ matrix.xmlsec_ref }}" != "master" ]]; then
+            git checkout ${{ matrix.xmlsec_ref }}
+          fi
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          ./autogen.sh
+          ./configure --with-gnutls=/opt/gnutls \
+          --disable-dsa \
+          --enable-sha1 \
+          --enable-sha224 \
+          --enable-sha256 \
+          --enable-sha384 \
+          --enable-sha512 \
+          --enable-sha3 \
+          --enable-ripemd160 \
+          --enable-hmac \
+          --enable-rsa \
+          --enable-ec \
+          --enable-x509 \
+          --enable-aes \
+          --disable-des \
+          --enable-dh \
+          --enable-pbkdf2 \
+          --enable-concatkdf \
+          --enable-xmldsig \
+          --enable-xmlenc \
+          --enable-pedantic \
+          --enable-debugging
+          make -j9
+
+      - name: Test xmlsec
+        working-directory: xmlsec
+        run: |
+          export PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
+          make check
+          find /tmp -name "*.log" | xargs grep wgw
