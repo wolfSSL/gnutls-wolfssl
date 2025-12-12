@@ -41,12 +41,13 @@ ENVIRONMENT VARIABLES:
     WOLFSSL_INSTALL     Installation path for wolfSSL (default: /opt/wolfssl)
     GNUTLS_INSTALL      Installation path for GnuTLS (default: /opt/gnutls)
     PROVIDER_PATH       Path for wolfssl-gnutls-wrapper (default: /opt/wolfssl-gnutls-wrapper)
+    NETTLE_INSTALL      Installation path for nettle 3.10 (default: /opt/nettle, only used for GnuTLS 3.8.11+)
     WOLFSSL_FIPS_BUNDLE Path to pre-downloaded wolfSSL FIPS bundle (optional, FIPS mode only)
 
 NOTES:
     - The script automatically detects macOS or Linux and installs appropriate dependencies
     - On macOS, Homebrew is required for dependency installation
-    - If wolfSSL is already installed system-wide (detectable via pkg-config), 
+    - If wolfSSL is already installed system-wide (detectable via pkg-config),
       the script will use it instead of building from source
     - FIPS mode requires access to the wolfSSL FIPS source repository
 
@@ -107,6 +108,9 @@ fi
 if [ -z "$PROVIDER_PATH" ]; then
     PROVIDER_PATH=/opt/wolfssl-gnutls-wrapper
 fi
+if [ -z "$NETTLE_INSTALL" ]; then
+    NETTLE_INSTALL=/opt/nettle
+fi
 
 # Print configuration
 echo "=============================================="
@@ -122,6 +126,7 @@ echo "  GnuTLS Branch:    $GNUTLS_BRANCH"
 echo "  wolfSSL Install:  $WOLFSSL_INSTALL"
 echo "  GnuTLS Install:   $GNUTLS_INSTALL"
 echo "  Provider Path:    $PROVIDER_PATH"
+echo "  Nettle Install:   $NETTLE_INSTALL"
 echo "=============================================="
 echo ""
 
@@ -286,23 +291,25 @@ else
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
     fi
 
-    if [ "$GNUTLS_BRANCH" -eq "gnutls-wolfssl-3.8.11" ]; then
+    if [ "$GNUTLS_BRANCH" == "gnutls-wolfssl-3.8.11" ]; then
         # Download nettle 3.10, since gnutls 3.8.11 requires nettle to be >= 3.10
+        echo "Installing nettle 3.10 to $NETTLE_INSTALL..."
+
         wget https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz
         tar -xzf nettle-3.10.tar.gz
         cd nettle-3.10
 
         # Build and install
-        ./configure --prefix=/usr/local
+        ./configure --prefix=$NETTLE_INSTALL
         make -j$(nproc)
         sudo make install
 
         # Update library cache
         sudo ldconfig
 
-        export PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH"
-        export LD_LIBRARY_PATH="/usr/local/lib64:$LD_LIBRARY_PATH"
-        export LDFLAGS="-L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64"
+        export PKG_CONFIG_PATH="$NETTLE_INSTALL/lib64/pkgconfig:$NETTLE_INSTALL/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="$NETTLE_INSTALL/lib64:$NETTLE_INSTALL/lib:$LD_LIBRARY_PATH"
+        export LDFLAGS="-L$NETTLE_INSTALL/lib64 -L$NETTLE_INSTALL/lib -Wl,-rpath,$NETTLE_INSTALL/lib64 -Wl,-rpath,$NETTLE_INSTALL/lib"
 
         cd ../
     fi
@@ -331,4 +338,7 @@ echo "  GnuTLS Branch:    $GNUTLS_BRANCH"
 echo "  wolfSSL:          $WOLFSSL_INSTALL"
 echo "  GnuTLS:           $GNUTLS_INSTALL"
 echo "  Provider:         $PROVIDER_PATH"
+if [ "$GNUTLS_BRANCH" == "gnutls-wolfssl-3.8.11" ]; then
+    echo "  Nettle:           $NETTLE_INSTALL"
+fi
 echo "=============================================="
