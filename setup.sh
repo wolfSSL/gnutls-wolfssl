@@ -1,6 +1,103 @@
 #!/bin/bash
 set -e
 
+# Default values
+DEFAULT_GNUTLS_VERSION="3.8.9"
+FIPS_MODE=0
+GNUTLS_VERSION=""
+
+# ============================================================================
+# Help function
+# ============================================================================
+show_help() {
+    cat << EOF
+Usage: $(basename "$0") [OPTIONS] [fips] [VERSION]
+
+Build script for wolfSSL and GnuTLS with optional FIPS 140 mode support.
+
+ARGUMENTS:
+    fips            Enable FIPS 140 mode for the build
+    VERSION         GnuTLS branch version (e.g., 3.8.9, 3.8.11)
+                    The script will checkout branch: gnutls-wolfssl-VERSION
+                    Default version: $DEFAULT_GNUTLS_VERSION
+
+OPTIONS:
+    -h, --help      Show this help message and exit
+
+EXAMPLES:
+    $(basename "$0")
+        Build without FIPS mode, using default GnuTLS branch (gnutls-wolfssl-$DEFAULT_GNUTLS_VERSION)
+
+    $(basename "$0") 3.8.11
+        Build without FIPS mode, using GnuTLS branch gnutls-wolfssl-3.8.11
+
+    $(basename "$0") fips
+        Build with FIPS 140 mode enabled, using default GnuTLS branch (gnutls-wolfssl-$DEFAULT_GNUTLS_VERSION)
+
+    $(basename "$0") fips 3.8.11
+        Build with FIPS 140 mode enabled, using GnuTLS branch gnutls-wolfssl-3.8.11
+
+ENVIRONMENT VARIABLES:
+    WOLFSSL_INSTALL     Installation path for wolfSSL (default: /opt/wolfssl)
+    GNUTLS_INSTALL      Installation path for GnuTLS (default: /opt/gnutls)
+    PROVIDER_PATH       Path for wolfssl-gnutls-wrapper (default: /opt/wolfssl-gnutls-wrapper)
+    WOLFSSL_FIPS_BUNDLE Path to pre-downloaded wolfSSL FIPS bundle (optional, FIPS mode only)
+
+NOTES:
+    - The script automatically detects macOS or Linux and installs appropriate dependencies
+    - On macOS, Homebrew is required for dependency installation
+    - If wolfSSL is already installed system-wide (detectable via pkg-config), 
+      the script will use it instead of building from source
+    - FIPS mode requires access to the wolfSSL FIPS source repository
+
+EOF
+    exit 0
+}
+
+# ============================================================================
+# Parse arguments
+# ============================================================================
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                ;;
+            fips)
+                FIPS_MODE=1
+                shift
+                ;;
+            *)
+                # Assume it's a version number
+                if [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+                    GNUTLS_VERSION="$1"
+                else
+                    echo "ERROR: Unknown argument '$1'"
+                    echo "Use --help for usage information"
+                    exit 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    # Set default version if not specified
+    if [ -z "$GNUTLS_VERSION" ]; then
+        GNUTLS_VERSION="$DEFAULT_GNUTLS_VERSION"
+        GNUTLS_BRANCH="gnutls-wolfssl"
+    else
+        GNUTLS_BRANCH="gnutls-wolfssl-$GNUTLS_VERSION"
+    fi
+}
+
+# ============================================================================
+# Main script starts here
+# ============================================================================
+
+# Parse command line arguments
+parse_arguments "$@"
+
+# Set installation paths with defaults
 if [ -z "$WOLFSSL_INSTALL" ]; then
     WOLFSSL_INSTALL=/opt/wolfssl
 fi
@@ -11,14 +108,22 @@ if [ -z "$PROVIDER_PATH" ]; then
     PROVIDER_PATH=/opt/wolfssl-gnutls-wrapper
 fi
 
-# Check if FIPS mode is enabled via command line argument
-FIPS_MODE=0
-if [ "$1" = "fips" ]; then
-    FIPS_MODE=1
-    echo "Building GnuTLS with FIPS 140 mode enabled"
+# Print configuration
+echo "=============================================="
+echo "Build Configuration:"
+echo "=============================================="
+if [ $FIPS_MODE -eq 1 ]; then
+    echo "  FIPS 140 Mode:    ENABLED"
 else
-    echo "Building GnuTLS without FIPS 140 mode"
+    echo "  FIPS 140 Mode:    DISABLED"
 fi
+echo "  GnuTLS Version:   $GNUTLS_VERSION"
+echo "  GnuTLS Branch:    $GNUTLS_BRANCH"
+echo "  wolfSSL Install:  $WOLFSSL_INSTALL"
+echo "  GnuTLS Install:   $GNUTLS_INSTALL"
+echo "  Provider Path:    $PROVIDER_PATH"
+echo "=============================================="
+echo ""
 
 get_os() {
     case "$(uname -s)" in
@@ -137,13 +242,16 @@ fi
 if [ ! -d "gnutls" ]; then
     echo "Cloning GnuTLS repository..."
     git clone https://github.com/wolfssl/gnutls.git
-    echo "Checking out to gnutls-wolfssl..."
+    echo "Checking out to $GNUTLS_BRANCH..."
     cd ./gnutls
     git fetch --all
-    git checkout -b gnutls-wolfssl origin/gnutls-wolfssl
+    git checkout -b "$GNUTLS_BRANCH" "origin/$GNUTLS_BRANCH"
 else
     cd ./gnutls
-    make clean
+    echo "GnuTLS directory exists. Cleaning and switching to $GNUTLS_BRANCH..."
+    make clean || true
+    git fetch --all
+    git checkout "$GNUTLS_BRANCH" 2>/dev/null || git checkout -b "$GNUTLS_BRANCH" "origin/$GNUTLS_BRANCH"
 fi
 
 ./bootstrap
@@ -178,6 +286,27 @@ else
         CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
     fi
 
+    if [ "$GNUTLS_BRANCH" -eq "gnutls-wolfssl-3.8.11" ]; then
+        # Download nettle 3.10, since gnutls 3.8.11 requires nettle to be >= 3.10
+        wget https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz
+        tar -xzf nettle-3.10.tar.gz
+        cd nettle-3.10
+
+        # Build and install
+        ./configure --prefix=/usr/local
+        make -j$(nproc)
+        sudo make install
+
+        # Update library cache
+        sudo ldconfig
+
+        export PKG_CONFIG_PATH="/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="/usr/local/lib64:$LD_LIBRARY_PATH"
+        export LDFLAGS="-L/usr/local/lib64 -Wl,-rpath,/usr/local/lib64"
+
+        cd ../
+    fi
+
     ./configure $CONFIG_OPTS 'CFLAGS=-DGNUTLS_WOLFSSL'
 
     export GNUTLS_FORCE_FIPS_MODE=1
@@ -193,4 +322,13 @@ make
 sudo make install PROVIDER_PATH="$PROVIDER_PATH" GNUTLS_INSTALL="$GNUTLS_INSTALL" WOLFSSL_INSTALL="$WOLFSSL_INSTALL"
 cd ../
 
-echo "Build completed successfully"
+echo ""
+echo "=============================================="
+echo "Build completed successfully!"
+echo "=============================================="
+echo "  FIPS Mode:        $([ $FIPS_MODE -eq 1 ] && echo 'ENABLED' || echo 'DISABLED')"
+echo "  GnuTLS Branch:    $GNUTLS_BRANCH"
+echo "  wolfSSL:          $WOLFSSL_INSTALL"
+echo "  GnuTLS:           $GNUTLS_INSTALL"
+echo "  Provider:         $PROVIDER_PATH"
+echo "=============================================="
