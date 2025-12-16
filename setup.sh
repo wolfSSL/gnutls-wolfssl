@@ -45,8 +45,6 @@ ENVIRONMENT VARIABLES:
     WOLFSSL_FIPS_BUNDLE Path to pre-downloaded wolfSSL FIPS bundle (optional, FIPS mode only)
 
 NOTES:
-    - The script automatically detects macOS or Linux and installs appropriate dependencies
-    - On macOS, Homebrew is required for dependency installation
     - If wolfSSL is already installed system-wide (detectable via pkg-config),
       the script will use it instead of building from source
     - FIPS mode requires access to the wolfSSL FIPS source repository
@@ -132,7 +130,6 @@ echo ""
 
 get_os() {
     case "$(uname -s)" in
-        Darwin*)    echo "macos";;
         Linux*)     echo "linux";;
         *)          echo "unknown";;
     esac
@@ -155,19 +152,6 @@ if detect_system_wolfssl; then
         WOLFSSL_INSTALL="${WOLFSSL_INSTALL:-$(pkg-config --variable=libdir wolfssl 2>/dev/null | sed 's#/lib.*##')}"
     fi
     : "${WOLFSSL_INSTALL:=/usr}"
-fi
-
-if [ "$OS" = "macos" ]; then
-    echo "Installing macOS dependencies..."
-    brew update
-    for pkg in openssl autoconf automake coreutils libtool gmp nettle p11-kit libtasn1 libunistring gettext bison gtk-doc libev; do
-        brew install $pkg || true
-    done
-    for pkg in nettle wget p11-kit libtasn1 libunistring; do
-        brew upgrade $pkg || true
-    done
-    export PATH="/usr/local/opt/gettext/bin:/opt/homebrew/opt/gettext/bin:$PATH"
-    export PATH="/usr/local/opt/bison/bin:/opt/homebrew/opt/bison/bin:$PATH"
 fi
 
 if [ $FIPS_MODE -eq 1 ]; then
@@ -263,26 +247,7 @@ fi
 autoreconf -fvi
 
 # Base configuration options for GnuTLS
-if [ "$OS" = "macos" ]; then
-    echo "Configuring GnuTLS for macOS..."
-
-    CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --disable-gost --disable-dsa --enable-srp-authentication"
-
-    if [ $FIPS_MODE -eq 1 ]; then
-        CONFIG_OPTS="$CONFIG_OPTS --enable-fips140-mode"
-    fi
-
-    CFLAGS="-I$(brew --prefix libunistring)/include -I$(brew --prefix gmp)/include -I$(brew --prefix libev)/include -DGNUTLS_WOLFSSL" \
-    LDFLAGS="-L$(brew --prefix libunistring)/lib -L$(brew --prefix gmp)/lib -L$(brew --prefix libev)/lib -L$(brew --prefix bison)/lib" \
-    GMP_CFLAGS="-I$(brew --prefix gmp)/include" \
-    GMP_LIBS="-L$(brew --prefix gmp)/lib -lgmp" \
-    PKG_CONFIG_PATH="$(brew --prefix libev)/lib/pkgconfig:$(brew --prefix gmp)/lib/pkgconfig:$PKG_CONFIG_PATH" \
-    CC=clang \
-    ./configure $CONFIG_OPTS
-
-    make -j$(sysctl -n hw.ncpu)
-
-else
+if [ "$OS" = "linux" ]; then
     echo "Configuring GnuTLS for Linux..."
 
     CONFIG_OPTS="--prefix=$GNUTLS_INSTALL/ --disable-doc --disable-manpages --disable-gtk-doc --disable-gost --disable-dsa --disable-full-test-suite --disable-valgrind-tests --disable-dependency-tracking --enable-srp-authentication"
