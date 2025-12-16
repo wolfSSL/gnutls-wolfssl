@@ -128,6 +128,18 @@ jobs:
             test -d /opt/nettle || exit 1
           fi
 
+      - name: Verify GnuTLS version (native runner only)
+        if: matrix.use_container == false
+        run: |
+          export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:/opt/wolfssl/lib:$LD_LIBRARY_PATH
+          GNUTLS_VERSION=$(/opt/gnutls/bin/gnutls-cli --version 2>&1 | grep -oP 'gnutls-cli \K[0-9]+\.[0-9]+\.[0-9]+')
+          echo "Detected GnuTLS version: $GNUTLS_VERSION"
+          if [ "$GNUTLS_VERSION" != "3.8.11" ]; then
+            echo "ERROR: Expected GnuTLS 3.8.11 but got $GNUTLS_VERSION"
+            exit 1
+          fi
+          echo "GnuTLS version verified: 3.8.11"
+
       - name: Build wget at ${{ matrix.wget_ref }}
         uses: actions/checkout@v4
         with:
