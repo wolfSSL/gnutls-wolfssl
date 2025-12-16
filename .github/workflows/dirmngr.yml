@@ -76,8 +76,8 @@ jobs:
             cd ..
           }
 
-          pkg-config --exists --atleast-version=1.51 gpg-error || \
-            build libgpg-error 1.51 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.51.tar.bz2
+          pkg-config --exists --atleast-version=1.56 gpg-error || \
+            build libgpg-error 1.56 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.56.tar.bz2
 
           pkg-config --exists --atleast-version=1.11.0 gcrypt || \
             build libgcrypt 1.11.1 https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.11.1.tar.bz2

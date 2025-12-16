@@ -161,4 +161,6 @@ jobs:
           export WGW_LOGGING=1
           export TEST_REGENERATE_OUTPUT=1
 
-          make check
+          make check || rc=$?
+          cat test-suite.log
+          exit ${rc:-0}
