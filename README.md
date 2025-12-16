@@ -6,11 +6,20 @@ Experimental port of wolfSSL into GnuTLS. One script builds everything and drops
 ```
 git clone https://github.com/wolfssl/gnutls-wolfssl.git
 cd gnutls-wolfssl
-# regular build
+# regular build (uses default GnuTLS 3.8.9)
 ./setup.sh
 
 # build with FIPS 140 support
 ./setup.sh fips
+
+# build specific GnuTLS version
+./setup.sh 3.8.11
+
+# build specific version with FIPS 140 support
+./setup.sh fips 3.8.11
+
+# show help and all options
+./setup.sh --help
 ```
 On success you get:
 ```
@@ -26,6 +35,7 @@ If the loader can’t find the libs, add the path to LD_LIBRARY_PATH (Linux) or 
 | WOLFSSL_INSTALL | /opt/wolfssl | install prefix |
 | GNUTLS_INSTALL  | /opt/gnutls  | install prefix |
 | PROVIDER_PATH | /opt/wolfssl-gnutls-wrapper/ | install prefix|
+| WOLFSSL_FIPS_BUNDLE | - | path to pre-downloaded wolfSSL FIPS bundle (optional, FIPS mode only) |
 | GNUTLS_FORCE_FIPS_MODE | 0 | set to 1 at runtime to enforce FIPS |
 | WGW_LOGGING | 1 |By default wolfssl-gnutls-wrapper will show logging information. Set to 0 to turn off logging |
 | WGW_LOGFILE | - | By default wolfssl-gnutls-wrapper will log to stderr. This can be changed to stdout or a filename |
@@ -36,9 +46,14 @@ If the loader can’t find the libs, add the path to LD_LIBRARY_PATH (Linux) or 
 setup.sh                       do‑it‑all build script
 rebuild-gnutls.sh              rebuild GnuTLS only
 wolfssl/                       upstream clone
-gnutls/                        upstream clone + branch gnutls-wolfssl
+gnutls/                        upstream clone + branch gnutls-wolfssl-VERSION
 wolfssl-gnutls-wrapper/        thin shim + tests
 ```
+
+## Version support
+The setup script supports building different GnuTLS versions by specifying the version number as an argument. The script will checkout the corresponding branch (e.g., `gnutls-wolfssl (3.8.9)`, `gnutls-wolfssl-3.8.11 (3.8.11)`).
+
+**Note:** When building GnuTLS 3.8.11 on Linux, the script automatically downloads and builds nettle 3.10, as this version requires nettle >= 3.10.
 
 ## Tests
 ```
