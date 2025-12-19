@@ -55,7 +55,7 @@ jobs:
       - name: Wrapper-load smoke test
         run: |
           set -e
-          OUT=$(WGW_LOGGING=1 /opt/gnutls/bin/gnutls-cli --version 2>&1 || true)
+          OUT=$(WGW_LOGGING=1 gnutls-cli --version 2>&1 || true)
           echo "$OUT"
           echo "$OUT" | grep -q "ENTER: _gnutls_wolfssl_init" \
             || { echo "::error ::wrapper not initialised – FAIL"; exit 1; }

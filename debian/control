@@ -31,10 +31,16 @@ Rules-Requires-Root: no
 Package: gnutls-wolfssl
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Provides: libgnutls30 (= 3.8.9)
+Conflicts: libgnutls30
+Replaces: libgnutls30
 Section: libs
-Description: GnuTLS linked against wolfSSL (/opt prefix)
+Description: GnuTLS linked against wolfSSL
  GnuTLS 3.x rebuilt to use wolfSSL as its cryptographic backend.
- Installs under /opt/gnutls (To prevent conflicts).
+ Installs to standard system locations (/usr/lib, /usr/bin, etc.).
+ .
+ This package provides a drop-in replacement for libgnutls30, satisfying
+ all dependencies while using wolfSSL as the cryptographic backend.
 
 Package: wolfssl-gnutls-wrapper
 Architecture: any
