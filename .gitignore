@@ -9,3 +9,11 @@ fips-*
 /wolfssl-gnutls-wrapper/.cache/
 /wolfssl-gnutls-wrapper/compile_commands.json
 /wolfssl-gnutls-wrapper/tidy-fixes.yaml
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/gnutls-build/
+debian/gnutls-wolfssl.install
+debian/gnutls-wolfssl.substvars
+debian/gnutls-wolfssl/
+debian/tmp/

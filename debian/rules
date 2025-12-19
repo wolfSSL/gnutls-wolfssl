@@ -1,12 +1,12 @@
 #!/usr/bin/make -f
 
-GNUTLS_INSTALL ?= /opt/gnutls
+GNUTLS_BUILD_DIR := $(CURDIR)/debian/gnutls-build
+GNUTLS_INSTALL ?= $(GNUTLS_BUILD_DIR)
 PROVIDER_PATH ?= /opt/wolfssl-gnutls-wrapper
 
 export GNUTLS_INSTALL
 export PROVIDER_PATH
 
-GNUTLS_INSTALL_REL := $(patsubst /%,%,$(GNUTLS_INSTALL))
 PROVIDER_PATH_REL := $(patsubst /%,%,$(PROVIDER_PATH))
 
 FIPS_ARG :=
@@ -27,21 +27,36 @@ endif
 	dh $@ --buildsystem=makefile
 
 override_dh_auto_configure:
-	echo "$(GNUTLS_INSTALL_REL)/*" > debian/gnutls-wolfssl.install
+	echo "usr/lib/*" > debian/gnutls-wolfssl.install
+	echo "usr/bin/*" >> debian/gnutls-wolfssl.install
+	echo "usr/include/*" >> debian/gnutls-wolfssl.install
+	echo "usr/share/*" >> debian/gnutls-wolfssl.install
 	echo "$(PROVIDER_PATH_REL)/*" > debian/wolfssl-gnutls-wrapper.install
 
 override_dh_auto_build:
 	:
 
 override_dh_auto_install:
-	-sudo rm -rf $(GNUTLS_INSTALL) $(PROVIDER_PATH)
-	
+	mkdir -p $(GNUTLS_BUILD_DIR)
+
 	./setup.sh $(FIPS_ARG)
-	
-	mkdir -p $(CURDIR)/debian/tmp$(dir $(GNUTLS_INSTALL))
+
+	mkdir -p $(CURDIR)/debian/tmp/usr
+
+	if [ -d $(GNUTLS_BUILD_DIR)/lib ]; then \
+		cp -a $(GNUTLS_BUILD_DIR)/lib $(CURDIR)/debian/tmp/usr/; \
+	fi
+	if [ -d $(GNUTLS_BUILD_DIR)/bin ]; then \
+		cp -a $(GNUTLS_BUILD_DIR)/bin $(CURDIR)/debian/tmp/usr/; \
+	fi
+	if [ -d $(GNUTLS_BUILD_DIR)/include ]; then \
+		cp -a $(GNUTLS_BUILD_DIR)/include $(CURDIR)/debian/tmp/usr/; \
+	fi
+	if [ -d $(GNUTLS_BUILD_DIR)/share ]; then \
+		cp -a $(GNUTLS_BUILD_DIR)/share $(CURDIR)/debian/tmp/usr/; \
+	fi
+
 	mkdir -p $(CURDIR)/debian/tmp$(dir $(PROVIDER_PATH))
-	
-	cp -a $(GNUTLS_INSTALL) $(CURDIR)/debian/tmp$(GNUTLS_INSTALL)
 	cp -a $(PROVIDER_PATH) $(CURDIR)/debian/tmp$(PROVIDER_PATH)
 
 override_dh_clean:

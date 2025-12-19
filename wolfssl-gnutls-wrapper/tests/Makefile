@@ -1,4 +1,4 @@
-TESTS = test_hash test_long_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt test_dh_encrypt_and_decrypt test_pk_import_export test_long_hash test_fips test_aessiv
+TESTS = test_hash test_shake test_aescbc test_aescfb8 test_aesgcm test_aesccm test_aesxts test_hmac test_cmac test_gmac test_rnd test_rnd_fork test_tls_prf test_hkdf test_pbkdf2 test_ecdsa_sign_and_verify test_ecdh_encrypt_and_decrypt test_eddsa_sign_and_verify test_rsa_sign_and_verify test_rsa_encrypt_and_decrypt test_dh_encrypt_and_decrypt test_pk_import_export test_long_hash test_fips test_aessiv
 
 PKGCONF ?= pkg-config
 UNAME_S := $(shell uname -s)
@@ -7,12 +7,27 @@ UNAME_S := $(shell uname -s)
 GNUTLS_PREFIX  := $(if $(GNUTLS_INSTALL),$(GNUTLS_INSTALL),/opt/gnutls)
 PROVIDER_PATH  := $(if $(PROVIDER_PATH),$(PROVIDER_PATH),/opt/wolfssl-gnutls-wrapper)
 
-# Use a *scoped* pkg-config for GnuTLS only (no global fallback).
-# PKG_CONFIG_LIBDIR overrides default search dirs so we don't touch system /usr.
-GNUTLS_PKGCONF := PKG_CONFIG_LIBDIR=$(GNUTLS_PREFIX)/lib/pkgconfig $(PKGCONF)
-
-# Detect pkg-config availability of gnutls (ONLY under GNUTLS_PREFIX)
-HAVE_PC_GNUTLS := $(shell $(GNUTLS_PKGCONF) --exists gnutls && echo yes || echo no)
+# Auto-detect GnuTLS location:
+# 1. If GNUTLS_INSTALL is set, use scoped pkg-config lookup
+# 2. If not set, first try system pkg-config (for Debian packages installed to /usr)
+# 3. Otherwise fall back to /opt/gnutls
+ifdef GNUTLS_INSTALL
+  # Use scoped pkg-config for the specified prefix
+  GNUTLS_PKGCONF := PKG_CONFIG_LIBDIR=$(GNUTLS_PREFIX)/lib/pkgconfig $(PKGCONF)
+  HAVE_PC_GNUTLS := $(shell $(GNUTLS_PKGCONF) --exists gnutls && echo yes || echo no)
+else
+  # Try system pkg-config first (no PKG_CONFIG_LIBDIR restriction)
+  HAVE_PC_GNUTLS := $(shell $(PKGCONF) --exists gnutls && echo yes || echo no)
+  ifeq ($(HAVE_PC_GNUTLS),yes)
+    # Found via system pkg-config, update GNUTLS_PREFIX to match
+    GNUTLS_PREFIX := $(shell $(PKGCONF) --variable=prefix gnutls)
+    GNUTLS_PKGCONF := $(PKGCONF)
+  else
+    # Fall back to /opt/gnutls
+    GNUTLS_PKGCONF := PKG_CONFIG_LIBDIR=$(GNUTLS_PREFIX)/lib/pkgconfig $(PKGCONF)
+    HAVE_PC_GNUTLS := $(shell $(GNUTLS_PKGCONF) --exists gnutls && echo yes || echo no)
+  endif
+endif
 
 ifeq ($(HAVE_PC_GNUTLS),yes)
   GNUTLS_CFLAGS := $(shell $(GNUTLS_PKGCONF) --cflags gnutls)
