@@ -25,7 +25,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential gnulib autopoint gperf gtk-doc-tools nettle-dev clang \
             libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
-            wget git flex autoconf-archive libhttp-daemon-perl ninja-build
+            wget git flex autoconf-archive libhttp-daemon-perl ninja-build libnghttp2-dev
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
         uses: actions/cache@v4
@@ -104,6 +104,7 @@ jobs:
           export PKG_CONFIG_PATH=/opt/nettle/lib64/pkgconfig:/opt/nettle/lib/pkgconfig:/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
           export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:$LD_LIBRARY_PATH
           cmake -G Ninja .. \
+          -DENABLE_NGHTTP2=ON \
           -DENABLE_PCAP=ON \
           -DENABLE_GNUTLS=ON \
           -DENABLE_CAP=ON \
@@ -124,3 +125,4 @@ jobs:
           export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:$LD_LIBRARY_PATH
           cd build
           pytest ../test/suite_decryption.py -v -s
+          pytest ../test/suite_dissection.py -v -s
