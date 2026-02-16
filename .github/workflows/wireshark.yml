@@ -123,6 +123,7 @@ jobs:
         run: |
           export PKG_CONFIG_PATH=/opt/nettle/lib64/pkgconfig:/opt/nettle/lib/pkgconfig:/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH
           export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:$LD_LIBRARY_PATH
+          export WGW_LOGGING=1
           cd build
           pytest ../test/suite_decryption.py -v -s
           pytest ../test/suite_dissection.py -v -s

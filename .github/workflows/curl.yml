@@ -100,4 +100,4 @@ jobs:
         working-directory: curl
         run: |
           export USER=root
-          WGW_LOGGING=0 make -j $(nproc) test-ci
+          make -j $(nproc) test-ci

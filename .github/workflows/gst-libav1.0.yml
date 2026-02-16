@@ -180,4 +180,5 @@ jobs:
           export LDFLAGS="-L/opt/gnutls/lib -L/opt/ffmpeg-gnutls/lib -L/opt/gstreamer/lib \
             -Wl,-rpath,/opt/gnutls/lib -Wl,-rpath=/opt/ffmpeg-gnutls/lib -Wl,-rpath,/opt/gstreamer/lib $LDFLAGS"
           export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/ffmpeg-gnutls/lib:/opt/gstreamer/lib:$LD_LIBRARY_PATH"
+          export WGW_LOGGING=1
           meson test -C build --print-errorlogs

@@ -172,6 +172,7 @@ jobs:
           EOF
           export VALGRIND_OPTS=--suppressions=valgrind.supp
           export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib
+          export WGW_LOGGING=1
           make check 2>&1 | tee test.log
           awk '/^FAIL:/ {gsub(/\.sh$/, ".log", $2); print "==== " $2 " ===="; system("cat tests/" $2 "\n")}' test.log
           echo "Check for failures"

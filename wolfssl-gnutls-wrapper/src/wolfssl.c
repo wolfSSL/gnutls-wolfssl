@@ -44,8 +44,8 @@ int _gnutls_wolfssl_init(void)
     int ret;
     char* str;
 
-    /* Set logging to be enabled. */
-    loggingEnabled = 1;
+    /* Set logging to be disabled by default. */
+    loggingEnabled = 0;
     /* Set default logging file descriptor. */
     loggingFd = stderr;
 #if defined(XGETENV) && !defined(NO_GETENV)

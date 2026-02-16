@@ -145,7 +145,7 @@ jobs:
 
           # Run tests WITH provider
           echo "=== RUNNING TESTS WITH PROVIDER ==="
-          export WGW_LOGGING=0
+
 
           > /tmp/with_provider.log
 

@@ -102,4 +102,6 @@ jobs:
 
       - name: Test VTE build
         working-directory: vte
-        run: ninja -C _build test --verbose
+        run: |
+          export WGW_LOGGING=1
+          ninja -C _build test --verbose

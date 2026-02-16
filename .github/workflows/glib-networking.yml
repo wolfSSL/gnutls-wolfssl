@@ -111,6 +111,7 @@ jobs:
         # Run all tests, 'meson test', when they are working
         # mock PKCS#11 is failing with GnuTLS
         run: |
+          export WGW_LOGGING=1
           cd build
           if [ ${{ matrix.glib-networking_ref }} = '2.74.0' ]; then
             meson test gnome file-database-gnutls environment certificate-gnutls

@@ -99,4 +99,5 @@ jobs:
           export CPPFLAGS="-I/opt/gnutls/include ${CPPFLAGS:-}"
           export LDFLAGS="-L/opt/gnutls/lib -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/opt/gnutls/lib ${LDFLAGS:-}"
           export LD_LIBRARY_PATH="/opt/gnutls/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+          export WGW_LOGGING=1
           make quicktest -j"$(nproc)"

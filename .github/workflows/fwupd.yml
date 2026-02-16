@@ -125,5 +125,6 @@ jobs:
       - name: Test fwupd
         working-directory: fwupd
         run: |
+          export WGW_LOGGING=1
           meson test -C builddir --print-errorlogs
 

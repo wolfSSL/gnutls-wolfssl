@@ -95,6 +95,7 @@ jobs:
       - name: Run unit-tests that don’t need hardware
         working-directory: libcamera/build
         run: |
+          export WGW_LOGGING=1
           if [ "${{ matrix.libcamera_ref }}" = "v0.0.3" ]; then
             meson test -v \
               'control_info' 'control_value' \

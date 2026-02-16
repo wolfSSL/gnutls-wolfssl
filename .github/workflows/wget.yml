@@ -204,5 +204,6 @@ jobs:
           if [[ "${{ matrix.wget_ref }}" = "v1.21.4" ]]; then
             export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib:$LD_LIBRARY_PATH
           fi
+          export WGW_LOGGING=1
           make check
           find . -name '*.log' | xargs grep wgw
