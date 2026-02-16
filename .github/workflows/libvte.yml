@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest ]
-        vte_ref: [ 'master', '0.70.6']
+        vte_ref: [ '0.70.6' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     container:
@@ -92,12 +92,12 @@ jobs:
       - name: Verify VTE is linked against the custom GnuTLS
         working-directory: vte/_build
         run: |
-          lib=$(find src -maxdepth 1 -name 'libvte-2.91*.so*' | head -n 1)
+          lib=$(find src -maxdepth 1 -type f -name 'libvte-2.91*.so*' | head -n 1)
           echo "Checking linkage for $lib"
           ldd "$lib" | grep gnutls
           if ! ldd "$lib" | grep -q '/opt/gnutls/lib/libgnutls.so'; then
-          echo "::error::VTE is NOT linked against /opt/gnutls/lib/libgnutls.so"
-          exit 1
+            echo "::error::VTE is NOT linked against /opt/gnutls/lib/libgnutls.so"
+            exit 1
           fi
 
       - name: Test VTE build

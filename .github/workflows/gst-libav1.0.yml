@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       matrix:
-        gst_ref: [ 'master', 'debian/1.26.2-1', 'debian/1.26.3-1' ]
+        gst_ref: [ 'debian/1.26.2-1', 'debian/1.26.3-1' ]
       fail-fast: false
     steps:
       - name: Checkout gnutls-wolfssl repository
@@ -108,7 +108,7 @@ jobs:
       - name: Build FFmpeg with GnuTLS & MPEG-4 encoder
         run: |
           cd $RUNNER_WORKSPACE
-          git clone https://git.ffmpeg.org/ffmpeg.git ffmpeg-gnutls
+          git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg-gnutls
           cd ffmpeg-gnutls
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/gstreamer/lib/pkgconfig"
           export CPPFLAGS="-I/opt/gnutls/include -I/opt/gstreamer/include"
