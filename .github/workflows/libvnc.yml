@@ -116,5 +116,6 @@ jobs:
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
           export LDFLAGS="-L/opt/gnutls/lib -Wl,-rpath,/opt/gnutls/lib $LDFLAGS"
           export LD_LIBRARY_PATH="/opt/gnutls/lib:$LD_LIBRARY_PATH"
+          export WGW_LOGGING=1
           cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll test/
           ctest -C Debug --output-on-failure

@@ -101,5 +101,5 @@ jobs:
         working-directory: qpdf
         run: |
           cd build
-          WGW_LOGGING=0 ctest --verbose
+          ctest --verbose
 

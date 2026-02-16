@@ -134,6 +134,7 @@ jobs:
         export LDFLAGS="-L/opt/gnutls/lib -L/opt/curl/lib -Wl,-rpath,/opt/gnutls/lib:/opt/curl/lib${LDFLAGS:+ $LDFLAGS}"
         export LD_LIBRARY_PATH="/opt/gnutls/lib:/opt/curl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         export NM_TEST_REGENERATE=1
+        export WGW_LOGGING=1
 
         if [ "${{ matrix.nm_version }}" != "1.42.4" ]; then
           ninja -C build-gnutls test

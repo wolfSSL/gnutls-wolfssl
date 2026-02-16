@@ -142,5 +142,6 @@ jobs:
                           -Wl,-rpath,$PREFIX_LOCAL/lib -Wl,-rpath,$PREFIX_GNUTLS/lib"
 
           export LD_LIBRARY_PATH=/usr/local/lib:/opt/gnutls/lib
+          export WGW_LOGGING=1
           cd gnupg/dirmngr
           make check

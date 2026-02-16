@@ -57,6 +57,7 @@ jobs:
 
       - name: Run unit tests
         run: |
+          export WGW_LOGGING=1
           TEST_RESULT=0
           cd wolfssl-gnutls-wrapper
           ${{ matrix.provider }} make test || TEST_RESULT=$?
@@ -103,6 +104,7 @@ jobs:
 
       - name: Run Valgrind tests
         run: |
+          export WGW_LOGGING=1
           cd wolfssl-gnutls-wrapper/tests/
           make run_valgrind
 

@@ -200,4 +200,4 @@ jobs:
       - name: Test OpenLDAP
         working-directory: openldap
         run: |
-          WGW_LOGGING=0 make test
+          make test

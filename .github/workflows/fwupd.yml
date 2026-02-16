@@ -98,7 +98,7 @@ jobs:
           git checkout ${{ matrix.fwupd_ref }}
 
       - name: Patch fwupd tests for Debian Bookworm compatibility
-        if: matrix.fwupd_ref != '1.9.26'
+        if: matrix.fwupd_ref != '1.9.26' matrix.fwupd_ref != 'master'
         working-directory: fwupd
         run: |
           # GLib in Debian Bookworm emits WARNING for invalid properties while
@@ -125,5 +125,6 @@ jobs:
       - name: Test fwupd
         working-directory: fwupd
         run: |
+          export WGW_LOGGING=1
           meson test -C builddir --print-errorlogs
 

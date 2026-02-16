@@ -99,4 +99,5 @@ jobs:
         working-directory: libjcat
         run: |
           . ~/.venvs/meson-056/bin/activate
+          export WGW_LOGGING=1
           meson test -C _build-custom --verbose

@@ -103,4 +103,5 @@ jobs:
         working-directory: chrony
         run: |
           export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib
+          export WGW_LOGGING=1
           make check
