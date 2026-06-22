@@ -76,11 +76,7 @@ jobs:
 
       - name: Checkout libcamera at ${{ matrix.libcamera_ref }}
         run: |
-          git clone https://git.libcamera.org/libcamera/libcamera.git
-          cd libcamera
-          if [ "${{ matrix.libcamera_ref }}" != "master" ]; then
-            git checkout ${{ matrix.libcamera_ref }}
-          fi
+          git clone --depth=1 --branch ${{ matrix.libcamera_ref }} https://gitlab.freedesktop.org/camera/libcamera.git
 
       - name: Configure and build libcamera
         working-directory: libcamera

@@ -51,11 +51,7 @@ jobs:
 
       - name: Clone libnice @ ref
         run: |
-          git clone https://github.com/libnice/libnice.git
-          cd libnice
-          if [ "${{ matrix.libnice_ref }}" != "master" ]; then
-            git checkout ${{ matrix.libnice_ref }}
-          fi
+          git clone --depth=1 --branch ${{ matrix.libnice_ref }} https://github.com/libnice/libnice.git
 
       - name: Configure & build with Meson/Ninja
         working-directory: libnice

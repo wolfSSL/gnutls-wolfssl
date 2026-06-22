@@ -76,11 +76,7 @@ jobs:
 
       - name: Checkout libjcat at ${{ matrix.libjcat_ref }}
         run: |
-          git clone https://github.com/hughsie/libjcat.git
-          cd libjcat
-          if [ "${{ matrix.libjcat_ref }}" != "master" ]; then
-            git checkout ${{ matrix.libjcat_ref }}
-          fi
+          git clone --depth=1 --branch ${{ matrix.libjcat_ref }} https://github.com/hughsie/libjcat.git
 
       - name: Configure and build libjcat
         working-directory: libjcat

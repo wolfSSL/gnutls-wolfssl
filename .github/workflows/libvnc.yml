@@ -71,11 +71,7 @@ jobs:
 
       - name: Checkout libvnc at ${{ matrix.libvnc_ref }}
         run: |
-          git clone https://github.com/LibVNC/libvncserver.git
-          cd libvncserver
-          if [ "${{ matrix.libvnc_ref }}" != "master" ]; then
-            git checkout ${{ matrix.libvnc_ref }}
-          fi
+          git clone --depth=1 --branch ${{ matrix.libvnc_ref }} https://github.com/LibVNC/libvncserver.git
 
       - name: Configure and build libvncserver
         working-directory: libvncserver

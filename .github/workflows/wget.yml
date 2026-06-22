@@ -62,7 +62,6 @@ jobs:
             libtasn1-bin libtasn1-6-dev libunistring-dev libp11-kit-dev libunbound-dev \
             wget git flex autoconf-archive libhttp-daemon-perl
 
-     # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
         uses: actions/cache@v4
@@ -174,6 +173,13 @@ jobs:
         run: |
           make -j $(nproc)
       # Get python 3.11 for old versions of wget
+      - name: Cache pyenv Python 3.11.9
+        id: cache-pyenv
+        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
+        uses: actions/cache@v4
+        with:
+          path: ~/.pyenv
+          key: pyenv-3.11.9-${{ matrix.os }}-${{ matrix.use_container }}
       - name: Install pyenv dependencies
         if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
         run: |
@@ -183,7 +189,7 @@ jobs:
             libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
             libffi-dev liblzma-dev
       - name: Install pyenv
-        if: matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4'
+        if: (matrix.wget_ref == 'v1.21.3' || matrix.wget_ref == 'v1.21.4') && steps.cache-pyenv.outputs.cache-hit != 'true'
         run: |
           curl https://pyenv.run | bash
       - name: Test wget
@@ -195,7 +201,7 @@ jobs:
             export PATH="$PYENV_ROOT/bin:$PATH"
             eval "$(pyenv init --path)"
             eval "$(pyenv virtualenv-init -)"
-            pyenv install 3.11.9
+            pyenv install -s 3.11.9
             pyenv global 3.11.9
             python --version
           fi
@@ -205,5 +211,5 @@ jobs:
             export LD_LIBRARY_PATH=/opt/nettle/lib64:/opt/nettle/lib:/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib:$LD_LIBRARY_PATH
           fi
           export WGW_LOGGING=1
-          make check
+          make check -j"$(nproc)"
           find . -name '*.log' | xargs grep wgw

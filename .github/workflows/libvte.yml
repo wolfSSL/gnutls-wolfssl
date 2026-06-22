@@ -74,11 +74,7 @@ jobs:
 
       - name: Checkout VTE at ${{ matrix.vte_ref }}
         run: |
-          git clone https://github.com/GNOME/vte.git
-          cd vte
-          if [ "${{ matrix.vte_ref }}" != "master" ]; then
-            git checkout ${{ matrix.vte_ref }}
-          fi
+          git clone --depth=1 --branch ${{ matrix.vte_ref }} https://github.com/GNOME/vte.git
 
       - name: Configure and build VTE
         working-directory: vte

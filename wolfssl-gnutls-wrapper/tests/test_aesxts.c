@@ -1,5 +1,6 @@
 
 #include <gnutls/crypto.h>
+#include <stdlib.h>
 
 #include "test_util.h"
 
@@ -97,15 +98,18 @@ static int test_aesxts(gnutls_cipher_algorithm_t cipher,
     /* Copy plaintext to a non-const buffer for GnuTLS */
     memcpy(plaintext, plaintext_data, sizeof(plaintext_data));
 
-    /* Try bad key - same data for both keys or key too small. */
-    ret = gnutls_cipher_init(&encrypt_handle, cipher, &bad_key, &iv);
-    if (gnutls_fips140_mode_enabled() && ret == 0) {
-        print_gnutls_error("initializing cipher with bad key", ret);
-        return 1;
-    }
-    if (!gnutls_fips140_mode_enabled() && ret != 0) {
-        print_gnutls_error("initializing cipher with bad key", ret);
-        return 1;
+    /* Try bad key - same data for both keys. The wolfSSL provider rejects
+     * identical XTS key halves in all modes; native GnuTLS/Nettle (used when
+     * GNUTLS_NO_PROVIDER=1) accepts them in non-FIPS mode, so only enforce the
+     * rejection when the provider is in use. */
+    if (!getenv("GNUTLS_NO_PROVIDER")) {
+        ret = gnutls_cipher_init(&encrypt_handle, cipher, &bad_key, &iv);
+        if (ret == 0) {
+            gnutls_cipher_deinit(encrypt_handle);
+            fprintf(stderr, "Unexpected success initializing "
+                    "cipher with bad XTS key\n");
+            return 1;
+        }
     }
 
     /********** ENCRYPTION TEST **********/

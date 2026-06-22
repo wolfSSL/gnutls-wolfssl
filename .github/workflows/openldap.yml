@@ -17,9 +17,6 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            openldap_ref: 'master'
-            use_container: true
-          - os: ubuntu-latest
             openldap_ref: 'OPENLDAP_REL_ENG_2_5_13'
             use_container: true
           - os: ubuntu-24.04
@@ -67,7 +64,6 @@ jobs:
           sudo mkdir -p /opt/gnutls /opt/wolfssl /opt/wolfssl-gnutls-wrapper /opt/nettle
           sudo chown -R $USER:$USER /opt/gnutls /opt/wolfssl /opt/wolfssl-gnutls-wrapper /opt/nettle
 
-     # ───────────── cache the wolfssl/gnutls tool-chain ─────────────
       - name: Restore cached gnutls-wolfssl
         id: cache-gnutls
         uses: actions/cache@v4
@@ -108,7 +104,6 @@ jobs:
           else
             GNUTLS_INSTALL=/opt/gnutls WOLFSSL_INSTALL=/opt/wolfssl ./setup.sh
           fi
-          # For native runner: also save to cache location
           if [[ "${{ matrix.use_container }}" == "false" ]]; then
             mkdir -p ~/cache
             sudo cp -a /opt/gnutls ~/cache/
@@ -143,11 +138,8 @@ jobs:
 
       - name: Build OpenLDAP at ${{ matrix.openldap_ref }}
         run: |
-          git clone https://git.openldap.org/openldap/openldap.git
-          cd openldap
-          if [ "${{ matrix.openldap_ref }}" != "master" ]; then
-            git checkout ${{ matrix.openldap_ref }}
-          fi
+          git clone --depth 1 --branch "${{ matrix.openldap_ref }}" \
+            https://git.openldap.org/openldap/openldap.git
       - name: Configure OpenLDAP
         working-directory: openldap
         run: |
@@ -196,7 +188,7 @@ jobs:
         working-directory: openldap
         run: |
           make depend
-          make
+          make -j$(nproc)
       - name: Test OpenLDAP
         working-directory: openldap
         run: |

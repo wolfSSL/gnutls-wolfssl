@@ -93,12 +93,10 @@ jobs:
 
       - name: Build fwupd at ${{ matrix.fwupd_ref }}
         run: |
-          git clone https://github.com/fwupd/fwupd.git
-          cd fwupd
-          git checkout ${{ matrix.fwupd_ref }}
+          git clone --depth=1 --branch ${{ matrix.fwupd_ref }} https://github.com/fwupd/fwupd.git
 
       - name: Patch fwupd tests for Debian Bookworm compatibility
-        if: matrix.fwupd_ref != '1.9.26' matrix.fwupd_ref != 'master'
+        if: matrix.fwupd_ref != '1.9.26'
         working-directory: fwupd
         run: |
           # GLib in Debian Bookworm emits WARNING for invalid properties while
@@ -107,7 +105,40 @@ jobs:
           # This gets applied only for the latest version and the latest main branch,
           # target version remains untouched since it's using the correct older version
           # of glib that matches the one on debian:bookworm.
-          sed -i 's/GLib-GObject-CRITICAL/GLib-GObject-WARNING/g' libfwupd/fwupd-self-test.c
+          if [ "${{ matrix.fwupd_ref }}" != "main" ]; then
+            sed -i 's/GLib-GObject-CRITICAL/GLib-GObject-WARNING/g' libfwupd/fwupd-self-test.c
+          else
+            sed -i 's/GLib-GObject-CRITICAL/GLib-GObject-WARNING/g' libfwupd/fwupd-client-test.c
+          fi
+
+      - name: Patch fwupd 1.9.26 tests for Debian Bookworm's libxmlb
+        if: matrix.fwupd_ref == '1.9.26'
+        working-directory: fwupd
+        run: |
+          # Debian Bookworm updated libxmlb to 0.3.22 in a stable point release.
+          # The newer libxmlb writes an empty XML element in the short
+          # self-closing form ("<chunks />") instead of an open/close pair
+          # ("<chunks>\n</chunks>"). Both mean the same thing, but fwupd 1.9.26's
+          # fu_chunk_func test compares the exact text, so it aborts.
+          # Formatting only, unrelated to the wolfSSL/GnuTLS provider.
+          # Adjust the expected string to match the libxmlb shipped in the container.
+          sed -i 's|<chunks>\\n</chunks>\\n|<chunks />\\n|g' libfwupdplugin/fu-self-test.c
+          # Fail loudly if the pattern was not found (e.g. test source changed).
+          grep -qF '"<chunks />\n"' libfwupdplugin/fu-self-test.c
+
+      - name: Install Rust toolchain (main only)
+        if: matrix.fwupd_ref == 'main'
+        run: |
+          # fwupd main now declares Rust as a required project language
+          # (meson aborts with "Unknown compiler(s): [['rustc']]" otherwise)
+          # and needs rustc >= 1.75. Debian Bookworm ships 1.63, so install a
+          # minimal stable toolchain via rustup instead. The Rust code only
+          # contains fwupd's own crates, no crypto, so this is unrelated to the
+          # wolfSSL/GnuTLS provider.
+          sudo apt-get install -y curl
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Configure fwupd
         working-directory: fwupd
