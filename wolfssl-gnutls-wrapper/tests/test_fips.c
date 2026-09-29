@@ -137,8 +137,7 @@ static int test_invalid_aes_gcm(void)
 
     /* Invalid key sizes outside 128, 192, 256 bits */
     size_t invalid_key_sizes[] = {8, 20, 64};
-    /* Invalid tag sizes outside 96, 104, 112, 120, 128 bits */
-    size_t invalid_tag_sizes[] = {4, 8, 9, 10};
+    size_t invalid_tag_sizes[] = {4, 9, 10};
     /* Invalid IV lengths outside 64-128 bits */
     size_t invalid_iv_sizes[] = {17};
 

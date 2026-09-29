@@ -17,9 +17,10 @@ const unsigned char expected_sha256_hmac[] = {
     0xd6, 0xb5, 0x99, 0xfa, 0x38, 0x4f, 0xa1, 0x50
 };
 
+/* AES-CMAC-128 over 2^32-1 zero bytes (cmac_sz), the wolfSSL CMAC input cap */
 const unsigned char expected_aes_cmac_128[] = {
-    0x41, 0x83, 0x93, 0x5b, 0x5f, 0x82, 0x1c, 0x4f,
-    0x83, 0xed, 0x73, 0x07, 0x23, 0x28, 0x53, 0xa4,
+    0x92, 0xc7, 0x0f, 0x38, 0xd0, 0x25, 0xaf, 0xd7,
+    0x6a, 0x06, 0x86, 0x23, 0x95, 0xc3, 0x26, 0xad,
 };
 
 
@@ -98,6 +99,8 @@ int main(int argc, char* argv[])
     int ret;
     unsigned char* buf;
     size_t buf_sz = 0x100000000;
+    /* wolfSSL caps total CMAC input at 2^32-1 bytes per context. */
+    size_t cmac_sz = 0xffffffff;
     unsigned char output[32];
 
     if (argc == 2 && strcmp(argv[1], "-fast") == 0) {
@@ -127,7 +130,7 @@ int main(int argc, char* argv[])
         ret = hmac_long(buf, buf_sz, output);
     }
     if (ret == 0) {
-        ret = cmac_long(buf, buf_sz, output);
+        ret = cmac_long(buf, cmac_sz, output);
     }
     /* Can't do GMAC long unless we implement with GCM streaming. */
 
