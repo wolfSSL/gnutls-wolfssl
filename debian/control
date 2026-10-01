@@ -31,9 +31,9 @@ Rules-Requires-Root: no
 Package: gnutls-wolfssl
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
-Provides: libgnutls30 (= 3.8.9)
-Conflicts: libgnutls30
-Replaces: libgnutls30
+Provides: libgnutls30 (= 3.8.9), libgnutls30t64 (= 3.8.9)
+Conflicts: libgnutls30, libgnutls30t64
+Replaces: libgnutls30, libgnutls30t64
 Section: libs
 Description: GnuTLS linked against wolfSSL
  GnuTLS 3.x rebuilt to use wolfSSL as its cryptographic backend.
