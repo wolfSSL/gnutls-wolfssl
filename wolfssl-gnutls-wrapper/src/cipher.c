@@ -438,9 +438,9 @@ int wolfssl_cipher_setkey(void *_ctx, const void *key, size_t keysize)
     }
 
 #ifdef WOLFSSL_AES_XTS
-    if (ctx->mode == XTS && gnutls_fips140_mode_enabled()) {
-        /* XTS has two AES keys that are no allowed to be the same. */
-        if (XMEMCMP(key, key + exp_key_size / 2, exp_key_size / 2) == 0) {
+    if (ctx->mode == XTS) {
+        /* XTS has two AES keys that are not allowed to be the same. */
+        if (XMEMCMP(key, ((const unsigned char*)key) + exp_key_size / 2, exp_key_size / 2) == 0) {
             WGW_ERROR("XTS keys are the same");
             return GNUTLS_E_INVALID_REQUEST;
         }

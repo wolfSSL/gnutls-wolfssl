@@ -82,9 +82,7 @@ jobs:
 
       - name: Build qpdf at ${{ matrix.qpdf_ref }}
         run: |
-          git clone https://github.com/qpdf/qpdf.git
-          cd qpdf
-          git checkout ${{ matrix.qpdf_ref }}
+          git clone --depth=1 --branch ${{ matrix.qpdf_ref }} https://github.com/qpdf/qpdf.git
 
       - name: Configure qpdf
         working-directory: qpdf

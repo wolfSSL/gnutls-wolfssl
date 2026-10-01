@@ -76,11 +76,8 @@ jobs:
 
       - name: Clone Samba
         run: |
-          git clone https://gitlab.com/samba-team/samba.git samba
-          cd samba
-          if [ "${{ matrix.samba_ref }}" != "master" ]; then
-            git checkout ${{ matrix.samba_ref }}
-          fi
+          git clone --depth=1 --branch "${{ matrix.samba_ref }}" \
+            https://gitlab.com/samba-team/samba.git
 
       - name: Configure & build Samba-libs
         working-directory: samba

@@ -79,8 +79,17 @@ jobs:
           pkg-config --exists --atleast-version=1.56 gpg-error || \
             build libgpg-error 1.56 https://gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-1.56.tar.bz2
 
-          pkg-config --exists --atleast-version=1.11.0 gcrypt || \
-            build libgcrypt 1.11.1 https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.11.1.tar.bz2
+          # GnuPG master now requires libgcrypt >= 1.12.0 (configure aborts with
+          # "You need libgcrypt to build this program" otherwise). The target
+          # version keeps building against 1.11.1, which is what it was
+          # validated with.
+          if [ "${{ matrix.gnupg_ref }}" = "gnupg-2.2.41" ]; then
+            pkg-config --exists --atleast-version=1.11.0 gcrypt || \
+              build libgcrypt 1.11.1 https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.11.1.tar.bz2
+          else
+            pkg-config --exists --atleast-version=1.12.0 gcrypt || \
+              build libgcrypt 1.12.4 https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-1.12.4.tar.bz2
+          fi
 
           if [ "${{ matrix.gnupg_ref }}" = "gnupg-2.2.41" ]; then
             build libassuan 2.5.5 https://gnupg.org/ftp/gcrypt/libassuan/libassuan-2.5.5.tar.bz2

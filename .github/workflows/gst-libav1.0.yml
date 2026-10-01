@@ -84,9 +84,8 @@ jobs:
         if: steps.cache-gstreamer.outputs.cache-hit != 'true'
         run: |
           pip3 install --break-system-packages meson ninja
-          git clone https://github.com/GStreamer/gstreamer.git gstreamer-source
+          git clone --depth=1 --branch 1.26.2 https://github.com/GStreamer/gstreamer.git gstreamer-source
           cd gstreamer-source
-          git checkout 1.26.2
           meson setup build \
             --prefix=/opt/gstreamer \
             --libdir=lib \
@@ -108,9 +107,8 @@ jobs:
       - name: Build FFmpeg with GnuTLS & MPEG-4 encoder
         run: |
           cd $RUNNER_WORKSPACE
-          git clone https://github.com/FFmpeg/FFmpeg.git ffmpeg-gnutls
+          git clone --depth=1 --branch n8.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg-gnutls
           cd ffmpeg-gnutls
-          git checkout n8.1
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:/opt/gstreamer/lib/pkgconfig"
           export CPPFLAGS="-I/opt/gnutls/include -I/opt/gstreamer/include"
           export LDFLAGS="-L/opt/gnutls/lib -L/opt/gstreamer/lib -Wl,-rpath,/opt/gnutls/lib -Wl,-rpath,/opt/gstreamer/lib"
@@ -141,10 +139,7 @@ jobs:
           done
       - name: Clone & checkout gst-libav1.0 @ ${{ matrix.gst_ref }}
         run: |
-          git clone https://salsa.debian.org/gstreamer-team/gst-libav1.0.git gst-libav
-          cd gst-libav
-          git fetch --tags
-          git checkout ${{ matrix.gst_ref }}
+          git clone --depth=1 --branch ${{ matrix.gst_ref }} https://salsa.debian.org/gstreamer-team/gst-libav1.0.git gst-libav
       - name: Build gst-libav1.0 (${{ matrix.gst_ref }})
         working-directory: gst-libav
         run: |

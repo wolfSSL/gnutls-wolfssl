@@ -102,7 +102,16 @@ jobs:
       - name: Configure rsyslog
         working-directory: rsyslog
         run: |
-          ./autogen.sh --enable-gnutls --disable-libgcrypt --enable-testbench --enable-imdiag --enable-omstdout PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
+          # adding --without-valgrind-testbench basically drops the entire *-vg.sh
+          # subset from the make check run.
+          # with valgrind, in this container, rsyslogd starts slowly
+          # and the testbench returns (sometimes, but often enough)
+          # false negatives ("pid no longer active during startup"),
+          # aborting the test test before it exercises
+          # anything (valgrind itself reports 0 errors).
+          # unrelated to the provider, and the provider already has valgrind
+          # coverage in unit-tests.yml.
+          ./autogen.sh --enable-gnutls --disable-libgcrypt --enable-testbench --enable-imdiag --enable-omstdout --without-valgrind-testbench PKG_CONFIG_PATH=/opt/gnutls/lib/pkgconfig
 
       - name: Make rsyslog
         working-directory: rsyslog
@@ -111,73 +120,26 @@ jobs:
 
       - name: Test rsyslog
         working-directory: rsyslog
-        if: ${{ matrix.rsyslog_ref == 'main' }}
-        continue-on-error: true
+        # Run the testbench for both the target version and main. The main
+        # branch can be unstable (https://github.com/rsyslog/rsyslog/issues/5771),
+        # so only tolerate failures there.
+        continue-on-error: ${{ matrix.rsyslog_ref == 'main' }}
         run: |
-          cat <<EOF >> tests/valgrind.supp
-          {
-             pselect_cancel
-             Memcheck:Param
-             pselect6(sig)
-             ...
-             fun:pselect64_syscall
-             fun:pselect
-             ...
-          }
-          {
-             pselect_cancel_2
-             Memcheck:Param
-             pselect6(sig)
-             fun:pselect64_syscall
-             fun:pselect
-             ...
-          }
-          {
-             init_leak_malloc
-             Memcheck:Leak
-             match-leak-kinds: definite
-             fun:malloc
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             fun:call_init.part.0
-             fun:call_init
-             fun:_dl_init
-             fun:_dl_catch_exception
-             fun:dl_open_worker
-             fun:dl_open_worker
-             fun:_dl_catch_exception
-             fun:_dl_open
-          }
-          {
-             init_leak_calloc
-             Memcheck:Leak
-             match-leak-kinds: definite
-             fun:calloc
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             obj:*
-             fun:call_init.part.0
-             fun:call_init
-             fun:_dl_init
-             fun:_dl_catch_exception
-             fun:dl_open_worker
-             fun:dl_open_worker
-          }
-          EOF
-          export VALGRIND_OPTS=--suppressions=valgrind.supp
           export LD_LIBRARY_PATH=/opt/gnutls/lib:/opt/wolfssl/lib:/opt/wolfssl-gnutls-wrapper/lib
           export WGW_LOGGING=1
           make check 2>&1 | tee test.log
           awk '/^FAIL:/ {gsub(/\.sh$/, ".log", $2); print "==== " $2 " ===="; system("cat tests/" $2 "\n")}' test.log
           echo "Check for failures"
+          # Gate only on genuine test-result failures (FAIL: <name>.sh). The two
+          # omfile-read-only[-errmsg].sh tests assume a non-root user.
+          # They chmod 0400 an output file and expect the write to be denied so a
+          # fallback action fires. rsyslogd runs as root in the debian:bookworm
+          # container and bypasses the permission, so they fail for environmental
+          # reasons unrelated to the wolfSSL/GnuTLS provider.
+          # Any other functional or TLS failure still fails the job.
           EC=0
-          grep '^FAIL:' test.log && EC=1
+          if grep -E '^FAIL: [^ ]+\.sh' test.log | grep -vE 'omfile-read-only(-errmsg)?\.sh'; then
+            EC=1
+          fi
           exit $EC
 

@@ -77,9 +77,8 @@ jobs:
       - name: Clone and build LibCUPS latest release
         if: matrix.cups_version == 'latest'
         run: |
-          git clone --recurse-submodules https://github.com/OpenPrinting/libcups.git
+          git clone --depth=1 --branch v3.0rc4 --recurse-submodules --shallow-submodules https://github.com/OpenPrinting/libcups.git
           cd libcups
-          git checkout v3.0rc4
 
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
@@ -96,9 +95,8 @@ jobs:
       - name: Clone and build CUPS target release (v2.4.2)
         if: matrix.cups_version == 'target'
         run: |
-          git clone https://github.com/OpenPrinting/cups.git
+          git clone --depth=1 --branch v2.4.2 https://github.com/OpenPrinting/cups.git
           cd cups
-          git checkout v2.4.2
 
           export PKG_CONFIG_PATH="/opt/gnutls/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CPPFLAGS="-I/opt/gnutls/include $CPPFLAGS"
