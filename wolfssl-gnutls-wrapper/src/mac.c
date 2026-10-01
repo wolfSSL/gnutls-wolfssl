@@ -197,11 +197,7 @@ static int wolfssl_hmac_setkey(void *_ctx, const void *key, size_t keysize)
         (word32)keysize);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HmacSetKey", ret);
-#if defined(HAVE_FIPS)
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#else
         return GNUTLS_E_HASH_FAILED;
-#endif
     }
 
     WGW_LOG("hmac key set successfully");
@@ -362,6 +358,7 @@ static int wolfssl_hmac_fast(gnutls_mac_algorithm_t algorithm,
     /* Set key into HMAC context. */
     ret = wolfssl_hmac_setkey(ctx, key, keysize);
     if (ret != 0) {
+        wolfssl_hmac_deinit(ctx);
         return ret;
     }
 

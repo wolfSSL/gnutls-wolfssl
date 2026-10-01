@@ -2461,7 +2461,7 @@ static int wolfssl_pk_generate_params(gnutls_pk_algorithm_t algo,
  * @param [in]      bits    Number of bits in key.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
+ * @return  GNUTLS_E_INVALID_REQUEST when FIPS140 build and 1024 bits.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing RSA key fails.
  * @return  GnuTLS error on other failure.
@@ -2483,7 +2483,7 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     /* missing check for 1024, 1024 is not allowed */
     if (bits == 1024) {
         WGW_ERROR("Bits size not valid");
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+        return GNUTLS_E_INVALID_REQUEST;
     }
 #endif
 
@@ -2509,11 +2509,7 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     if (ret != 0) {
         WGW_ERROR("RSA key generation failed with code %d", ret);
         wc_FreeRsaKey(&rsa);
-#if defined(HAVE_FIPS)
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#else
         return GNUTLS_E_PK_GENERATION_ERROR;
-#endif
     }
 
     /* Store RSA fields in the GnuTLS parameters. */
@@ -2715,7 +2711,7 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2732,7 +2728,7 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_ED25519) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -2817,7 +2813,7 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2834,7 +2830,7 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_ED448) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -2919,7 +2915,7 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2936,7 +2932,7 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_X25519) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for generation. */
@@ -3021,7 +3017,7 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -3038,7 +3034,7 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_X448) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -3125,8 +3121,8 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
  * @param [in]      ephemeral  Key pair is ephemenral - random can be weaker.
  *                             Ignored.
  * @return  0 on success.
- * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_INVALID_REQUEST when FIPS140 build and 1024 bits.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
