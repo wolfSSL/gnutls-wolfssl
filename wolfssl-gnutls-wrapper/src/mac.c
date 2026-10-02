@@ -504,7 +504,6 @@ static int wolfssl_cmac_setkey(void *_ctx, const void *key, size_t keysize)
         WC_CMAC_AES, NULL);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
-        gnutls_free(ctx);
         return GNUTLS_E_HASH_FAILED;
     }
 
@@ -545,7 +544,6 @@ static int wolfssl_cmac_hash(void *_ctx, const void *text, size_t textsize)
             (word32)ctx->key_size, WC_CMAC_AES, NULL);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
-            gnutls_free(ctx);
             return GNUTLS_E_HASH_FAILED;
         }
         ctx->set_key = 0;
@@ -614,7 +612,6 @@ static int wolfssl_cmac_output(void *_ctx, void *digest, size_t digestsize)
             (word32)ctx->key_size, WC_CMAC_AES, NULL);
         if (ret != 0) {
             WGW_WOLFSSL_ERROR("wc_InitCmac", ret);
-            gnutls_free(ctx);
             return GNUTLS_E_HASH_FAILED;
         }
         ctx->set_key = 0;
@@ -687,6 +684,7 @@ static int wolfssl_cmac_fast(gnutls_mac_algorithm_t algorithm,
     /* Set key into CMAC context. */
     ret = wolfssl_cmac_setkey(ctx, key, keysize);
     if (ret != 0) {
+        wolfssl_cmac_deinit(ctx);
         return ret;
     }
 
@@ -862,7 +860,6 @@ static int wolfssl_gmac_setkey(void *_ctx, const void *key, size_t keysize)
     ret = wc_GmacSetKey(&ctx->gmac_ctx, (const byte*)key, (word32)keysize);
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_GmacSetKey", ret);
-        gnutls_free(ctx);
         return GNUTLS_E_HASH_FAILED;
     }
 
@@ -1048,6 +1045,7 @@ static int wolfssl_gmac_fast(gnutls_mac_algorithm_t algorithm,
     /* Set key into GMAC context. */
     ret = wolfssl_gmac_setkey(ctx, key, keysize);
     if (ret != 0) {
+        wolfssl_gmac_deinit(ctx);
         return ret;
     }
 
