@@ -887,6 +887,37 @@ static int wolfssl_pk_encrypt(gnutls_pk_algorithm_t algo,
 }
 
 /**
+ * Finish an RSA decrypt2 (caller-sized output buffer).
+ *
+ * The caller's buffer is written only when the decrypted length equals its
+ * size, by a constant-time masked select; on any failure (padding or length)
+ * it is left unchanged. TLS RSA key exchange prefills it with a random
+ * premaster and ignores the error, so a failure must not change it.
+ *
+ * @param [in, out] plaintext  Caller's buffer and its size.
+ * @param [in]      scratch    Decrypted data, at least plaintext->size bytes.
+ * @param [in]      ret        Result of the wolfCrypt decryption.
+ * @return  0 on success.
+ * @return  GNUTLS_E_DECRYPTION_FAILED otherwise.
+ */
+static int rsa_decrypt2_select(gnutls_datum_t *plaintext,
+    const unsigned char *scratch, int ret)
+{
+    unsigned int diff = (unsigned int)ret ^ plaintext->size;
+    /* All ones when ret equals the size, else zero. */
+    unsigned int ok = ((diff | (0U - diff)) >> (sizeof(diff) * 8 - 1)) - 1U;
+    unsigned char mask = (unsigned char)ok;
+    unsigned int i;
+
+    for (i = 0; i < plaintext->size; i++) {
+        plaintext->data[i] = (unsigned char)((scratch[i] & mask) |
+            (plaintext->data[i] & (unsigned char)~mask));
+    }
+
+    return ok ? 0 : GNUTLS_E_DECRYPTION_FAILED;
+}
+
+/**
  * Decrypt ciphertext using RSA PKCS#1 v1.5 with private key.
  *
  * @param [out] plaintext        Decrypted data.
@@ -909,6 +940,7 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
     unsigned char out[1024];
     unsigned char *plain;
     word32 plain_size;
+    word32 scratch_size = 0;
 
     WGW_FUNC_ENTER();
 
@@ -950,13 +982,24 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
             wc_FreeRsaKey(&rsa);
             return GNUTLS_E_MEMORY_ERROR;
         }
-    }
-    /* Set plain to valid buffer. */
-    if ((!alloc_plaintext) &&
-            (plaintext->size < (unsigned int)wc_RsaEncryptSize(&rsa))) {
-        plain = out;
-    } else {
         plain = plaintext->data;
+    } else {
+        /* decrypt2: never decrypt into the caller's buffer (see
+         * rsa_decrypt2_select()); scratch holds the key size and the
+         * caller's size. */
+        scratch_size = plain_size > plaintext->size ? plain_size :
+            plaintext->size;
+        if (scratch_size <= sizeof(out)) {
+            plain = out;
+        } else {
+            plain = gnutls_malloc(scratch_size);
+            if (plain == NULL) {
+                WGW_ERROR("Allocating memory for plaintext");
+                wc_FreeRsaKey(&rsa);
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+        }
+        XMEMSET(plain, 0, scratch_size);
     }
 
     PRIVATE_KEY_UNLOCK();
@@ -969,29 +1012,26 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
 
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
+
+    if (!alloc_plaintext) {
+        ret = rsa_decrypt2_select(plaintext, plain, ret);
+        gnutls_memset(plain, 0, scratch_size);
+        if (plain != out) {
+            gnutls_free(plain);
+        }
+        return ret;
+    }
+
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPrivateDecrypt", ret);
-        if (alloc_plaintext) {
-            /* Dispose of allocated buffer for plaintext. */
-            gnutls_free(plaintext->data);
-            /* Ensure output datum is empty on error. */
-            plaintext->data = NULL;
-            plaintext->size = 0;
-        }
+        /* Dispose of allocated buffer for plaintext. */
+        gnutls_free(plaintext->data);
+        /* Ensure output datum is empty on error. */
+        plaintext->data = NULL;
+        plaintext->size = 0;
         return GNUTLS_E_DECRYPTION_FAILED;
     }
 
-    /* Check if returning through another buffer. */
-    if (plain != plaintext->data) {
-        /* Ensure the output buffer is big enough. */
-        if ((unsigned int)ret > plaintext->size) {
-            WGW_ERROR("Decrypted data too big for plaintext buffer: %d > %d",
-                ret, plaintext->size);
-            return GNUTLS_E_DECRYPTION_FAILED;
-        }
-        /* Copy the decrypted data into output buffer. */
-        XMEMCPY(plaintext->data, plain, ret);
-    }
     /* Set the actual size into output datum. */
     plaintext->size = ret;
 
@@ -1021,6 +1061,7 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
     unsigned char out[1024];
     unsigned char *plain;
     word32 plain_size;
+    word32 scratch_size = 0;
 
     WGW_FUNC_ENTER();
 
@@ -1064,13 +1105,24 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
             wc_FreeRsaKey(&rsa);
             return GNUTLS_E_MEMORY_ERROR;
         }
-    }
-    /* Set plain to valid buffer. */
-    if ((!alloc_plaintext) &&
-            (plaintext->size < (unsigned int)wc_RsaEncryptSize(&rsa))) {
-        plain = out;
-    } else {
         plain = plaintext->data;
+    } else {
+        /* decrypt2: never decrypt into the caller's buffer (see
+         * rsa_decrypt2_select()); scratch holds the key size and the
+         * caller's size. */
+        scratch_size = plain_size > plaintext->size ? plain_size :
+            plaintext->size;
+        if (scratch_size <= sizeof(out)) {
+            plain = out;
+        } else {
+            plain = gnutls_malloc(scratch_size);
+            if (plain == NULL) {
+                WGW_ERROR("Allocating memory for plaintext");
+                wc_FreeRsaKey(&rsa);
+                return GNUTLS_E_MEMORY_ERROR;
+            }
+        }
+        XMEMSET(plain, 0, scratch_size);
     }
 
     PRIVATE_KEY_UNLOCK();
@@ -1084,29 +1136,26 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
 
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
+
+    if (!alloc_plaintext) {
+        ret = rsa_decrypt2_select(plaintext, plain, ret);
+        gnutls_memset(plain, 0, scratch_size);
+        if (plain != out) {
+            gnutls_free(plain);
+        }
+        return ret;
+    }
+
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPublicDecrypt_ex", ret);
-        if (alloc_plaintext) {
-            /* Dispose of allocated buffer for plaintext. */
-            gnutls_free(plaintext->data);
-            /* Ensure output datum is empty on error. */
-            plaintext->data = NULL;
-            plaintext->size = 0;
-        }
+        /* Dispose of allocated buffer for plaintext. */
+        gnutls_free(plaintext->data);
+        /* Ensure output datum is empty on error. */
+        plaintext->data = NULL;
+        plaintext->size = 0;
         return GNUTLS_E_DECRYPTION_FAILED;
     }
 
-    /* Check if returning through another buffer. */
-    if (plain != plaintext->data) {
-        /* Ensure the output buffer is big enough. */
-        if ((unsigned int)ret > plaintext->size) {
-            WGW_ERROR("Decrypted data too big for plaintext buffer: %d > %d",
-                ret, plaintext->size);
-            return GNUTLS_E_DECRYPTION_FAILED;
-        }
-        /* Copy the decrypted data into output buffer. */
-        XMEMCPY(plaintext->data, plain, ret);
-    }
     /* Set the actual size into output datum. */
     plaintext->size = ret;
 
