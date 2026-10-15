@@ -54,3 +54,17 @@ void print_gnutls_error(const char* op, int ret)
     fprintf(stderr, "Error %s: %s (%d)\n", op, gnutls_strerror(ret), ret);
 }
 
+int refused_or_compare(const char* op, int ret, const unsigned char* output,
+    const unsigned char* expected, size_t sz)
+{
+    if (ret < 0) {
+        printf("%s refused: %s (%d)\n", op, gnutls_strerror(ret), ret);
+        return 0;
+    }
+    if (ret > 0) {
+        printf("FAILURE - %s returned %d, not 0 or a negative error\n", op,
+            ret);
+        return 1;
+    }
+    return compare(op, output, expected, sz);
+}

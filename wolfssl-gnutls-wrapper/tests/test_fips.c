@@ -333,9 +333,12 @@ static int test_invalid_rsa(void)
         printf("Trying RSA key generation with invalid size %u bits...\n", invalid_key_sizes[i]);
 
         ret = gnutls_privkey_generate(privkey, GNUTLS_PK_RSA, invalid_key_sizes[i], 0);
-        if (ret == 0) {
+        if (ret >= 0) {
+            printf("ERROR: RSA key generation with %u bits returned %d, "
+                "not a negative error\n", invalid_key_sizes[i], ret);
             return -1;
         }
+        printf("Refused: %s (%d)\n", gnutls_strerror(ret), ret);
 
         gnutls_privkey_deinit(privkey);
     }
