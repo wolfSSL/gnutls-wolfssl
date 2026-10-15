@@ -736,8 +736,10 @@ static int wolfssl_pk_encrypt_rsa(gnutls_datum_t *ciphertext,
     }
 
     /* Encrypt using RSA PKCS#1 v1.5 padding */
+    wolfssl_rng_lock();
     ret = wc_RsaPublicEncrypt(plaintext->data, plaintext->size,
         ciphertext->data, ciphertext->size, &rsa, &priv_rng);
+    wolfssl_rng_unlock();
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
     if (ret < 0) {
@@ -808,10 +810,12 @@ static int wolfssl_pk_encrypt_rsa_oaep(gnutls_datum_t *ciphertext,
     }
 
     /* Encrypt using RSA PKCS#1 OAEP. */
+    wolfssl_rng_lock();
     ret = wc_RsaPublicEncrypt_ex(plaintext->data, plaintext->size,
         ciphertext->data, ciphertext->size, &rsa, &priv_rng, WC_RSA_OAEP_PAD,
         hash_type, mgf, params->spki.rsa_oaep_label.data,
         params->spki.rsa_oaep_label.size);
+    wolfssl_rng_unlock();
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
     if (ret < 0) {
@@ -990,8 +994,10 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 v1.5 padding */
+    wolfssl_rng_lock();
     ret = wc_RsaPrivateDecrypt(ciphertext->data, ciphertext->size, plain,
         plain_size, &rsa);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1100,9 +1106,11 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 OAEP. */
+    wolfssl_rng_lock();
     ret = wc_RsaPrivateDecrypt_ex(ciphertext->data, ciphertext->size,
         plain, plain_size, &rsa, WC_RSA_OAEP_PAD, hash_type, mgf,
         params->spki.rsa_oaep_label.data, params->spki.rsa_oaep_label.size);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1293,8 +1301,10 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 v1.5. */
+    wolfssl_rng_lock();
     ret = wc_RsaSSL_Sign(vdata->data, vdata->size, signature->data,
         signature->size, &rsa, &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1370,9 +1380,11 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 PSS. */
+    wolfssl_rng_lock();
     ret = wc_RsaPSS_Sign_ex(vdata->data, vdata->size, signature->data,
         signature->size, hash_type, mgf, sign_params->salt_size, &rsa,
         &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1454,8 +1466,10 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Sign hash using ECDSA. */
+    wolfssl_rng_lock();
     ret = wc_ecc_sign_hash(vdata->data, vdata->size, signature->data, &len,
         &priv_rng, &ecc);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2521,7 +2535,9 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate RSA key */
+    wolfssl_rng_lock();
     ret = wc_MakeRsaKey(&rsa, bits, WC_RSA_EXPONENT, &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2625,7 +2641,9 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate public/private key pair for DH. */
+    wolfssl_rng_lock();
     ret = wc_DhGenerateKeyPair(&dh, &priv_rng, priv, &privSz, pub, &pubSz);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2703,7 +2721,9 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate ECC key */
+    wolfssl_rng_lock();
     ret = wc_ecc_make_key_ex(&priv_rng, curve_size, &ecc, curve_id);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2764,7 +2784,9 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed25519 key */
+    wolfssl_rng_lock();
     ret = wc_ed25519_make_key(&priv_rng, ED25519_KEY_SIZE, &ed25519);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2866,7 +2888,9 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed448 key */
+    wolfssl_rng_lock();
     ret = wc_ed448_make_key(&priv_rng, ED448_KEY_SIZE, &ed448);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2968,7 +2992,9 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X25519 key */
+    wolfssl_rng_lock();
     ret = wc_curve25519_make_key(&priv_rng, CURVE25519_KEYSIZE, &x25519);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -3070,7 +3096,9 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X448 key */
+    wolfssl_rng_lock();
     ret = wc_curve448_make_key(&priv_rng, CURVE448_KEY_SIZE, &x448);
+    wolfssl_rng_unlock();
 
     /* Random number generator no longer needed. */
     PRIVATE_KEY_LOCK();
@@ -4132,7 +4160,9 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     /* Calculate the shared secret. */
+    wolfssl_rng_lock();
     ret = wc_ecc_shared_secret(&private, &public, out->data, &len);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -4261,8 +4291,10 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     /* Calculate the shared secret. */
+    wolfssl_rng_lock();
     ret = wc_curve25519_shared_secret_ex(&private, &public, out->data, &len,
         EC25519_LITTLE_ENDIAN);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 

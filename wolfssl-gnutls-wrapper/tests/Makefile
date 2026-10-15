@@ -62,9 +62,9 @@ ifeq ($(UNAME_S),Darwin)
             -L$(GNUTLS_LIBDIR)
 endif
 
-# Libraries (dl only on Linux)
+# Libraries (dl and pthread only on Linux)
 ifeq ($(UNAME_S),Linux)
-  LIBS = $(GNUTLS_LIBS) -ldl
+  LIBS = $(GNUTLS_LIBS) -ldl -pthread
 else
   LIBS = $(GNUTLS_LIBS)
 endif
