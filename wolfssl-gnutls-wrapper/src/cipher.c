@@ -112,8 +112,6 @@ struct wolfssl_cipher_ctx {
     size_t data_size;
     /** Tag has been set. */
     unsigned int tag_set:1;
-    /** Tag has been set from external source. */
-    unsigned int tag_set_ext:1;
 };
 
 /** Array of supported ciphers. */
@@ -654,7 +652,6 @@ int wolfssl_cipher_setiv(void *_ctx, const void *iv, size_t iv_size)
             /* IV stored and used in encrypt/decrypt/tag. */
             /* No tag set, auth data or plaintext now we have a new IV. */
             ctx->tag_set = 0;
-            ctx->tag_set_ext = 0;
             ctx->auth_data_size = 0;
             ctx->data_size = 0;
             break;
@@ -1032,7 +1029,7 @@ int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
 
         /* Allocate a decrypted data buffer to decrypt all ciphertext into. */
         decr = gnutls_malloc(ctx->data_size + src_size);
-        if (ptr == NULL) {
+        if (decr == NULL) {
             WGW_ERROR("realloc of decrypted data failed");
             return GNUTLS_E_INVALID_REQUEST;
         }
@@ -1042,31 +1039,26 @@ int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
         unsigned char *aad = ctx->auth_data_heap ?
             ctx->auth_data_heap : ctx->auth_data_static;
 
-        /* If caller hasn't set tag then we are creating it. */
-        if (!ctx->tag_set_ext) {
-            /* Encrypt the ciphertext to get the plaintext.
-             * Tag will have been created on plaintext which is of no use.
-             */
-            ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
-                ctx->data_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
-                gnutls_free(decr);
-                return GNUTLS_E_ENCRYPTION_FAILED;
-            }
-            /* Encrypt the plaintext to create the tag. */
-            ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, decr,
-                ctx->data_size, ctx->iv, ctx->iv_size,
-                ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
-            if (ret != 0) {
-                WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
-                gnutls_free(decr);
-                return GNUTLS_E_ENCRYPTION_FAILED;
-            }
-            /* A tag is now available. */
-            ctx->tag_set = 1;
+        /* Encrypt the ciphertext to get the plaintext. */
+        ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, ctx->data,
+            ctx->data_size, ctx->iv, ctx->iv_size,
+            ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+            gnutls_free(decr);
+            return GNUTLS_E_ENCRYPTION_FAILED;
         }
+        /* Encrypt the plaintext to create the tag. */
+        ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, decr, decr,
+            ctx->data_size, ctx->iv, ctx->iv_size,
+            ctx->tag, ctx->tag_size, aad, ctx->auth_data_size);
+        if (ret != 0) {
+            WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
+            gnutls_free(decr);
+            return GNUTLS_E_ENCRYPTION_FAILED;
+        }
+        /* A tag is now available. */
+        ctx->tag_set = 1;
         /* Do decryption with cipehtext, IV, authentication data and tag. */
         ret = wc_AesGcmDecrypt(&ctx->cipher.aes_ctx, decr,
             ctx->data, ctx->data_size, ctx->iv, ctx->iv_size,
@@ -1118,13 +1110,11 @@ int wolfssl_cipher_decrypt(void *_ctx, const void *src, size_t src_size,
 }
 
 /**
- * Get or store the tag;
+ * Output the tag, or random bytes when it cannot be computed.
  *
- * When tag is all zeros then copy out the stored authentication tag.
- *
- * @param [in]      _ctx      Cipher context.
- * @param [in, out] tag       Authentication tag.
- * @param [in]      tag_size  Size of authentication tag in bytes.
+ * @param [in]  _ctx      Cipher context.
+ * @param [out] tag       Authentication tag.
+ * @param [in]  tag_size  Size of authentication tag in bytes.
  */
 void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
 {
@@ -1132,68 +1122,48 @@ void wolfssl_cipher_tag(void *_ctx, void *tag, size_t tag_size)
     WGW_LOG("tag_size %zu", tag_size);
 
     struct wolfssl_cipher_ctx *ctx = _ctx;
+    int ret = -1;
 
     if (!ctx->initialized) {
         WGW_LOG("cipher context not initialized");
-        return;
-    }
-
-    /* Make sure copied tag size is no larger than that generated. */
-    if (tag_size > ctx->tag_size) {
-        tag_size = ctx->tag_size;
-    }
-
-    /* Check if tag available. */
-    if (ctx->tag_set) {
-        if (ctx->mode == GCM) {
-            XMEMCPY(tag, ctx->tag, tag_size);
-            /* Authentication data used - reset count. */
-            ctx->auth_data_size = 0;
-            /* Dispose of cached data. */
-            gnutls_free(ctx->data);
-            ctx->data = NULL;
-            ctx->data_size = 0;
-            WGW_LOG("tag returned successfully");
-        } else {
-            WGW_LOG("AES mode not supported: %d", ctx->mode);
+    } else if (ctx->mode != GCM) {
+        WGW_LOG("AES mode not supported: %d", ctx->mode);
+    } else {
+        /* Make sure copied tag size is no larger than that generated. */
+        if (tag_size > ctx->tag_size) {
+            tag_size = ctx->tag_size;
         }
-    } else if (ctx->enc) {
-        int ret = -1;
 
-        /* Encrypting and no tag set means we don't have plaintext. */
-        if (ctx->mode == GCM) {
-            WGW_LOG("wc_AesGcmEncrypt");
-
+        if (ctx->tag_set) {
+            ret = 0;
+        } else {
             unsigned char *aad = ctx->auth_data_heap ?
                 ctx->auth_data_heap : ctx->auth_data_static;
 
             /* Do authentication with no plaintext. */
+            WGW_LOG("wc_AesGcmEncrypt");
             ret = wc_AesGcmEncrypt(&ctx->cipher.aes_ctx, NULL, NULL, 0, ctx->iv,
                 ctx->iv_size, ctx->tag, ctx->tag_size, aad,
                 ctx->auth_data_size);
             if (ret != 0) {
                 WGW_WOLFSSL_ERROR("wc_AesGcmEncrypt", ret);
             } else {
-                /* Copy out tag. */
                 ctx->tag_set = 1;
-                XMEMCPY(tag, ctx->tag, tag_size);
-                WGW_LOG("tag stored successfully");
             }
-            /* Authentication data used - reset count. */
-            ctx->auth_data_size = 0;
-            /* Dispose of cached plaintext. */
-            gnutls_free(ctx->data);
-            ctx->data = NULL;
-            ctx->data_size = 0;
-        } else {
-            WGW_LOG("AES mode not supported: %d", ctx->mode);
         }
-    } else {
-        /* Decrypting and we need to set tag for decrypt operation. */
-        XMEMCPY(ctx->tag, tag, tag_size);
-        ctx->tag_set = 1;
-        ctx->tag_set_ext = 1;
-        WGW_LOG("tag provided successfully");
+        /* Authentication data used, so we reset count. */
+        ctx->auth_data_size = 0;
+        /* Dispose of cached data. */
+        gnutls_free(ctx->data);
+        ctx->data = NULL;
+        ctx->data_size = 0;
+    }
+
+    if (ret == 0) {
+        XMEMCPY(tag, ctx->tag, tag_size);
+        WGW_LOG("tag returned successfully");
+    } else if (gnutls_rnd(GNUTLS_RND_NONCE, tag, tag_size) < 0) {
+        WGW_ERROR("no random bytes for the tag");
     }
 }
 
