@@ -5,6 +5,7 @@
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/wc_port.h>
+#include <pthread.h>
 
 #ifdef ENABLE_WOLFSSL
 /** Context structure for wolfSSL RNG. */
@@ -24,19 +25,19 @@ pid_t pid = -1;
 /** Indicates if the DBRG needs to be reseeded.*/
 int rng_ready = 0;
 
-/** Ensures that only one process at the time is accessing the RNGs objects */
-static wolfSSL_Mutex wc_rng_lock;
-/** indicates that the rng lock object was actually initialized */
-static int wc_rng_lock_init = 0;
+/** Serializes all use of the RNG objects above. */
+static pthread_mutex_t wc_rng_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/** Gets called every time we need to do a lock operation,
- * initializes the lock object if it wasn't already. */
-static inline void wc_rng_lock_once(void)
+/** Take the lock guarding priv_rng and pub_rng. */
+void wolfssl_rng_lock(void)
 {
-    if (!wc_rng_lock_init) {
-        wc_InitMutex(&wc_rng_lock);
-        wc_rng_lock_init = 1;
-    }
+    pthread_mutex_lock(&wc_rng_lock);
+}
+
+/** Release the lock taken by wolfssl_rng_lock(). */
+void wolfssl_rng_unlock(void)
+{
+    pthread_mutex_unlock(&wc_rng_lock);
 }
 
 /* Seed DRBGs on first use or after a fork */
@@ -46,30 +47,29 @@ int wolfssl_ensure_rng(void)
 
     pid_t p = getpid();
 
-    wc_rng_lock_once();
-    wc_LockMutex(&wc_rng_lock);
+    wolfssl_rng_lock();
 
     /* We check if the pid is different (a fork happened)
      * or if the the first time creating a context (a first seed is needed). */
     if (!rng_ready || p != pid) {
 
-        if (rng_ready) {
-            /* child after fork, we drop the old state and
-             * do a reseed. */
-            wc_FreeRng(&priv_rng);
-            wc_FreeRng(&pub_rng);
-        }
+        /* Drop any old state before seeding again. */
+        wc_FreeRng(&priv_rng);
+        wc_FreeRng(&pub_rng);
+        rng_ready = 0;
 
     #ifdef WC_RNG_SEED_CB
         wc_SetSeed_Cb(wc_GenerateSeed);
     #endif
 
         if (wc_InitRng(&priv_rng) != 0) {
+            wolfssl_rng_unlock();
             return GNUTLS_E_RANDOM_FAILED;
         }
 
         if (wc_InitRng(&pub_rng)  != 0) {
             wc_FreeRng(&priv_rng);
+            wolfssl_rng_unlock();
             return GNUTLS_E_RANDOM_FAILED;
         }
 
@@ -77,7 +77,7 @@ int wolfssl_ensure_rng(void)
         rng_ready = 1;
     }
 
-    wc_UnLockMutex(&wc_rng_lock);
+    wolfssl_rng_unlock();
 
     return 0;
 }
@@ -142,8 +142,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
         return GNUTLS_E_RANDOM_FAILED;
     }
 
-    wc_rng_lock_once();
-    wc_LockMutex(&wc_rng_lock);
+    wolfssl_rng_lock();
 
     /* clear output buffer before filling */
     XMEMSET(data, 0, datasize);
@@ -154,7 +153,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
 
         ret = wc_RNG_GenerateBlock(rng, data, size);
         if (ret != 0) {
-            wc_UnLockMutex(&wc_rng_lock);
+            wolfssl_rng_unlock();
             WGW_ERROR("Requested %d bytes", size);
             WGW_WOLFSSL_ERROR("wc_RNG_GenerateBlock", ret);
             return GNUTLS_E_RANDOM_FAILED;
@@ -165,7 +164,7 @@ static int wolfssl_rnd(void *_ctx, int level, void *data, size_t datasize)
         datasize -= size;
     } while (datasize > 0);
 
-    wc_UnLockMutex(&wc_rng_lock);
+    wolfssl_rng_unlock();
 
     return 0;
 }
@@ -183,7 +182,9 @@ static void wolfssl_rnd_refresh(void *_ctx)
 
     /* this forces a reseed of the random number generators
      * on the next call (wolfssl_ensure_rng). */
+    wolfssl_rng_lock();
     rng_ready = 0;
+    wolfssl_rng_unlock();
 }
 
 /**

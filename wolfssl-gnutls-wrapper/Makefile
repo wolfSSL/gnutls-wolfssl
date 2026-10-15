@@ -45,13 +45,13 @@ endif
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Linux)
-  CFLAGS       += -DENABLE_WOLFSSL -fPIC -Wall -Wextra
+  CFLAGS       += -DENABLE_WOLFSSL -fPIC -Wall -Wextra -pthread
   CFLAGS_DEBUG += -g
   # Use rpath to wherever we actually link from
   LDFLAGS      += -Wl,--no-as-needed -Wl,-z,now \
                   -Wl,-rpath,$(GNUTLS_LIBDIR) -Wl,-rpath,$(WOLFSSL_LIBDIR)
   SOFLAG := -shared
-  DL_LIBS := -ldl
+  DL_LIBS := -ldl -pthread
 endif
 
 ifeq ($(UNAME_S),Darwin)

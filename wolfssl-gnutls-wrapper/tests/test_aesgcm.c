@@ -382,6 +382,106 @@ out:
     return ret;
 }
 
+/* One-shot decrypt of the AES-128-GCM test vector on the handle. */
+static int one_shot_decrypt(gnutls_aead_cipher_hd_t hd)
+{
+    int ret;
+    unsigned char decrypted[sizeof(plaintext_data)];
+    size_t decrypted_sz = sizeof(decrypted);
+
+    ret = gnutls_aead_cipher_decrypt(hd, nonce_data, sizeof(nonce_data),
+        aad_data, sizeof(aad_data), 16, ciphertext_128_data,
+        sizeof(ciphertext_128_data), decrypted, &decrypted_sz);
+    if (ret < 0) {
+        print_gnutls_error("one-shot decrypt", ret);
+        return 1;
+    }
+    return 0;
+}
+
+/* Tags of empty messages on a handle used for a one-shot decrypt. */
+static int test_aesgcm_tag_after_one_shot_decrypt(void)
+{
+    int ret;
+    gnutls_aead_cipher_hd_t hd;
+    gnutls_datum_t key = { (unsigned char *)key_128, sizeof(key_128) };
+    giovec_t aad = { (void *)aad_data, sizeof(aad_data) };
+    unsigned char aad_tag[16];
+    unsigned char zero_tag[16] = { 0 };
+    unsigned char tag[16];
+    size_t tag_sz;
+
+    printf("Testing AES-GCM tags after a one-shot decrypt...\n");
+
+    /* Reference tag over the AAD from a fresh handle. */
+    if ((ret = gnutls_aead_cipher_init(&hd, GNUTLS_CIPHER_AES_128_GCM,
+            &key)) < 0) {
+        print_gnutls_error("initializing cipher", ret);
+        return 1;
+    }
+    tag_sz = sizeof(aad_tag);
+    ret = gnutls_aead_cipher_encryptv2(hd, nonce_data, sizeof(nonce_data),
+        &aad, 1, NULL, 0, aad_tag, &tag_sz);
+    gnutls_aead_cipher_deinit(hd);
+    if (ret < 0) {
+        print_gnutls_error("tag over AAD on a fresh handle", ret);
+        return 1;
+    }
+
+    if ((ret = gnutls_aead_cipher_init(&hd, GNUTLS_CIPHER_AES_128_GCM,
+            &key)) < 0) {
+        print_gnutls_error("initializing cipher", ret);
+        return 1;
+    }
+
+    /* A wrong tag on an empty message must be rejected. */
+    if (one_shot_decrypt(hd) != 0) {
+        gnutls_aead_cipher_deinit(hd);
+        return 1;
+    }
+    ret = gnutls_aead_cipher_decryptv2(hd, nonce_data, sizeof(nonce_data),
+        &aad, 1, NULL, 0, zero_tag, sizeof(zero_tag));
+    if (ret >= 0) {
+        printf("FAILURE - wrong tag accepted after a one-shot decrypt\n");
+        gnutls_aead_cipher_deinit(hd);
+        return 1;
+    }
+
+    /* The right tag on an empty message must be accepted. */
+    if (one_shot_decrypt(hd) != 0) {
+        gnutls_aead_cipher_deinit(hd);
+        return 1;
+    }
+    ret = gnutls_aead_cipher_decryptv2(hd, nonce_data, sizeof(nonce_data),
+        &aad, 1, NULL, 0, aad_tag, sizeof(aad_tag));
+    if (ret < 0) {
+        print_gnutls_error("right tag after a one-shot decrypt", ret);
+        gnutls_aead_cipher_deinit(hd);
+        return 1;
+    }
+
+    /* An empty encryption must return the tag over the AAD. */
+    if (one_shot_decrypt(hd) != 0) {
+        gnutls_aead_cipher_deinit(hd);
+        return 1;
+    }
+    memset(tag, 0xaa, sizeof(tag));
+    tag_sz = sizeof(tag);
+    ret = gnutls_aead_cipher_encryptv2(hd, nonce_data, sizeof(nonce_data),
+        &aad, 1, NULL, 0, tag, &tag_sz);
+    gnutls_aead_cipher_deinit(hd);
+    if (ret < 0) {
+        print_gnutls_error("empty encrypt after a one-shot decrypt", ret);
+        return 1;
+    }
+    if (compare_sz("Tag of empty encrypt after a one-shot decrypt", tag,
+            tag_sz, aad_tag, sizeof(aad_tag)) != 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(void) {
     int ret;
 
@@ -422,6 +522,9 @@ int main(void) {
 	if (ret == 0) {
 		ret = test_aesgcm_big_aad_chunks_encdec();
 	}
+    if (ret == 0) {
+        ret = test_aesgcm_tag_after_one_shot_decrypt();
+    }
     if (ret == 0) {
         printf("Test completed.\n");
     }

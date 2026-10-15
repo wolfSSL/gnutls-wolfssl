@@ -100,6 +100,48 @@ static int test_hmac(int algorithm, const unsigned char* expected_hmac,
     return 0;
 }
 
+/* Test vector from RFC 4231 - Test Case 2, with a 4-byte key. */
+const char short_key[] = "Jefe";
+const char short_key_data[] = "what do ya want for nothing?";
+const unsigned char expected_short_key_hmac_sha256[] = {
+    0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e,
+    0x6a, 0x04, 0x24, 0x26, 0x08, 0x95, 0x75, 0xc7,
+    0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83,
+    0x9d, 0xec, 0x58, 0xb9, 0x64, 0xec, 0x38, 0x43
+};
+
+/* A short key must be refused with an error or give the right MAC. */
+static int test_hmac_short_key(void)
+{
+    int ret;
+    unsigned char output[32];
+    gnutls_hmac_hd_t hmac;
+
+    printf("key: \"%s\" (%zu bytes)\n", short_key, strlen(short_key));
+
+    memset(output, 0, sizeof(output));
+    ret = gnutls_hmac_fast(GNUTLS_MAC_SHA256, short_key, strlen(short_key),
+        short_key_data, strlen(short_key_data), output);
+    if (refused_or_compare("HMAC one-shot, short key", ret, output,
+            expected_short_key_hmac_sha256, sizeof(output)) != 0) {
+        return 1;
+    }
+
+    memset(output, 0, sizeof(output));
+    ret = gnutls_hmac_init(&hmac, GNUTLS_MAC_SHA256, short_key,
+        strlen(short_key));
+    if (ret == 0) {
+        ret = gnutls_hmac(hmac, short_key_data, strlen(short_key_data));
+        gnutls_hmac_deinit(hmac, output);
+    }
+    if (refused_or_compare("HMAC streaming, short key", ret, output,
+            expected_short_key_hmac_sha256, sizeof(output)) != 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     int ret;
@@ -128,6 +170,10 @@ int main(void)
         printf("testing wolfssl's HMAC-SHA512 implementation via gnutls...\n");
         ret = test_hmac(GNUTLS_MAC_SHA512, expected_hmac_sha512,
             sizeof(expected_hmac_sha512));
+    }
+    if (ret == 0) {
+        printf("testing wolfssl's HMAC-SHA256 with a short key via gnutls...\n");
+        ret = test_hmac_short_key();
     }
 
     gnutls_global_deinit();

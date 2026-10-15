@@ -100,6 +100,47 @@ static int test_hkdf(gnutls_mac_algorithm_t mac_alg,
     return 0;
 }
 
+/* RFC 5869 - Test Case 1. The 13-byte salt is the HMAC key of HKDF-Extract
+ * and is shorter than the FIPS HMAC key minimum (14 bytes). */
+const unsigned char short_salt_ikm_data[] = {
+    0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+    0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+    0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+};
+const unsigned char short_salt_data[] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c
+};
+const unsigned char expected_short_salt_prk_sha256[] = {
+    0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf,
+    0x0d, 0xdc, 0x3f, 0x0d, 0xc4, 0x7b, 0xba, 0x63,
+    0x90, 0xb6, 0xc7, 0x3b, 0xb5, 0x0f, 0x9c, 0x31,
+    0x22, 0xec, 0x84, 0x4a, 0xd7, 0xc2, 0xb3, 0xe5
+};
+
+/* A short salt must be refused with an error or give the right PRK. */
+static int test_hkdf_extract_short_salt(void)
+{
+    int ret;
+    unsigned char prk_data[32];
+    gnutls_datum_t ikm = {
+        .data = (unsigned char*)short_salt_ikm_data,
+        .size = sizeof(short_salt_ikm_data)
+    };
+    gnutls_datum_t salt = {
+        .data = (unsigned char*)short_salt_data,
+        .size = sizeof(short_salt_data)
+    };
+
+    printf("Testing wolfSSL's SHA256 HKDF-Extract with a short salt via "
+        "GnuTLS...\n");
+
+    memset(prk_data, 0, sizeof(prk_data));
+    ret = gnutls_hkdf_extract(GNUTLS_MAC_SHA256, &ikm, &salt, prk_data);
+    return refused_or_compare("HKDF-Extract, short salt", ret, prk_data,
+        expected_short_salt_prk_sha256, sizeof(prk_data));
+}
+
 int main(void)
 {
     int ret;
@@ -118,6 +159,9 @@ int main(void)
         ret = test_hkdf(GNUTLS_MAC_SHA384, expected_prk_sha384,
             sizeof(expected_prk_sha384), expected_okm_sha384,
             sizeof(expected_okm_sha384));
+    }
+    if (ret == 0) {
+        ret = test_hkdf_extract_short_salt();
     }
     if (ret == 0) {
         printf("Test completed.\n");

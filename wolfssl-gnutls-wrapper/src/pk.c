@@ -736,8 +736,10 @@ static int wolfssl_pk_encrypt_rsa(gnutls_datum_t *ciphertext,
     }
 
     /* Encrypt using RSA PKCS#1 v1.5 padding */
+    wolfssl_rng_lock();
     ret = wc_RsaPublicEncrypt(plaintext->data, plaintext->size,
         ciphertext->data, ciphertext->size, &rsa, &priv_rng);
+    wolfssl_rng_unlock();
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
     if (ret < 0) {
@@ -808,10 +810,12 @@ static int wolfssl_pk_encrypt_rsa_oaep(gnutls_datum_t *ciphertext,
     }
 
     /* Encrypt using RSA PKCS#1 OAEP. */
+    wolfssl_rng_lock();
     ret = wc_RsaPublicEncrypt_ex(plaintext->data, plaintext->size,
         ciphertext->data, ciphertext->size, &rsa, &priv_rng, WC_RSA_OAEP_PAD,
         hash_type, mgf, params->spki.rsa_oaep_label.data,
         params->spki.rsa_oaep_label.size);
+    wolfssl_rng_unlock();
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
     if (ret < 0) {
@@ -887,6 +891,32 @@ static int wolfssl_pk_encrypt(gnutls_pk_algorithm_t algo,
 }
 
 /**
+ * Constant-time copy into plaintext only when the decrypted length matches.
+ *
+ * @param [in, out] plaintext  Caller's buffer and its size.
+ * @param [in]      decrypted  Decrypted data, at least plaintext->size bytes.
+ * @param [in]      dec_ret    Length decrypted by wolfSSL, or error.
+ * @return  0 on success.
+ * @return  GNUTLS_E_DECRYPTION_FAILED otherwise.
+ */
+static int rsa_decrypt_fixed_select(gnutls_datum_t *plaintext,
+    const unsigned char *decrypted, int dec_ret)
+{
+    unsigned int diff = (unsigned int)dec_ret ^ plaintext->size;
+    /* All ones when dec_ret equals the size, zero otherwise. */
+    unsigned int ok = ((diff | (0U - diff)) >> (sizeof(diff) * 8 - 1)) - 1U;
+    unsigned char mask = (unsigned char)ok;
+    unsigned int i;
+
+    for (i = 0; i < plaintext->size; i++) {
+        plaintext->data[i] = (unsigned char)((decrypted[i] & mask) |
+            (plaintext->data[i] & (unsigned char)~mask));
+    }
+
+    return ok ? 0 : GNUTLS_E_DECRYPTION_FAILED;
+}
+
+/**
  * Decrypt ciphertext using RSA PKCS#1 v1.5 with private key.
  *
  * @param [out] plaintext        Decrypted data.
@@ -950,48 +980,46 @@ static int wolfssl_pk_decrypt_rsa(gnutls_datum_t *plaintext,
             wc_FreeRsaKey(&rsa);
             return GNUTLS_E_MEMORY_ERROR;
         }
-    }
-    /* Set plain to valid buffer. */
-    if ((!alloc_plaintext) &&
-            (plaintext->size < (unsigned int)wc_RsaEncryptSize(&rsa))) {
-        plain = out;
-    } else {
         plain = plaintext->data;
+    } else {
+        /* Fixed-size output, we decrypt into scratch. */
+        if (plain_size > sizeof(out) || plaintext->size > plain_size) {
+            wc_FreeRsaKey(&rsa);
+            return GNUTLS_E_DECRYPTION_FAILED;
+        }
+        XMEMSET(out, 0, plain_size);
+        plain = out;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 v1.5 padding */
+    wolfssl_rng_lock();
     ret = wc_RsaPrivateDecrypt(ciphertext->data, ciphertext->size, plain,
         plain_size, &rsa);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
+
+    if (!alloc_plaintext) {
+        ret = rsa_decrypt_fixed_select(plaintext, out, ret);
+        gnutls_memset(out, 0, plain_size);
+        return ret;
+    }
+
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPrivateDecrypt", ret);
-        if (alloc_plaintext) {
-            /* Dispose of allocated buffer for plaintext. */
-            gnutls_free(plaintext->data);
-            /* Ensure output datum is empty on error. */
-            plaintext->data = NULL;
-            plaintext->size = 0;
-        }
+        /* Dispose of allocated buffer for plaintext. */
+        gnutls_free(plaintext->data);
+        /* Ensure output datum is empty on error. */
+        plaintext->data = NULL;
+        plaintext->size = 0;
         return GNUTLS_E_DECRYPTION_FAILED;
     }
 
-    /* Check if returning through another buffer. */
-    if (plain != plaintext->data) {
-        /* Ensure the output buffer is big enough. */
-        if ((unsigned int)ret > plaintext->size) {
-            WGW_ERROR("Decrypted data too big for plaintext buffer: %d > %d",
-                ret, plaintext->size);
-            return GNUTLS_E_DECRYPTION_FAILED;
-        }
-        /* Copy the decrypted data into output buffer. */
-        XMEMCPY(plaintext->data, plain, ret);
-    }
     /* Set the actual size into output datum. */
     plaintext->size = ret;
 
@@ -1064,49 +1092,47 @@ static int wolfssl_pk_decrypt_rsa_oaep(gnutls_datum_t *plaintext,
             wc_FreeRsaKey(&rsa);
             return GNUTLS_E_MEMORY_ERROR;
         }
-    }
-    /* Set plain to valid buffer. */
-    if ((!alloc_plaintext) &&
-            (plaintext->size < (unsigned int)wc_RsaEncryptSize(&rsa))) {
-        plain = out;
-    } else {
         plain = plaintext->data;
+    } else {
+        /* Fixed-size output, we decrypt into scratch. */
+        if (plain_size > sizeof(out) || plaintext->size > plain_size) {
+            wc_FreeRsaKey(&rsa);
+            return GNUTLS_E_DECRYPTION_FAILED;
+        }
+        XMEMSET(out, 0, plain_size);
+        plain = out;
     }
 
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 OAEP. */
+    wolfssl_rng_lock();
     ret = wc_RsaPrivateDecrypt_ex(ciphertext->data, ciphertext->size,
         plain, plain_size, &rsa, WC_RSA_OAEP_PAD, hash_type, mgf,
         params->spki.rsa_oaep_label.data, params->spki.rsa_oaep_label.size);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
     /* No longer need RSA key. */
     wc_FreeRsaKey(&rsa);
+
+    if (!alloc_plaintext) {
+        ret = rsa_decrypt_fixed_select(plaintext, out, ret);
+        gnutls_memset(out, 0, plain_size);
+        return ret;
+    }
+
     if (ret < 0) {
         WGW_WOLFSSL_ERROR("wc_RsaPublicDecrypt_ex", ret);
-        if (alloc_plaintext) {
-            /* Dispose of allocated buffer for plaintext. */
-            gnutls_free(plaintext->data);
-            /* Ensure output datum is empty on error. */
-            plaintext->data = NULL;
-            plaintext->size = 0;
-        }
+        /* Dispose of allocated buffer for plaintext. */
+        gnutls_free(plaintext->data);
+        /* Ensure output datum is empty on error. */
+        plaintext->data = NULL;
+        plaintext->size = 0;
         return GNUTLS_E_DECRYPTION_FAILED;
     }
 
-    /* Check if returning through another buffer. */
-    if (plain != plaintext->data) {
-        /* Ensure the output buffer is big enough. */
-        if ((unsigned int)ret > plaintext->size) {
-            WGW_ERROR("Decrypted data too big for plaintext buffer: %d > %d",
-                ret, plaintext->size);
-            return GNUTLS_E_DECRYPTION_FAILED;
-        }
-        /* Copy the decrypted data into output buffer. */
-        XMEMCPY(plaintext->data, plain, ret);
-    }
     /* Set the actual size into output datum. */
     plaintext->size = ret;
 
@@ -1275,8 +1301,10 @@ static int wolfssl_pk_sign_rsa(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 v1.5. */
+    wolfssl_rng_lock();
     ret = wc_RsaSSL_Sign(vdata->data, vdata->size, signature->data,
         signature->size, &rsa, &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1352,9 +1380,11 @@ static int wolfssl_pk_sign_rsa_pss(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Decrypt using RSA PKCS#1 PSS. */
+    wolfssl_rng_lock();
     ret = wc_RsaPSS_Sign_ex(vdata->data, vdata->size, signature->data,
         signature->size, hash_type, mgf, sign_params->salt_size, &rsa,
         &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -1436,8 +1466,10 @@ static int wolfssl_pk_sign_ecc(gnutls_datum_t *signature,
     PRIVATE_KEY_UNLOCK();
 
     /* Sign hash using ECDSA. */
+    wolfssl_rng_lock();
     ret = wc_ecc_sign_hash(vdata->data, vdata->size, signature->data, &len,
         &priv_rng, &ecc);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2461,9 +2493,10 @@ static int wolfssl_pk_generate_params(gnutls_pk_algorithm_t algo,
  * @param [in]      bits    Number of bits in key.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
+ * @return  GNUTLS_E_INVALID_REQUEST when FIPS140 build and 1024 bits.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing RSA key fails.
+ * @return  GNUTLS_E_PK_GENERATION_ERROR when generating the key fails.
  * @return  GnuTLS error on other failure.
  */
 static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
@@ -2483,7 +2516,7 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     /* missing check for 1024, 1024 is not allowed */
     if (bits == 1024) {
         WGW_ERROR("Bits size not valid");
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
+        return GNUTLS_E_INVALID_REQUEST;
     }
 #endif
 
@@ -2502,18 +2535,16 @@ static int wolfssl_pk_generate_keys_rsa(unsigned int bits,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate RSA key */
+    wolfssl_rng_lock();
     ret = wc_MakeRsaKey(&rsa, bits, WC_RSA_EXPONENT, &priv_rng);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
     if (ret != 0) {
         WGW_ERROR("RSA key generation failed with code %d", ret);
         wc_FreeRsaKey(&rsa);
-#if defined(HAVE_FIPS)
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#else
         return GNUTLS_E_PK_GENERATION_ERROR;
-#endif
     }
 
     /* Store RSA fields in the GnuTLS parameters. */
@@ -2610,7 +2641,9 @@ static int wolfssl_pk_generate_keys_dh(unsigned int bits,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate public/private key pair for DH. */
+    wolfssl_rng_lock();
     ret = wc_DhGenerateKeyPair(&dh, &priv_rng, priv, &privSz, pub, &pubSz);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2688,7 +2721,9 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate ECC key */
+    wolfssl_rng_lock();
     ret = wc_ecc_make_key_ex(&priv_rng, curve_size, &ecc, curve_id);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2715,7 +2750,7 @@ static int wolfssl_pk_generate_keys_ecc(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2732,7 +2767,7 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_ED25519) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -2749,7 +2784,9 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed25519 key */
+    wolfssl_rng_lock();
     ret = wc_ed25519_make_key(&priv_rng, ED25519_KEY_SIZE, &ed25519);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2817,7 +2854,7 @@ static int wolfssl_pk_generate_keys_ed25519(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2834,7 +2871,7 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_ED448) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -2851,7 +2888,9 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate Ed448 key */
+    wolfssl_rng_lock();
     ret = wc_ed448_make_key(&priv_rng, ED448_KEY_SIZE, &ed448);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -2919,7 +2958,7 @@ static int wolfssl_pk_generate_keys_ed448(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -2936,7 +2975,7 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_X25519) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for generation. */
@@ -2953,7 +2992,9 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X25519 key */
+    wolfssl_rng_lock();
     ret = wc_curve25519_make_key(&priv_rng, CURVE25519_KEYSIZE, &x25519);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -3021,7 +3062,7 @@ static int wolfssl_pk_generate_keys_x25519(unsigned int curve,
  * @param [in]      curve   GnuTLS curve.
  * @param [in, out] params  GnuTLS PK parameters.
  * @return  0 on success.
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -3038,7 +3079,7 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
 
     /* Check curve matches algorithm. */
     if (curve != GNUTLS_ECC_CURVE_X448) {
-        return GNUTLS_ECC_CURVE_INVALID;
+        return GNUTLS_E_ECC_UNSUPPORTED_CURVE;
     }
 
     /* Initialize a new random for blinding. */
@@ -3055,7 +3096,9 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
     PRIVATE_KEY_UNLOCK();
 
     /* Generate X448 key */
+    wolfssl_rng_lock();
     ret = wc_curve448_make_key(&priv_rng, CURVE448_KEY_SIZE, &x448);
+    wolfssl_rng_unlock();
 
     /* Random number generator no longer needed. */
     PRIVATE_KEY_LOCK();
@@ -3125,8 +3168,8 @@ static int wolfssl_pk_generate_keys_x448(unsigned int curve,
  * @param [in]      ephemeral  Key pair is ephemenral - random can be weaker.
  *                             Ignored.
  * @return  0 on success.
- * @return  GNUTLS_FIPS140_OP_NOT_APPROVED when FIPS140 build
- * @return  GNUTLS_ECC_CURVE_INVALID when curve does not match algorithm.
+ * @return  GNUTLS_E_INVALID_REQUEST when FIPS140 build and 1024-bit RSA.
+ * @return  GNUTLS_E_ECC_UNSUPPORTED_CURVE when curve does not match algorithm.
  * @return  GNUTLS_E_RANDOM_FAILED when random initialization fails.
  * @return  GNUTLS_E_CRYPTO_INIT_FAILED when initializing key fails.
  * @return  GnuTLS error on other failure.
@@ -4117,7 +4160,9 @@ static int wolfssl_pk_derive_ecc(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     /* Calculate the shared secret. */
+    wolfssl_rng_lock();
     ret = wc_ecc_shared_secret(&private, &public, out->data, &len);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 
@@ -4246,8 +4291,10 @@ static int wolfssl_pk_derive_x25519(gnutls_datum_t *out,
     PRIVATE_KEY_UNLOCK();
 
     /* Calculate the shared secret. */
+    wolfssl_rng_lock();
     ret = wc_curve25519_shared_secret_ex(&private, &public, out->data, &len,
         EC25519_LITTLE_ENDIAN);
+    wolfssl_rng_unlock();
 
     PRIVATE_KEY_LOCK();
 

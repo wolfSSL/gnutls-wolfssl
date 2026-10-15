@@ -47,11 +47,7 @@ static int wolfssl_hkdf_extract(gnutls_mac_algorithm_t mac, const void *key,
 
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_HKDF_Extract", ret);
-#if defined(HAVE_FIPS)
-        return GNUTLS_FIPS140_OP_NOT_APPROVED;
-#else
         return GNUTLS_E_INTERNAL_ERROR;
-#endif
     }
 
     return 0;
@@ -147,11 +143,6 @@ static int wolfssl_pbkdf2(gnutls_mac_algorithm_t mac, const void *key,
 
     if (ret != 0) {
         WGW_WOLFSSL_ERROR("wc_PBKDF2_ex", ret);
-#if defined(HAVE_FIPS)
-        if (ret == HMAC_MIN_KEYLEN_E) {
-            return GNUTLS_FIPS140_OP_NOT_APPROVED;
-        }
-#endif
         return GNUTLS_E_INTERNAL_ERROR;
     }
 

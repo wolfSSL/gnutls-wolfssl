@@ -19,7 +19,7 @@ jobs:
     strategy:
       matrix:
         os: [ ubuntu-latest ]
-        fwupd_ref: [ 'main', '1.9.26', '2.0.12' ]
+        fwupd_ref: [ '1.9.26', '2.0.12' ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     container:
