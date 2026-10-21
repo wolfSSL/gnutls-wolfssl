@@ -10,9 +10,14 @@ concurrency:
 
 jobs:
   deb-testing:
+    strategy:
+      fail-fast: false
+      matrix:
+        debian: [ bookworm, trixie ]
+    name: deb-testing (${{ matrix.debian }})
     runs-on: ubuntu-latest
     container:
-      image: debian:bookworm
+      image: debian:${{ matrix.debian }}
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
