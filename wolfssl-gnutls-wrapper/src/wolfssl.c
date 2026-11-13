@@ -84,6 +84,16 @@ int _gnutls_wolfssl_init(void)
 
     WGW_FUNC_ENTER();
 
+#ifdef WC_RNG_SEED_CB
+    /* FIPS wolfCrypt has no seed source until one is set. Do it before any
+     * algorithm runs, as the first use may be an ECDSA verify whose self
+     * test needs a DRBG. */
+    ret = wc_SetSeed_Cb(wc_GenerateSeed);
+    if (ret != 0) {
+        WGW_WOLFSSL_ERROR("wc_SetSeed_Cb", ret);
+    }
+#endif
+
     /* register digest algorithms */
     ret = wolfssl_digest_register();
     if (ret < 0) {
